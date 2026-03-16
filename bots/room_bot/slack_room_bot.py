@@ -1,25 +1,30 @@
-"""ROOM BOT v6.2 - Slack CEOコマンド連携（排他制御付き）
+"""ROOM BOT v7.0 - Slack CEOコマンド連携 + Scheduler自動実行
 
 CEOがiPhone Slackからメッセージを送信し、
 ROOM BOTの運用を制御する常駐プロセス。
+Schedulerスレッドが daily_plan.json に基づき自動実行する。
 
 起動:
   python slack_room_bot.py
 
 Slackコマンド:
-  room status                # 状態確認
+  room status                # 状態確認（scheduler状況含む）
   room on                    # 運用ON
   room off                   # 運用OFF
   room plus like N           # 臨時いいねN件
   room plus follow N         # 臨時フォローN件
   room plus post N           # 臨時投稿N件
   room generate-month        # 月間スケジュール生成
+  room scheduler status      # scheduler状態確認
+  room scheduler reload      # daily_plan再読込
+  room scheduler regenerate  # daily_plan再生成
 
 安全設計:
   - 排他制御: イベント重複排除 + 実行ロック + クールダウン
   - 未知コマンドは拒否 + ヘルプ表示
   - 全操作を slack_bot.log に記録
   - changed_by: "slack" で操作元を区別
+  - Scheduler: 失敗してもスレッドは停止しない
 """
 
 import io
@@ -49,6 +54,9 @@ if _env_path.exists():
 # Slack トークン
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN", "")
+
+# Slack通知先チャンネル（.envで指定可能、デフォルトは空＝メッセージ受信チャンネルに通知）
+SLACK_NOTIFY_CHANNEL = os.environ.get("SLACK_NOTIFY_CHANNEL", "")
 
 # ログ設定
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
@@ -190,6 +198,9 @@ class CommandGuard:
 # グローバルインスタンス
 _guard = CommandGuard()
 
+# Schedulerインスタンス（start_bot内で初期化）
+_scheduler = None
+
 
 def _get_action_type(args: list[str]) -> str:
     """コマンド引数からアクション種別を特定する
@@ -198,7 +209,7 @@ def _get_action_type(args: list[str]) -> str:
       - "plus_like"   : room plus like N
       - "plus_follow" : room plus follow N
       - "plus_post"   : room plus post N
-      - "quick"       : status/on/off/generate-month（即座完了のため排他不要）
+      - "quick"       : status/on/off/generate-month/scheduler（即座完了のため排他不要）
     """
     if len(args) >= 2 and args[0] == "plus":
         return f"plus_{args[1]}"
@@ -211,18 +222,22 @@ def _get_action_type(args: list[str]) -> str:
 
 # 許可コマンドパターン
 ALLOWED_COMMANDS = [
-    # (regex, description)
-    (r"^room\s+status$", "状態確認"),
-    (r"^room\s+on$", "運用ON"),
-    (r"^room\s+off$", "運用OFF"),
-    (r"^room\s+plus\s+post\s+(\d+)$", "臨時投稿"),
-    (r"^room\s+plus\s+like\s+(\d+)$", "臨時いいね"),
-    (r"^room\s+plus\s+follow\s+(\d+)$", "臨時フォロー"),
-    (r"^room\s+generate-month$", "月間スケジュール生成"),
-    (r"^room\s+generate-month\s+--month\s+(\d{4}-\d{2})$", "月間スケジュール生成(指定月)"),
+    # (regex, description, handler_type)
+    # handler_type: "subprocess" = run.py経由, "internal" = BOT内部処理
+    (r"^room\s+status$", "状態確認", "subprocess"),
+    (r"^room\s+on$", "運用ON", "subprocess"),
+    (r"^room\s+off$", "運用OFF", "subprocess"),
+    (r"^room\s+plus\s+post\s+(\d+)$", "臨時投稿", "subprocess"),
+    (r"^room\s+plus\s+like\s+(\d+)$", "臨時いいね", "subprocess"),
+    (r"^room\s+plus\s+follow\s+(\d+)$", "臨時フォロー", "subprocess"),
+    (r"^room\s+generate-month$", "月間スケジュール生成", "subprocess"),
+    (r"^room\s+generate-month\s+--month\s+(\d{4}-\d{2})$", "月間スケジュール生成(指定月)", "subprocess"),
+    (r"^room\s+scheduler\s+status$", "scheduler状態確認", "internal"),
+    (r"^room\s+scheduler\s+reload$", "scheduler plan再読込", "internal"),
+    (r"^room\s+scheduler\s+regenerate$", "scheduler plan再生成", "internal"),
 ]
 
-HELP_TEXT = """*ROOM BOT CEOコマンド*
+HELP_TEXT = """*ROOM BOT v7.0 CEOコマンド*
 
 ```
 room status                  状態確認
@@ -232,6 +247,9 @@ room plus post N             臨時投稿N件
 room plus like N             臨時いいねN件
 room plus follow N           臨時フォローN件
 room generate-month          月間スケジュール生成
+room scheduler status        scheduler状態確認
+room scheduler reload        daily_plan再読込
+room scheduler regenerate    daily_plan再生成
 ```"""
 
 
@@ -239,7 +257,7 @@ def parse_command(text: str) -> dict | None:
     """メッセージをコマンドに変換する
 
     Returns:
-        {"args": [...], "description": "..."} or None
+        {"args": [...], "description": "...", "handler": "..."} or None
     """
     text = text.strip().lower()
 
@@ -247,14 +265,14 @@ def parse_command(text: str) -> dict | None:
     if not text.startswith("room"):
         return None
 
-    for pattern, desc in ALLOWED_COMMANDS:
+    for pattern, desc, handler in ALLOWED_COMMANDS:
         m = re.match(pattern, text, re.IGNORECASE)
         if m:
             # run.py room 用の引数リストを構築
             parts = text.split()
             # "room" を除いた部分が run.py room のサブ引数
             args = parts[1:]  # ["status"] or ["plus", "like", "10"] etc.
-            return {"args": args, "description": desc}
+            return {"args": args, "description": desc, "handler": handler}
 
     # room で始まるが未知コマンド
     return {"error": f"未知のコマンドです: `{text}`\n\n{HELP_TEXT}"}
@@ -307,12 +325,33 @@ def execute_room_command(args: list[str]) -> str:
         return f"実行エラー: {e}"
 
 
+def execute_scheduler_command(args: list[str]) -> str:
+    """scheduler 内部コマンドを実行する"""
+    global _scheduler
+
+    if not _scheduler:
+        return "[scheduler] schedulerが起動していません"
+
+    sub = args[1] if len(args) >= 2 else ""
+
+    if sub == "status":
+        return _scheduler.get_status()
+    elif sub == "reload":
+        return _scheduler.reload_plan()
+    elif sub == "regenerate":
+        return _scheduler.regenerate_plan()
+    else:
+        return f"[scheduler] 未知のサブコマンド: {sub}"
+
+
 # ============================================================
-# Slack BOT（Socket Mode）
+# Slack BOT（Socket Mode）+ Scheduler
 # ============================================================
 
 def start_bot():
-    """Slack BOTを起動する"""
+    """Slack BOT + Schedulerを起動する"""
+    global _scheduler
+
     if not SLACK_BOT_TOKEN:
         print("エラー: SLACK_BOT_TOKEN が .env に設定されていません")
         print("")
@@ -340,14 +379,42 @@ def start_bot():
 
     app = App(token=SLACK_BOT_TOKEN)
 
+    # ── Slack通知ヘルパー ──
+    # scheduler からの通知用。チャンネルIDが必要。
+    _notify_channel_id = None
+
+    def slack_notify(text: str):
+        """schedulerからのSlack通知"""
+        nonlocal _notify_channel_id
+        if not _notify_channel_id:
+            return
+        try:
+            app.client.chat_postMessage(
+                channel=_notify_channel_id,
+                text=f"```\n{text}\n```",
+            )
+        except Exception as e:
+            slack_logger.error(f"Slack通知送信エラー: {e}")
+
+    # ── Scheduler 初期化 ──
+    from scheduler.room_scheduler import RoomScheduler
+    _scheduler = RoomScheduler(guard=_guard, slack_say_fn=slack_notify)
+
     @app.event("message")
     def handle_message(event, say):
         """メッセージイベントを処理する"""
+        nonlocal _notify_channel_id
+
         text = event.get("text", "").strip()
         user = event.get("user", "unknown")
         channel = event.get("channel", "unknown")
         event_ts = event.get("event_ts", "")
         client_msg_id = event.get("client_msg_id", "")
+
+        # 通知チャンネルを記録（最初にCEOがメッセージを送ったチャンネル）
+        if not _notify_channel_id and channel != "unknown":
+            _notify_channel_id = SLACK_NOTIFY_CHANNEL or channel
+            slack_logger.info(f"通知チャンネル設定: {_notify_channel_id}")
 
         # bot自身のメッセージは無視
         if event.get("bot_id"):
@@ -381,7 +448,14 @@ def start_bot():
 
         args = parsed["args"]
         desc = parsed["description"]
+        handler = parsed.get("handler", "subprocess")
         action_type = _get_action_type(args)
+
+        # ── scheduler 内部コマンド ──
+        if handler == "internal":
+            output = execute_scheduler_command(args)
+            say(f"```\n{output}\n```")
+            return
 
         # ── Layer 3: クールダウン（quick系は除外） ──
         if action_type != "quick":
@@ -441,19 +515,25 @@ def start_bot():
         event["text"] = text
         handle_message(event, say)
 
-    # 起動
+    # ── 起動 ──
     slack_logger.info("=" * 60)
-    slack_logger.info("ROOM BOT Slack連携 v6.2 起動（排他制御付き）")
+    slack_logger.info("ROOM BOT v7.0 起動（Slack + Scheduler）")
     slack_logger.info(f"  クールダウン: {CommandGuard.COOLDOWN_SECONDS}秒")
     slack_logger.info(f"  イベントTTL: {CommandGuard.EVENT_TTL_SECONDS}秒")
+    slack_logger.info(f"  Scheduler: 自動実行有効")
     slack_logger.info("=" * 60)
 
     print("=" * 60)
-    print("ROOM BOT Slack連携 v6.2 起動中...（排他制御付き）")
+    print("ROOM BOT v7.0 起動中...（Slack + Scheduler）")
     print(f"  クールダウン: {CommandGuard.COOLDOWN_SECONDS}秒")
+    print(f"  Scheduler: daily_plan自動実行")
     print("  Ctrl+C で停止")
     print("=" * 60)
 
+    # Scheduler スレッド開始
+    _scheduler.start()
+
+    # Slack Socket Mode 開始（ブロッキング）
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
 
