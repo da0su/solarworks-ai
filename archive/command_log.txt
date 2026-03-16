@@ -1,0 +1,7 @@
+[2026-03-16 15:52:42] 楽天ROOM BOTの設計を開始
+[2026-03-16 16:56:50] user=U0ALVT00L2G channel=C0AMLJQ7XQQ command=<@U0AMM2M9Y48> テスト
+[2026-03-16 16:57:33] user=U0ALVT00L2G channel=C0AMLJQ7XQQ command=<@U0AMM2M9Y48> テスト
+[2026-03-16 16:59:48] user=U0ALVT00L2G channel=C0AMLJQ7XQQ command=<@U0AMM2M9Y48> もう一回テスト
+[2026-03-16 17:04:56] user=U0ALVT00L2G channel=C0AMLJQ7XQQ command=<@U0AMM2M9Y48> 再々テスト
+[2026-03-16 17:07:33] user=U0ALVT00L2G channel=C0AMLJQ7XQQ command=<@u0amm2m9y48> hello
+[2026-03-16 17:08:00] user=U0ALVT00L2G channel=C0AMLJQ7XQQ command=<@u0amm2m9y48> run hello bot

@@ -1,0 +1,16 @@
+# Solar Works - solarworks-ai
+# 最終更新: 2026-03-16
+
+# --- ルート: scheduler.py ---
+schedule>=1.2.0
+
+# --- ルート: watchdog.py ---
+# 標準ライブラリのみ（追加パッケージ不要）
+
+# --- bots/room_bot ---
+playwright>=1.40.0
+python-dotenv>=1.0.0
+
+# --- bots/slack ---
+slack-bolt>=1.18.0
+slack-sdk>=3.27.0

@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 環境変数・機密情報
+.env
+*.env
+
+# データ（ログ・スクリーンショット・履歴・状態）
+bots/room_bot/data/
+logs/
+
+# Chromeプロファイル
+chrome_profile/
+
+# OS
+.DS_Store
+Thumbs.db
