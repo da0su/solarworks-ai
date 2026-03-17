@@ -68,6 +68,11 @@ class BatchRunner:
                 logger.error(f"未ログイン (method={login_status['method']})")
                 if login_status["screenshot"]:
                     logger.error(f"  スクリーンショット: {login_status['screenshot']}")
+                try:
+                    from notifier import notify, NotifyType
+                    notify(NotifyType.APPROVAL, detail=f"投稿BOT: 未ログイン ({login_status['method']})")
+                except Exception:
+                    pass
                 return self._summary(aborted=True, reason=f"未ログイン ({login_status['method']})")
 
             executor = PostExecutor(bm)

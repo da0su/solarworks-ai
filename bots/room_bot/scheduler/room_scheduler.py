@@ -257,6 +257,16 @@ class RoomScheduler:
             logger.error(traceback.format_exc())
             status = "error"
             error_msg = str(e)
+            # CDP切断・ログイン切れ等は承認要求
+            try:
+                from notifier import notify, NotifyType
+                notify(
+                    NotifyType.APPROVAL,
+                    detail=f"scheduler {action} 実行エラー: {e}",
+                    slack_fn=self._slack_say_fn,
+                )
+            except Exception:
+                pass
 
         finally:
             self._guard.release_action(guard_action)

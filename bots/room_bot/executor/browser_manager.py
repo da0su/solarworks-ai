@@ -70,6 +70,12 @@ class BrowserManager:
             logger.error("")
             logger.error(f'  "{config.CHROME_EXECUTABLE_PATH}" --remote-debugging-port=9222')
             logger.error("")
+            # CEO承認要求通知
+            try:
+                from notifier import notify, NotifyType
+                notify(NotifyType.APPROVAL, detail="CDP接続エラー: Chromeが起動していません")
+            except Exception:
+                pass  # 通知失敗でもBOTは止めない
             # コンソールにもエラー表示
             print("\n" + "=" * 60)
             print("CDP接続エラー: Chromeに接続できません")

@@ -165,6 +165,11 @@ class FollowExecutor:
             if not login_status["logged_in"]:
                 abort_reason = f"未ログイン ({login_status['method']})"
                 logger.error(abort_reason)
+                try:
+                    from notifier import notify, NotifyType
+                    notify(NotifyType.APPROVAL, detail=f"フォローBOT: {abort_reason}")
+                except Exception:
+                    pass
                 return self._make_summary(True, abort_reason)
 
             logger.info(f"ログイン確認OK ({login_status['method']})")
