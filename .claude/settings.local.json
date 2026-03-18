@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Program Files/Google/Chrome/**)",
+      "Read(//c/Program Files \\(x86\\)/Google/Chrome/Application//**)",
+      "Bash(where chrome.exe)",
+      "Bash(cmd.exe /c \"where chrome\")",
+      "Bash(tasklist.exe)",
+      "Bash(taskkill.exe /PID 27248 /F)",
+      "Bash(taskkill.exe /PID 27904 /F)",
+      "Bash(cmd.exe /c \"taskkill /PID 27248 /F\")",
+      "Bash(cmd.exe /c \"taskkill /PID 27904 /F\")",
+      "Bash(powershell.exe -Command \"Stop-Process -Id 27248 -Force; Stop-Process -Id 27904 -Force\")",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)",
+      "Bash(curl -s http://localhost:50021/version)",
+      "Bash(curl -s \"https://api.tts.quest/v3/voicevox/speakers\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(where 7z)",
+      "WebFetch(domain:deepwiki.com)",
+      "Bash(python -c \"import winsound; print\\(''winsound available''\\)\")",
+      "Bash(\"C:/scripts/notify_dev_done.bat\":*)",
+      "Bash(cmd.exe /c \"C:\\\\scripts\\\\notify_dev_done.bat\")",
+      "Bash(powershell -NoProfile -WindowStyle Hidden -Command \"Start-Process -FilePath ''$env:USERPROFILE\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\pythonw.exe'' -ArgumentList \\(''$env:USERPROFILE\\\\solarworks-ai\\\\ops\\\\notifications\\\\notifier.py'',''dev_done'',''--_child''\\) -WindowStyle Hidden\")",
+      "Bash(cscript //nologo \"C:\\\\scripts\\\\test_vbs_debug.vbs\")",
+      "Bash(cscript //nologo \"C:\\\\scripts\\\\test_vbs_async.vbs\")",
+      "Bash(cscript //nologo \"C:\\\\scripts\\\\notify_dev_done.vbs\")",
+      "Bash(cmd.exe /c \"C:\\\\scripts\\\\notify_approval.bat\")"
+    ]
+  },
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ops/notifications/notifier.py approval --no-delay"
+          }
+        ]
+      }
+    ]
+  }
+}
