@@ -11,7 +11,7 @@ from pathlib import Path
 # パス定義（絶対パス・環境統制ルール準拠）
 # ================================================================
 
-PROJECT_ROOT = Path(r"C:\Users\砂田　紘幸\solarworks-ai\coin_business")
+PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
