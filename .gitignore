@@ -1,19 +1,48 @@
+# Secrets
+.env
+*.env
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 
-# 環境変数・機密情報
-.env
-*.env
+# Runtime data
+*.db
+*.log
 
-# データ（ログ・スクリーンショット・履歴・状態）
-bots/room_bot/data/
-logs/
+# Large data files
+rakuten-room/bot/data/chrome_profile/
+rakuten-room/bot/data/logs/
+rakuten-room/bot/data/screenshots/
+rakuten-room/bot/data/state/
+rakuten-room/bot/data/source_items.json
+rakuten-room/bot/data/post_history.json
+rakuten-room/bot/data/room_bot.db
+rakuten-room/bot/data/operation_mode.json
 
-# Chromeプロファイル
-chrome_profile/
+coin_business/data/yahoo_import/
+coin_business/data/yahoo_closedsearch/
+coin_business/data/yahoo_auction/
+coin_business/data/ebay/
+coin_business/data/world_auctions/
+coin_business/logs/
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+
+# Migrated (retired)
+08_AUTOMATION/room_bot_v2_migrated/
+archive/room_bot_v1_migrated/
+
+# VOICEVOX binaries (too large for git)
+ops/notifications/voicevox/
+
+# Debug files
+coin_business/data/*/_debug*

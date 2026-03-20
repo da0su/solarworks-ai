@@ -1,0 +1,571 @@
+==============================================================================================================
+  柱3: eBay交渉候補レポート
+  基準日: 2026-03-20
+  目標利益率: 30%  |  送料: 3,000円  |  USD/JPY: 150.0
+==============================================================================================================
+
+# 交渉候補一覧
+
+  # 条件                                           eBay現在       交渉希望         上限           利益       率 判定              
+--------------------------------------------------------------------------------------------------------------
+  1 NGC|PF70UC|2022                          $     100 $    1088 $    1280     +87,314円    +53% 不要（現在価格で利益出る）   
+  2 NGC|PF70|2020|Silver                     $     541 $     500 $     588     +40,590円    +52% 交渉推奨            
+  3 PCGS|PR70DCAM|2020|Silver                $     235 $     372 $     437     +30,426円    +52% 不要（現在価格で利益出る）   
+  4 NGC|PF70|イギリス|2024|Silver                $     234 $     321 $     378     +26,385円    +52% 不要（現在価格で利益出る）   
+  5 NGC|PF70|2025|Silver                     $     175 $     319 $     375     +26,226円    +52% 不要（現在価格で利益出る）   
+  6 NGC|PF70UC|2025|Silver                   $     180 $     317 $     373     +26,069円    +52% 不要（現在価格で利益出る）   
+  7 NGC|PF70UC|2023|Silver                   $     199 $     313 $     368     +25,754円    +52% 不要（現在価格で利益出る）   
+  8 PCGS|MS70|2022|Silver                    $      43 $     260 $     306     +21,587円    +51% 不要（現在価格で利益出る）   
+  9 NGC|PF70UC|アメリカ|2023|Morgan+Silver       $     285 $     229 $     270     +19,124円    +51% 交渉推奨            
+ 10 NGC|PF70UC|2016|Silver                   $     144 $     182 $     214     +15,336円    +51% 不要（現在価格で利益出る）   
+ 11 NGC|PF70|2022|Silver                     $     199 $     174 $     204     +14,704円    +51% 交渉推奨            
+ 12 NGC|PF70|イギリス|2023|Silver                $     225 $     171 $     201     +14,483円    +51% 交渉推奨            
+ 13 NGC|PF70UC|2021|Silver                   $     219 $     164 $     193     +13,915円    +50% 交渉推奨            
+ 14 NGC|PF70UC|2015|Silver                   $     154 $     141 $     166     +12,116円    +50% 交渉推奨            
+ 15 PCGS|PR70DCAM|2014|Silver                $     100 $     122 $     144     +10,600円    +50% 不要（現在価格で利益出る）   
+ 16 PCGS|PR70DCAM|2024|Silver                $      84 $     102 $     120      +9,021円    +49% 不要（現在価格で利益出る）   
+ 17 PCGS|PR69DCAM|2002|Silver                $      88 $      85 $     100      +7,619円    +49% 交渉推奨            
+ 18 PCGS|PR69DCAM|2008                       $      30 $      80 $      95      +7,286円    +48% 不要（現在価格で利益出る）   
+ 19 PCGS|PR69DCAM|2000|Silver                $      45 $      78 $      92      +7,128円    +48% 不要（現在価格で利益出る）   
+ 20 NGC|PF70UC|2024|Silver                   $      33 $      70 $      83      +6,496円    +48% 不要（現在価格で利益出る）   
+
+
+==============================================================================================================
+  #1 NGC|PF70UC|2022
+==============================================================================================================
+
+  eBay現在中央値:  $100 (15,000円)
+  交渉希望価格:    $1088 (163,222円)  ← eBay現在の1088%
+  購入上限:        $1280 (192,027円)  ← これ以上は利益率30%割れ
+  損益分岐:        250,536円  ← これ以上は赤字
+  ヤフオク手取り:  253,536円
+  推定利益:        +87,314円 (+53%)
+  再現性:          eBay 4件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2022. Would you consider $1088.15 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2022 and possibly other items from your store.
+  Would you accept $1088.15 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #2 NGC|PF70|2020|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $541 (81,151円)
+  交渉希望価格:    $500 (74,970円)  ← eBay現在の92%
+  購入上限:        $588 (88,200円)  ← これ以上は利益率30%割れ
+  損益分岐:        115,560円  ← これ以上は赤字
+  ヤフオク手取り:  118,560円
+  推定利益:        +40,590円 (+52%)
+  再現性:          eBay 3件 / ヤフオク 4件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70 2020 Silver. Would you consider $499.80 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70 2020 Silver and possibly other items from your store.
+  Would you accept $499.80 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #3 PCGS|PR70DCAM|2020|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $235 (35,250円)
+  交渉希望価格:    $372 (55,768円)  ← eBay現在の158%
+  購入上限:        $437 (65,610円)  ← これ以上は利益率30%割れ
+  損益分岐:        86,194円  ← これ以上は赤字
+  ヤフオク手取り:  89,194円
+  推定利益:        +30,426円 (+52%)
+  再現性:          eBay 4件 / ヤフオク 5件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS PR70DCAM 2020 Silver. Would you consider $371.79 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS PR70DCAM 2020 Silver and possibly other items from your store.
+  Would you accept $371.79 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #4 NGC|PF70|イギリス|2024|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $234 (35,098円)
+  交渉希望価格:    $321 (48,135円)  ← eBay現在の137%
+  購入上限:        $378 (56,630円)  ← これ以上は利益率30%割れ
+  損益分岐:        74,520円  ← これ以上は赤字
+  ヤフオク手取り:  77,520円
+  推定利益:        +26,385円 (+52%)
+  再現性:          eBay 7件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70 イギリス 2024 Silver. Would you consider $320.90 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70 イギリス 2024 Silver and possibly other items from your store.
+  Would you accept $320.90 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #5 NGC|PF70|2025|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $175 (26,250円)
+  交渉希望価格:    $319 (47,838円)  ← eBay現在の182%
+  購入上限:        $375 (56,280円)  ← これ以上は利益率30%割れ
+  損益分岐:        74,064円  ← これ以上は赤字
+  ヤフオク手取り:  77,064円
+  推定利益:        +26,226円 (+52%)
+  再現性:          eBay 28件 / ヤフオク 3件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70 2025 Silver. Would you consider $318.92 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70 2025 Silver and possibly other items from your store.
+  Would you accept $318.92 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #6 NGC|PF70UC|2025|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $180 (26,998円)
+  交渉希望価格:    $317 (47,539円)  ← eBay現在の176%
+  購入上限:        $373 (55,929円)  ← これ以上は利益率30%割れ
+  損益分岐:        73,608円  ← これ以上は赤字
+  ヤフオク手取り:  76,608円
+  推定利益:        +26,069円 (+52%)
+  再現性:          eBay 11件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2025 Silver. Would you consider $316.93 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2025 Silver and possibly other items from your store.
+  Would you accept $316.93 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #7 NGC|PF70UC|2023|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $199 (29,850円)
+  交渉希望価格:    $313 (46,942円)  ← eBay現在の157%
+  購入上限:        $368 (55,227円)  ← これ以上は利益率30%割れ
+  損益分岐:        72,696円  ← これ以上は赤字
+  ヤフオク手取り:  75,696円
+  推定利益:        +25,754円 (+52%)
+  再現性:          eBay 19件 / ヤフオク 4件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2023 Silver. Would you consider $312.95 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2023 Silver and possibly other items from your store.
+  Would you accept $312.95 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #8 PCGS|MS70|2022|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $43 (6,450円)
+  交渉希望価格:    $260 (39,071円)  ← eBay現在の606%
+  購入上限:        $306 (45,967円)  ← これ以上は利益率30%割れ
+  損益分岐:        60,658円  ← これ以上は赤字
+  ヤフオク手取り:  63,658円
+  推定利益:        +21,587円 (+51%)
+  再現性:          eBay 3件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS MS70 2022 Silver. Would you consider $260.47 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS MS70 2022 Silver and possibly other items from your store.
+  Would you accept $260.47 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #9 NGC|PF70UC|アメリカ|2023|Morgan+Silver
+==============================================================================================================
+
+  eBay現在中央値:  $285 (42,750円)
+  交渉希望価格:    $229 (34,420円)  ← eBay現在の81%
+  購入上限:        $270 (40,495円)  ← これ以上は利益率30%割れ
+  損益分岐:        53,544円  ← これ以上は赤字
+  ヤフオク手取り:  56,544円
+  推定利益:        +19,124円 (+51%)
+  再現性:          eBay 2件 / ヤフオク 3件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC アメリカ 2023 Morgan+Silver. Would you consider $229.47 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC アメリカ 2023 Morgan+Silver and possibly other items from your store.
+  Would you accept $229.47 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #10 NGC|PF70UC|2016|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $144 (21,675円)
+  交渉希望価格:    $182 (27,264円)  ← eBay現在の126%
+  購入上限:        $214 (32,076円)  ← これ以上は利益率30%割れ
+  損益分岐:        42,600円  ← これ以上は赤字
+  ヤフオク手取り:  45,600円
+  推定利益:        +15,336円 (+51%)
+  再現性:          eBay 5件 / ヤフオク 3件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2016 Silver. Would you consider $181.76 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2016 Silver and possibly other items from your store.
+  Would you accept $181.76 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #11 NGC|PF70|2022|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $199 (29,850円)
+  交渉希望価格:    $174 (26,072円)  ← eBay現在の87%
+  購入上限:        $204 (30,673円)  ← これ以上は利益率30%割れ
+  損益分岐:        40,776円  ← これ以上は赤字
+  ヤフオク手取り:  43,776円
+  推定利益:        +14,704円 (+51%)
+  再現性:          eBay 9件 / ヤフオク 2件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70 2022 Silver. Would you consider $173.81 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70 2022 Silver and possibly other items from your store.
+  Would you accept $173.81 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #12 NGC|PF70|イギリス|2023|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $225 (33,750円)
+  交渉希望価格:    $171 (25,655円)  ← eBay現在の76%
+  購入上限:        $201 (30,183円)  ← これ以上は利益率30%割れ
+  損益分岐:        40,138円  ← これ以上は赤字
+  ヤフオク手取り:  43,138円
+  推定利益:        +14,483円 (+51%)
+  再現性:          eBay 5件 / ヤフオク 5件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70 イギリス 2023 Silver. Would you consider $171.03 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70 イギリス 2023 Silver and possibly other items from your store.
+  Would you accept $171.03 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #13 NGC|PF70UC|2021|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $219 (32,850円)
+  交渉希望価格:    $164 (24,582円)  ← eBay現在の75%
+  購入上限:        $193 (28,920円)  ← これ以上は利益率30%割れ
+  損益分岐:        38,497円  ← これ以上は赤字
+  ヤフオク手取り:  41,497円
+  推定利益:        +13,915円 (+50%)
+  再現性:          eBay 4件 / ヤフオク 4件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2021 Silver. Would you consider $163.88 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2021 Silver and possibly other items from your store.
+  Would you accept $163.88 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #14 NGC|PF70UC|2015|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $154 (23,025円)
+  交渉希望価格:    $141 (21,182円)  ← eBay現在の92%
+  購入上限:        $166 (24,921円)  ← これ以上は利益率30%割れ
+  損益分岐:        33,298円  ← これ以上は赤字
+  ヤフオク手取り:  36,298円
+  推定利益:        +12,116円 (+50%)
+  再現性:          eBay 2件 / ヤフオク 6件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2015 Silver. Would you consider $141.21 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2015 Silver and possibly other items from your store.
+  Would you accept $141.21 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #15 PCGS|PR70DCAM|2014|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $100 (14,992円)
+  交渉希望価格:    $122 (18,320円)  ← eBay現在の122%
+  購入上限:        $144 (21,553円)  ← これ以上は利益率30%割れ
+  損益分岐:        28,920円  ← これ以上は赤字
+  ヤフオク手取り:  31,920円
+  推定利益:        +10,600円 (+50%)
+  再現性:          eBay 7件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS PR70DCAM 2014 Silver. Would you consider $122.13 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS PR70DCAM 2014 Silver and possibly other items from your store.
+  Would you accept $122.13 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #16 PCGS|PR70DCAM|2024|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $84 (12,600円)
+  交渉希望価格:    $102 (15,339円)  ← eBay現在の122%
+  購入上限:        $120 (18,046円)  ← これ以上は利益率30%割れ
+  損益分岐:        24,360円  ← これ以上は赤字
+  ヤフオク手取り:  27,360円
+  推定利益:        +9,021円 (+49%)
+  再現性:          eBay 8件 / ヤフオク 11件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS PR70DCAM 2024 Silver. Would you consider $102.26 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS PR70DCAM 2024 Silver and possibly other items from your store.
+  Would you accept $102.26 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #17 PCGS|PR69DCAM|2002|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $88 (13,200円)
+  交渉希望価格:    $85 (12,688円)  ← eBay現在の96%
+  購入上限:        $100 (14,928円)  ← これ以上は利益率30%割れ
+  損益分岐:        20,307円  ← これ以上は赤字
+  ヤフオク手取り:  23,307円
+  推定利益:        +7,619円 (+49%)
+  再現性:          eBay 3件 / ヤフオク 2件
+  判定:            交渉推奨
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS PR69DCAM 2002 Silver. Would you consider $84.59 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS PR69DCAM 2002 Silver and possibly other items from your store.
+  Would you accept $84.59 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #18 PCGS|PR69DCAM|2008
+==============================================================================================================
+
+  eBay現在中央値:  $30 (4,500円)
+  交渉希望価格:    $80 (12,059円)  ← eBay現在の268%
+  購入上限:        $95 (14,188円)  ← これ以上は利益率30%割れ
+  損益分岐:        19,345円  ← これ以上は赤字
+  ヤフオク手取り:  22,345円
+  推定利益:        +7,286円 (+48%)
+  再現性:          eBay 3件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS PR69DCAM 2008. Would you consider $80.39 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS PR69DCAM 2008 and possibly other items from your store.
+  Would you accept $80.39 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #19 PCGS|PR69DCAM|2000|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $45 (6,742円)
+  交渉希望価格:    $78 (11,760円)  ← eBay現在の174%
+  購入上限:        $92 (13,836円)  ← これ以上は利益率30%割れ
+  損益分岐:        18,888円  ← これ以上は赤字
+  ヤフオク手取り:  21,888円
+  推定利益:        +7,128円 (+48%)
+  再現性:          eBay 6件 / ヤフオク 2件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this PCGS PR69DCAM 2000 Silver. Would you consider $78.40 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this PCGS PR69DCAM 2000 Silver and possibly other items from your store.
+  Would you accept $78.40 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards
+
+==============================================================================================================
+  #20 NGC|PF70UC|2024|Silver
+==============================================================================================================
+
+  eBay現在中央値:  $33 (4,950円)
+  交渉希望価格:    $70 (10,568円)  ← eBay現在の213%
+  購入上限:        $83 (12,433円)  ← これ以上は利益率30%割れ
+  損益分岐:        17,064円  ← これ以上は赤字
+  ヤフオク手取り:  20,064円
+  推定利益:        +6,496円 (+48%)
+  再現性:          eBay 20件 / ヤフオク 5件
+  判定:            不要（現在価格で利益出る）
+
+  --- メッセージテンプレ（標準） ---
+  Hello,
+  I'm interested in this NGC PF70UC 2024 Silver. Would you consider $70.45 for it?
+  I'm a serious buyer and can pay immediately via PayPal.
+  Thank you for your consideration.
+  Best regards
+
+  --- メッセージテンプレ（まとめ買い） ---
+  Hello,
+  I'm interested in purchasing this NGC PF70UC 2024 Silver and possibly other items from your store.
+  Would you accept $70.45 for this item? I may buy multiple items if we can work out pricing.
+  Happy to pay promptly.
+  Best regards

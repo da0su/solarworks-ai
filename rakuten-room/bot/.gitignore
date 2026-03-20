@@ -1,0 +1,14 @@
+# Runtime data
+data/chrome_profile/
+data/logs/
+data/screenshots/
+data/state/
+data/audit/
+data/reports/
+data/source_items.json
+data/post_history.json
+data/room_bot.db
+data/operation_mode.json
+
+# Secrets
+.env
