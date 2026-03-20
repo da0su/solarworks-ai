@@ -37,7 +37,7 @@ DAILY_LOG_DIR = COMPANY_ROOT / "05_CONTENT" / "rakuten_room" / "history" / "dail
 # Playwright設定
 BROWSER_HEADLESS = False
 BROWSER_SLOW_MO = 100
-CHROME_EXECUTABLE_PATH = r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
+CHROME_EXECUTABLE_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 
 # Persistent context用のユーザーデータ保存先（通常Chromeからcookieをコピーして使用）
 CHROME_USER_DATA_DIR = DATA_DIR / "chrome_profile"
