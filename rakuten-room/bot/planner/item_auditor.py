@@ -53,18 +53,9 @@ TITLE_FAIL_PATTERNS = [
     r"おまけ付き",
 ]
 
-# タイトルにこれらが含まれる → review（判断保留）
-TITLE_REVIEW_PATTERNS = [
-    r"訳あり",
-    r"B品",
-    r"アウトレット",
-    r"福袋",
-    r"セット.*\d+点",
-    r"まとめ買い",
-    r"業務用",
-    r"サンプル",
-    r"お試し",
-]
+# タイトルにこれらが含まれる → pass扱い（CEO判断 2026-03-20: 投稿OK）
+# 旧review → 「訳あり」「福袋」「お試し」等は ROOM で人気が出やすいため pass
+TITLE_REVIEW_PATTERNS = []
 
 # URLパターン: 楽天市場商品ページとして有効か
 VALID_URL_PATTERNS = [
@@ -182,19 +173,19 @@ def audit_single(item: dict, check_url: bool = True) -> dict:
         return result
     result["checks"]["title_quality"] = "pass"
 
-    # --- Check 5: 価格チェック ---
+    # --- Check 5: 価格チェック（CEO判断 2026-03-20: 異常値はfail） ---
     if price and (price < 100 or price > 500000):
-        result["audit_result"] = "review"
+        result["audit_result"] = "fail"
         result["fail_reason"] = f"価格異常: {price:,}円"
-        result["checks"]["price"] = "review"
+        result["checks"]["price"] = "fail"
         return result
     result["checks"]["price"] = "pass"
 
-    # --- Check 6: スコアチェック ---
+    # --- Check 6: スコアチェック（CEO判断 2026-03-20: 低スコアはfail） ---
     if score < 50:
-        result["audit_result"] = "review"
+        result["audit_result"] = "fail"
         result["fail_reason"] = f"低スコア: {score}点"
-        result["checks"]["score"] = "review"
+        result["checks"]["score"] = "fail"
         return result
     result["checks"]["score"] = "pass"
 
@@ -251,8 +242,8 @@ def _check_url_exists(url: str) -> dict:
         if e.code == 404:
             return {"status": "fail", "reason": "404 Not Found", "http_code": 404}
         if e.code == 403:
-            # 楽天は一部ページでHEADを403にするのでreview
-            return {"status": "review", "reason": "403 Forbidden (HEAD)", "http_code": 403}
+            # CEO判断 2026-03-20: 403はfail扱い
+            return {"status": "fail", "reason": "403 Forbidden (HEAD)", "http_code": 403}
         return {"status": "fail", "reason": f"HTTP {e.code}", "http_code": e.code}
     except Exception as e:
         return {"status": "review", "reason": f"接続エラー: {str(e)[:50]}", "http_code": 0}
