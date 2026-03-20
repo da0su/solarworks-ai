@@ -18,7 +18,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 BASE_DIR = Path(__file__).parent
-ROOM_BOT_DIR = BASE_DIR / "bots" / "room_bot"
+ROOM_BOT_DIR = BASE_DIR / "rakuten-room" / "bot"
 
 CHECKS = []
 PASS = 0
