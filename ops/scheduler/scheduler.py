@@ -31,8 +31,9 @@ from pathlib import Path
 
 # === 設定 ===
 BASE_DIR = Path(__file__).parent
+REPO_ROOT = BASE_DIR.parent.parent
 LOGS_DIR = BASE_DIR / "logs"
-ROOM_BOT_DIR = BASE_DIR / "bots" / "room_bot"
+ROOM_BOT_DIR = REPO_ROOT / "rakuten-room" / "bot"
 DAILY_PLAN_PATH = ROOM_BOT_DIR / "data" / "daily_plan.json"
 
 # room_bot コマンド
@@ -331,7 +332,8 @@ def main():
     if args.show:
         plan = load_daily_plan()
         if plan:
-            from bots.room_bot.planner.daily_schedule import format_schedule_report
+            sys.path.insert(0, str(ROOM_BOT_DIR))
+            from planner.daily_schedule import format_schedule_report
             print(format_schedule_report(plan))
         else:
             print("daily_plan.json が見つかりません。--generate で生成してください。")
