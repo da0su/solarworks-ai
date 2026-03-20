@@ -25,7 +25,7 @@ from pathlib import Path
 
 import requests
 
-PROJECT_ROOT = Path(r"C:\Users\砂田　紘幸\solarworks-ai\coin_business")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.supabase_client import get_client

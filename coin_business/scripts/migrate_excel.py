@@ -12,7 +12,8 @@ from datetime import datetime
 
 import openpyxl
 
-EXCEL_PATH = r"C:\Users\砂田　紘幸\Desktop\コイン販売管理シート.xlsx"
+# 環境変数 COIN_EXCEL_PATH で上書き可能（デフォルト: ~/Desktop/コイン販売管理シート.xlsx）
+EXCEL_PATH = os.environ.get("COIN_EXCEL_PATH", str(Path.home() / "Desktop" / "コイン販売管理シート.xlsx"))
 ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 def load_env():

@@ -11,8 +11,9 @@ from pathlib import Path
 
 import requests
 
-# 絶対パスでconfig読み込み
-sys.path.insert(0, str(Path(r"C:\Users\砂田　紘幸\solarworks-ai\coin_business")))
+# プロジェクトルートをパスに追加
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 import config
 
 logger = logging.getLogger(__name__)
