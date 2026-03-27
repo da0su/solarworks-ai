@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>コイン仕入れDB</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 8px; }
+.header { text-align: center; padding: 12px 0; border-bottom: 1px solid #333; margin-bottom: 12px; }
+.header h1 { font-size: 18px; color: #ffd700; }
+.header .meta { font-size: 11px; color: #888; margin-top: 4px; }
+.search-box { display: flex; gap: 8px; margin-bottom: 12px; }
+.search-box input { flex: 1; padding: 10px; border: 1px solid #444; border-radius: 8px; background: #16213e; color: #fff; font-size: 16px; }
+.search-box input::placeholder { color: #666; }
+.search-box button { padding: 10px 16px; border: none; border-radius: 8px; background: #ffd700; color: #000; font-weight: bold; font-size: 14px; cursor: pointer; }
+
+.filter-section { background: #16213e; border-radius: 10px; padding: 10px; margin-bottom: 12px; border: 1px solid #2a2a4a; }
+.filter-section summary { font-size: 13px; color: #ffd700; cursor: pointer; font-weight: bold; }
+.filter-group { margin-top: 10px; }
+.filter-group-title { font-size: 11px; color: #888; margin-bottom: 6px; }
+.filter-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.filter-row input[type="number"] { width: 100px; padding: 6px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #fff; font-size: 14px; }
+.filter-row select { padding: 6px; border: 1px solid #444; border-radius: 6px; background: #0f3460; color: #fff; font-size: 14px; }
+.filter-row span { font-size: 12px; color: #aaa; }
+
+.filters { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.filters button { padding: 6px 12px; border: 1px solid #444; border-radius: 16px; background: transparent; color: #aaa; font-size: 12px; cursor: pointer; }
+.filters button.active { background: #ffd700; color: #000; border-color: #ffd700; }
+
+.filter-row2 { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.filter-row2 button { padding: 6px 12px; border: 1px solid #444; border-radius: 16px; background: transparent; color: #aaa; font-size: 12px; cursor: pointer; }
+.filter-row2 button.active { border-color: #60a5fa; color: #60a5fa; }
+.filter-row2 button.active-ancient { background: #7f1d1d; border-color: #f87171; color: #fca5a5; }
+
+.count { font-size: 12px; color: #888; margin-bottom: 8px; }
+.card { background: #16213e; border-radius: 12px; margin-bottom: 12px; overflow: hidden; border: 1px solid #2a2a4a; }
+.card-header { display: flex; align-items: center; padding: 10px; gap: 10px; cursor: pointer; }
+.card-header img { width: 60px; height: 80px; object-fit: cover; border-radius: 6px; background: #333; }
+.card-header .info { flex: 1; }
+.card-header .info .grader { font-size: 11px; color: #ffd700; font-weight: bold; }
+.card-header .info .title { font-size: 13px; margin-top: 2px; }
+.card-header .info .grade { font-size: 11px; color: #aaa; margin-top: 2px; }
+.card-header .price { text-align: right; }
+.card-header .price .amount { font-size: 16px; font-weight: bold; color: #4ade80; }
+.card-header .price .label { font-size: 10px; color: #888; }
+.card-detail { display: none; padding: 0 10px 10px; }
+.card.open .card-detail { display: block; }
+.card-detail img.full { width: 100%; max-width: 300px; border-radius: 8px; margin: 8px auto; display: block; }
+.section { margin-top: 10px; padding: 8px; background: #0f3460; border-radius: 8px; }
+.section-title { font-size: 12px; color: #ffd700; font-weight: bold; margin-bottom: 6px; }
+.row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 12px; }
+.row .label { color: #aaa; }
+.row .value { font-weight: bold; }
+.row .value.gold { color: #ffd700; }
+.row .value.silver { color: #c0c0c0; }
+.row .value.green { color: #4ade80; }
+.row .value.red { color: #f87171; }
+.ref-box { margin-top: 8px; padding: 8px; border-radius: 8px; }
+.ref1 { background: #1a3a5c; border: 1px solid #2563eb; }
+.ref2 { background: #3a1a1a; border: 1px solid #7f1d1d; }
+.ref-label { font-size: 11px; font-weight: bold; margin-bottom: 4px; }
+.ref1 .ref-label { color: #60a5fa; }
+.ref2 .ref-label { color: #fca5a5; }
+.ebay-price { font-size: 18px; font-weight: bold; text-align: center; padding: 6px 0; }
+.ref1 .ebay-price { color: #60a5fa; }
+.ref2 .ebay-price { color: #fca5a5; }
+.currency { font-size: 12px; text-align: center; color: #aaa; margin-top: 2px; }
+.numista-link { display: inline-block; margin-top: 6px; padding: 4px 8px; background: #2563eb; border-radius: 4px; color: #fff; text-decoration: none; font-size: 11px; }
+.alert { margin-top: 6px; padding: 6px; background: #7f1d1d; border-radius: 6px; font-size: 11px; color: #fca5a5; text-align: center; }
+.history-item { font-size: 11px; padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>コイン仕入れDB</h1>
+  <div class="meta" id="meta"></div>
+</div>
+
+<div class="search-box">
+  <input type="text" id="search" placeholder="スラブテキスト / 国名 / 年号で検索">
+  <button onclick="doSearch()">検索</button>
+</div>
+
+<details class="filter-section" id="filterPanel">
+  <summary>フィルター</summary>
+
+  <div class="filter-group">
+    <div class="filter-group-title">価格帯を指定する</div>
+    <div class="filter-row">
+      <input type="number" id="priceMin" placeholder="下限" step="10000">
+      <span>円 ～</span>
+      <input type="number" id="priceMax" placeholder="上限" step="10000">
+      <span>円</span>
+    </div>
+  </div>
+
+  <div class="filter-group">
+    <div class="filter-group-title">期間を指定する</div>
+    <div class="filter-row">
+      <span>開始月</span>
+      <select id="startYear"></select><span>年</span>
+      <select id="startMonth"></select><span>月</span>
+    </div>
+    <div class="filter-row">
+      <span>終了月</span>
+      <select id="endYear"></select><span>年</span>
+      <select id="endMonth"></select><span>月</span>
+    </div>
+  </div>
+
+  <div class="filter-group">
+    <div class="filter-group-title">素材</div>
+    <div class="filters" id="matFilters">
+      <button class="active" onclick="filterMat(this,'all')">全て</button>
+      <button onclick="filterMat(this,'gold')">Gold</button>
+      <button onclick="filterMat(this,'silver')">Silver</button>
+      <button onclick="filterMat(this,'platinum')">Platinum</button>
+    </div>
+  </div>
+
+  <div class="filter-group">
+    <div class="filter-group-title">鑑定会社</div>
+    <div class="filter-row2" id="graderFilters">
+      <button class="active" onclick="filterGrader(this,'all')">全て</button>
+      <button onclick="filterGrader(this,'NGC')">NGC</button>
+      <button onclick="filterGrader(this,'PCGS')">PCGS</button>
+    </div>
+  </div>
+
+  <div class="filter-group">
+    <div class="filter-group-title">その他</div>
+    <div class="filter-row2" id="otherFilters">
+      <button onclick="toggleAncient(this)">古代コインのみ</button>
+    </div>
+  </div>
+
+  <div style="margin-top:12px; text-align:center;">
+    <button onclick="renderAll()" style="padding:10px 40px; border:none; border-radius:8px; background:#ffd700; color:#000; font-weight:bold; font-size:14px; cursor:pointer;">この条件で検索</button>
+  </div>
+</details>
+
+<div class="count" id="count"></div>
+<div id="results"></div>
+
+<script>
+let DATA = null;
+let currentFilter = 'all';
+let currentGrader = 'all';
+let ancientOnly = false;
+
+function initDateSelectors() {
+  const sy = document.getElementById('startYear');
+  const ey = document.getElementById('endYear');
+  const sm = document.getElementById('startMonth');
+  const em = document.getElementById('endMonth');
+  for (let y = 2025; y <= 2026; y++) {
+    sy.innerHTML += `<option value="${y}" ${y===2025?'selected':''}>${y}</option>`;
+    ey.innerHTML += `<option value="${y}" ${y===2026?'selected':''}>${y}</option>`;
+  }
+  for (let m = 1; m <= 12; m++) {
+    sm.innerHTML += `<option value="${m}" ${m===1?'selected':''}>${m}</option>`;
+    em.innerHTML += `<option value="${m}" ${m===12?'selected':''}>${m}</option>`;
+  }
+  // フィルターは検索ボタン押下時のみ反映
+}
+
+async function loadData() {
+  const resp = await fetch('data.json');
+  DATA = await resp.json();
+  const r = DATA.rates;
+  document.getElementById('meta').innerHTML =
+    `更新: ${DATA.updated} | Gold: ${fmt(r.gold_jpy_per_g)}円/g | Silver: ${Number(r.silver_jpy_per_g).toFixed(1)}円/g | USD: ${r.usd_jpy_calc} | GBP: ${r.gbp_jpy_calc}`;
+  initDateSelectors();
+  renderAll();
+}
+
+function fmt(n) { return n ? Number(n).toLocaleString('ja-JP', {maximumFractionDigits: 0}) : '0'; }
+
+function calcRef(sellingPrice) {
+  const sellNet = Math.round(sellingPrice * 0.9);
+  const costLimit = Math.round(sellNet * 0.85);
+  const ebayJpy = Math.round((costLimit - 2000 - 750) / 1.1);
+  const gross = sellNet - costLimit;
+  const grossRate = sellNet > 0 ? (gross / sellNet * 100).toFixed(1) : '0';
+  return { sellNet, costLimit, ebayJpy, gross, grossRate };
+}
+
+function getSoldDate(c) {
+  let ph = c.price_history;
+  if (typeof ph === 'string') ph = JSON.parse(ph);
+  if (!ph || !ph.length) return '';
+  return ph[ph.length - 1].date || '';
+}
+
+function renderAll() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const priceMin = parseInt(document.getElementById('priceMin').value) || 0;
+  const priceMax = parseInt(document.getElementById('priceMax').value) || Infinity;
+  const startY = parseInt(document.getElementById('startYear').value);
+  const startM = parseInt(document.getElementById('startMonth').value);
+  const endY = parseInt(document.getElementById('endYear').value);
+  const endM = parseInt(document.getElementById('endMonth').value);
+  const startDate = `${startY}-${String(startM).padStart(2,'0')}-01`;
+  const endDate = `${endY}-${String(endM).padStart(2,'0')}-31`;
+
+  let coins = DATA.coins.filter(c => {
+    if (currentFilter !== 'all' && (c.material || '').toLowerCase() !== currentFilter) return false;
+    if (currentGrader !== 'all' && (c.grader || '') !== currentGrader) return false;
+    if (ancientOnly && !c.is_ancient) return false;
+    const price = c.price_jpy || 0;
+    if (price < priceMin || price > priceMax) return false;
+    const soldDate = getSoldDate(c);
+    if (soldDate && (soldDate < startDate || soldDate > endDate)) return false;
+    if (q) {
+      const text = [c.slab_line1, c.slab_line2, c.slab_line3, c.grader, c.grade, c.coin_id].join(' ').toLowerCase();
+      if (!text.includes(q)) return false;
+    }
+    return true;
+  });
+
+  coins.sort((a, b) => (b.price_jpy || 0) - (a.price_jpy || 0));
+  document.getElementById('count').textContent = `${coins.length}件`;
+  const html = coins.map(c => renderCard(c)).join('');
+  document.getElementById('results').innerHTML = html;
+}
+
+function renderCard(c) {
+  const mat = (c.material || '').toLowerCase();
+  const matClass = mat === 'gold' ? 'gold' : mat === 'silver' ? 'silver' : '';
+  const purity = parseFloat(c.purity || 0);
+  const weight = parseFloat(c.weight_g || 0);
+  const rates = DATA.rates;
+  const currentRate = mat === 'gold' ? rates.gold_jpy_per_g : mat === 'silver' ? rates.silver_jpy_per_g : mat === 'platinum' ? rates.platinum_jpy_per_g : 0;
+  const metalCurrent = Math.round(parseFloat(currentRate) * weight * purity);
+
+  let ph = c.price_history;
+  if (typeof ph === 'string') ph = JSON.parse(ph);
+  if (!ph) ph = [{price: c.price_jpy || 0, date: '', bids: 0, init_price: 0}];
+
+  const prices = ph.map(p => p.price).sort((a,b) => a-b);
+  const n = prices.length;
+  let median, pattern;
+  if (n >= 5) { const t = prices.slice(1,-1); median = t[Math.floor(t.length/2)]; pattern = `P3: ${n}件 上下カット`; }
+  else if (n === 4) { const t = prices.slice(1,-1); median = Math.round(t.reduce((a,b)=>a+b,0)/t.length); pattern = 'P4: 4件 上下カット'; }
+  else if (n === 3) { median = prices[1]; pattern = 'P5-1: 3件 中央値'; }
+  else if (n === 2) { median = prices[0]; pattern = 'P5-2: 2件 安い方'; }
+  else { median = prices[0]; pattern = 'P5-3: 1件'; }
+
+  const soldRate = c.sold_date_metal_rate || parseFloat(currentRate);
+  const metalAtSold = Math.round(soldRate * weight * purity);
+  const premium = Math.round(median - metalAtSold);
+  const ref1Selling = premium + metalCurrent;
+  const ref1 = calcRef(ref1Selling);
+
+  const ref2Price = ph[ph.length - 1].price || 0;
+  const ref2Date = ph[ph.length - 1].date || '';
+  const ref2 = calcRef(ref2Price);
+
+  const usd = parseFloat(rates.usd_jpy_calc || 150);
+  const gbp = parseFloat(rates.gbp_jpy_calc || 200);
+
+  const gap = ref2.ebayJpy > 0 ? Math.abs(ref1.ebayJpy - ref2.ebayJpy) / ref2.ebayJpy * 100 : 0;
+
+  const imgUrl = c.front_img_url || '';
+  const ancientBadge = c.is_ancient ? '<span style="color:#f87171;font-size:10px;"> [古代]</span>' : '';
+
+  return `
+  <div class="card" onclick="this.classList.toggle('open')">
+    <div class="card-header">
+      <img src="${imgUrl}" alt="" onerror="this.style.display='none'">
+      <div class="info">
+        <div class="grader">${c.grader || ''}${ancientBadge}</div>
+        <div class="title">${c.slab_line1 || ''}</div>
+        <div class="grade">${c.slab_line2 || ''} | ${c.grade || ''}</div>
+      </div>
+      <div class="price">
+        <div class="label">eBay上限(基準1)</div>
+        <div class="amount">${fmt(ref1.ebayJpy)}円</div>
+        <div class="label">USD${fmt(Math.round(ref1.ebayJpy/usd))} / GBP${fmt(Math.round(ref1.ebayJpy/gbp))}</div>
+      </div>
+    </div>
+    <div class="card-detail">
+      <img class="full" src="${imgUrl}" alt="" onerror="this.style.display='none'">
+
+      <div class="section">
+        <div class="section-title">コイン情報</div>
+        <div class="row"><span class="label">素材</span><span class="value ${matClass}">${c.material || ''} (${c.purity || ''}) ${c.weight_g || ''}g</span></div>
+        <div class="row"><span class="label">地金(現在)</span><span class="value">${fmt(metalCurrent)}円 (${fmt(currentRate)}円/g)</span></div>
+        <div class="row"><span class="label">地金(落札日)</span><span class="value">${fmt(metalAtSold)}円 (${fmt(soldRate)}円/g)</span></div>
+        <div class="row"><span class="label">プレミアム</span><span class="value">${fmt(premium)}円</span></div>
+        ${c.numista_url ? `<a class="numista-link" href="${c.numista_url}" target="_blank">Numista</a>` : ''}
+      </div>
+
+      <div class="section">
+        <div class="section-title">価格算定 (${pattern})</div>
+        ${ph.map((p,j) => `<div class="history-item">${j+1}. ${fmt(p.price)}円 入札:${p.bids||'?'} 開始:${fmt(p.init_price||0)} (${p.date||''})</div>`).join('')}
+      </div>
+
+      <div class="ref-box ref1">
+        <div class="ref-label">基準1: プレミアム+現在地金</div>
+        <div class="row"><span class="label">販売標準価格</span><span class="value">${fmt(ref1Selling)}円</span></div>
+        <div class="row"><span class="label">販売手取り</span><span class="value">${fmt(ref1.sellNet)}円</span></div>
+        <div class="row"><span class="label">原価上限(85%)</span><span class="value">${fmt(ref1.costLimit)}円</span></div>
+        <div class="ebay-price">${fmt(ref1.ebayJpy)}円</div>
+        <div class="currency">USD${fmt(Math.round(ref1.ebayJpy/usd))} / GBP${fmt(Math.round(ref1.ebayJpy/gbp))}</div>
+        <div class="row"><span class="label">eBay仕入上限(送料込)</span><span class="value"></span></div>
+        <div class="row"><span class="label">想定粗利</span><span class="value green">${fmt(ref1.gross)}円 (${ref1.grossRate}%)</span></div>
+      </div>
+
+      <div class="ref-box ref2">
+        <div class="ref-label">基準2: ヤフオク実績 (CEO専用)</div>
+        <div class="row"><span class="label">直近落札価格</span><span class="value">${fmt(ref2Price)}円 (${ref2Date})</span></div>
+        <div class="row"><span class="label">落札日${mat.substring(0,2)}単価</span><span class="value">${fmt(soldRate)}円/g</span></div>
+        <div class="row"><span class="label">販売手取り</span><span class="value">${fmt(ref2.sellNet)}円</span></div>
+        <div class="row"><span class="label">原価上限(85%)</span><span class="value">${fmt(ref2.costLimit)}円</span></div>
+        <div class="ebay-price">${fmt(ref2.ebayJpy)}円</div>
+        <div class="currency">USD${fmt(Math.round(ref2.ebayJpy/usd))} / GBP${fmt(Math.round(ref2.ebayJpy/gbp))}</div>
+        <div class="row"><span class="label">eBay仕入上限(送料込)</span><span class="value"></span></div>
+        <div class="row"><span class="label">想定粗利</span><span class="value green">${fmt(ref2.gross)}円 (${ref2.grossRate}%)</span></div>
+      </div>
+
+      ${gap > 30 ? `<div class="alert">基準1-2乖離 ${gap.toFixed(0)}% 要確認</div>` : ''}
+    </div>
+  </div>`;
+}
+
+function doSearch() { renderAll(); }
+document.getElementById('search').addEventListener('keyup', e => { if (e.key === 'Enter') doSearch(); });
+
+function filterMat(btn, mat) {
+  document.querySelectorAll('#matFilters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentFilter = mat;
+  renderAll();
+}
+
+function filterGrader(btn, grader) {
+  document.querySelectorAll('#graderFilters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  currentGrader = grader;
+  renderAll();
+}
+
+function toggleAncient(btn) {
+  ancientOnly = !ancientOnly;
+  btn.classList.toggle('active-ancient');
+  renderAll();
+}
+
+loadData();
+</script>
+</body>
+</html>
