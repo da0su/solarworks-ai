@@ -78,8 +78,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <div class="meta" id="meta"></div>
 </div>
 
-<div class="search-box">
-  <input type="text" id="search" placeholder="スラブテキスト / 国名 / 年号で検索">
+<div class="search-box" style="margin-bottom:6px;">
+  <input type="text" id="mgmtNo" placeholder="管理番号(6桁)" style="width:120px;text-align:center;flex:none;" maxlength="6" inputmode="numeric">
+  <button onclick="doMgmtSearch()" style="flex:none;">番号検索</button>
+  <input type="text" id="search" placeholder="スラブテキスト / 国名 / 年号" style="flex:1;">
   <button onclick="doSearch()">検索</button>
 </div>
 
@@ -271,7 +273,7 @@ function renderCard(c) {
     <div class="card-header">
       <img src="${imgUrl}" alt="" onerror="this.style.display='none'">
       <div class="info">
-        <div class="grader">${c.grader || ''}${ancientBadge}</div>
+        <div class="grader"><span style="color:#60a5fa;">#${c.management_no || ''}</span> ${c.grader || ''}${ancientBadge}</div>
         <div class="title">${c.slab_line1 || ''}</div>
         <div class="grade">${c.slab_line2 || ''} | ${c.grade || ''}</div>
       </div>
@@ -326,7 +328,22 @@ function renderCard(c) {
   </div>`;
 }
 
-function doSearch() { renderAll(); }
+function doSearch() { document.getElementById('mgmtNo').value = ''; renderAll(); }
+function doMgmtSearch() {
+  let no = document.getElementById('mgmtNo').value.trim();
+  if (!no) return;
+  no = no.padStart(6, '0');
+  document.getElementById('search').value = '';
+  const coin = DATA.coins.find(c => c.management_no === no);
+  if (coin) {
+    document.getElementById('count').textContent = '1件';
+    document.getElementById('results').innerHTML = renderCard(coin);
+  } else {
+    document.getElementById('count').textContent = '0件 - 該当なし';
+    document.getElementById('results').innerHTML = '';
+  }
+}
+document.getElementById('mgmtNo').addEventListener('keyup', e => { if (e.key === 'Enter') doMgmtSearch(); });
 document.getElementById('search').addEventListener('keyup', e => { if (e.key === 'Enter') doSearch(); });
 
 function filterMat(btn, mat) {
