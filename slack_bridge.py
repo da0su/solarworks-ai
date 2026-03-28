@@ -408,33 +408,98 @@ def handle_test_ping(msg_data: dict) -> dict:
 
 
 def handle_ebay_search(msg_data: dict) -> dict:
-    """ebay_auction_search.pyをsubprocessで実行"""
+    """ebay_auction_search.pyをsubprocessで実行し、新規候補があればキャップにebay-review TASK送信"""
     script = Path(__file__).parent / "coin_business" / "scripts" / "ebay_auction_search.py"
     if not script.exists():
         return {"error": f"Script not found: {script}"}
     try:
         result = subprocess.run(
             [sys.executable, str(script)],
-            capture_output=True, text=True, timeout=300, encoding="utf-8",
+            capture_output=True, text=True, timeout=600, encoding="utf-8",
+            cwd=str(script.parent.parent),
         )
-        return {
-            "stdout": result.stdout[-2000:] if result.stdout else "",
-            "stderr": result.stderr[-500:] if result.stderr else "",
-            "returncode": result.returncode,
-        }
+        if result.returncode != 0:
+            return {
+                "error": "Script failed",
+                "stdout": result.stdout[-2000:] if result.stdout else "",
+                "stderr": result.stderr[-500:] if result.stderr else "",
+                "returncode": result.returncode,
+            }
     except subprocess.TimeoutExpired:
-        return {"error": "Script timed out after 300s"}
+        return {"error": "Script timed out after 600s"}
     except Exception as e:
         return {"error": str(e)}
 
+    # 結果ファイル読み込み
+    matches_file = Path(__file__).parent / "coin_business" / "data" / "ebay_matches_latest.json"
+    if not matches_file.exists():
+        return {"error": "Results file not generated", "stdout": result.stdout[-1000:] if result.stdout else ""}
+
+    try:
+        with open(matches_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        return {"error": f"Failed to read results: {e}"}
+
+    matches = data.get("matches", [])
+    new_matches = [m for m in matches if m.get("is_new", False)]
+
+    # 新規候補があればキャップにebay-review TASK送信
+    if new_matches:
+        review_msg = make_task_msg(
+            from_id=get_sender(),
+            to_id="cap",
+            task="ebay-review",
+            payload={
+                "candidates": new_matches,
+                "count": len(new_matches),
+                "total_matches": len(matches),
+                "searched_at": data.get("searched_at", ""),
+            },
+        )
+        send_bridge_msg(review_msg)
+        add_pending_task(review_msg)
+        logger.info(f"ebay-review TASK送信: 新規{len(new_matches)}件 (全{len(matches)}マッチ)")
+
+    return {
+        "total_searched": data.get("total_searched", 0),
+        "match_count": len(matches),
+        "new_count": len(new_matches),
+        "review_sent": len(new_matches) > 0,
+    }
+
 
 def handle_ebay_review(msg_data: dict) -> dict:
-    """候補リストを受け取り、ファイルに保存"""
+    """候補リストを受け取り、ファイルに保存 + コンソール表示"""
     payload = msg_data.get("payload", {})
     candidates = payload.get("candidates", [])
+    searched_at = payload.get("searched_at", "")
+
+    # ファイル保存
+    review_data = {
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "searched_at": searched_at,
+        "count": len(candidates),
+        "candidates": candidates,
+    }
     outfile = DATA_DIR / "ebay_review_candidates.json"
     with open(outfile, "w", encoding="utf-8") as f:
-        json.dump(candidates, f, ensure_ascii=False, indent=2)
+        json.dump(review_data, f, ensure_ascii=False, indent=2)
+
+    # コンソールに候補一覧表示
+    print(f"\n{'='*60}")
+    print(f"eBay仕入れ候補（新規 {len(candidates)}件）")
+    print(f"{'='*60}")
+    for i, c in enumerate(candidates, 1):
+        print(f"\n{i}. #{c.get('mgmt_no','')} | {c.get('db_line1','')} {c.get('db_grader','')} {c.get('db_grade','')}")
+        print(f"   仕入上限: USD{c.get('ebay_limit_usd',0):,} ({c.get('ebay_limit_jpy',0):,}円)")
+        print(f"   入札: {c.get('bid_count',0)}件")
+        print(f"   URL: {c.get('ebay_url','')}")
+    print(f"\n{'='*60}")
+    print(f"保存先: {outfile}")
+    print(f"CEO報告: python slack_bridge.py ceo-report")
+    print(f"{'='*60}\n")
+
     return {"saved_to": str(outfile), "count": len(candidates)}
 
 
@@ -781,6 +846,72 @@ def cmd_status():
 # ============================================================
 # 旧互換コマンド
 # ============================================================
+def cmd_ceo_report(file_path: str = None):
+    """ebay_review_candidates.jsonを読み込み、#ceo-roomに承認済み候補を報告"""
+    if file_path:
+        candidates_file = Path(file_path)
+    else:
+        candidates_file = DATA_DIR / "ebay_review_candidates.json"
+
+    if not candidates_file.exists():
+        logger.error(f"候補ファイルが見つかりません: {candidates_file}")
+        print(f"Error: {candidates_file} not found")
+        return False
+
+    try:
+        with open(candidates_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        logger.error(f"ファイル読み込みエラー: {e}")
+        print(f"Error: {e}")
+        return False
+
+    # candidates はデータ構造に応じてリストまたはdict内のリスト
+    if isinstance(data, list):
+        candidates = data
+    elif isinstance(data, dict):
+        candidates = data.get("candidates", [])
+    else:
+        print("Error: unexpected data format")
+        return False
+
+    if not candidates:
+        print("候補なし。報告不要。")
+        return True
+
+    # CEO報告メッセージ構築
+    lines = []
+    lines.append("eBay仕入れ候補（キャップ確認済み）")
+    lines.append("")
+    for i, c in enumerate(candidates, 1):
+        mgmt = c.get("mgmt_no", "???")
+        line1 = c.get("db_line1", "")
+        grader = c.get("db_grader", "")
+        grade = c.get("db_grade", "")
+        limit_usd = c.get("ebay_limit_usd", 0)
+        limit_jpy = c.get("ebay_limit_jpy", 0)
+        bids = c.get("bid_count", 0)
+        url = c.get("ebay_url", "")
+
+        lines.append(f"{i}. #{mgmt} | {line1} {grader} {grade}")
+        lines.append(f"   仕入上限: USD{limit_usd:,} ({limit_jpy:,}円)")
+        lines.append(f"   入札: {bids}件")
+        lines.append(f"   URL: {url}")
+        lines.append("")
+
+    report_text = "\n".join(lines)
+
+    # #ceo-roomに送信
+    success = send_message(report_text, sender=get_sender(), channel=CEO_ROOM_CHANNEL)
+    if success:
+        logger.info(f"CEO報告送信完了: {len(candidates)}件")
+        print(f"CEO報告を#ceo-roomに送信しました（{len(candidates)}件）")
+    else:
+        logger.error("CEO報告送信失敗")
+        print("Error: CEO報告送信失敗")
+    return success
+
+
 def read_latest():
     """最新メッセージファイルを読む（旧互換）"""
     if LATEST_MSG_FILE.exists():
@@ -819,6 +950,10 @@ def main():
     ss_p = subparsers.add_parser("set-sender", help="送信者IDを設定")
     ss_p.add_argument("sender_id", help="送信者ID (cap/cyber)")
 
+    # ceo-report
+    ceo_p = subparsers.add_parser("ceo-report", help="eBay候補をCEO報告")
+    ceo_p.add_argument("--file", default=None, help="候補JSONファイルパス（省略時はデフォルト）")
+
     # --- 旧互換コマンド ---
     send_p = subparsers.add_parser("send", help="メッセージ送信（旧互換）")
     send_p.add_argument("message", help="送信するメッセージ")
@@ -840,6 +975,8 @@ def main():
         cmd_status()
     elif args.command == "set-sender":
         set_sender(args.sender_id)
+    elif args.command == "ceo-report":
+        cmd_ceo_report(file_path=args.file)
     elif args.command == "send":
         send_message(args.message, sender=args.sender)
     elif args.command == "receive":
