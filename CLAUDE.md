@@ -141,3 +141,31 @@ solarworks-ai/
 ## bat Files
 
 CEO用の起動スクリプトは `rakuten-room/bot/scripts/` にある。`scheduler_auto.bat` が自動運用の起点。
+
+## State Management
+
+セッション依存を排除し、外部ファイルで状態管理する。
+
+### ファイル
+- `state/system_state.json` — 全タスクの状態・進捗を一元管理
+
+### ルール
+1. **毎セッション開始時**に `state/system_state.json` を読む
+2. タスク実行後は `status` / `last_action` / `next_action` を必ず更新
+3. 会話履歴には依存しない。stateファイルが唯一の真実
+4. `owner` フィールドで担当マシンを明示（cyber / cap / ceo）
+
+### 自動同期
+- slack_bridge.py がTASK/ACK/running/DONE/ERRORの各ステージでstateを自動更新
+- atomic write（.tmp → rename）で破損防止
+- watch再起動時に前回の未完了タスクを検出しerrorに移行
+
+### 状態確認
+```bash
+python slack_bridge.py state-summary    # CEO/cap/cyber共通ビュー
+```
+
+### 役割
+- **cyber**: stateを見て実行
+- **cap**: stateを見て承認
+- **CEO**: stateを見て指示

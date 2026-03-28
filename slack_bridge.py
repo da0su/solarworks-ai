@@ -8,6 +8,9 @@ Usage:
     python slack_bridge.py retry-pending                # 未完了タスクのリトライ
     python slack_bridge.py status                       # 現在のタスク状態一覧
     python slack_bridge.py set-sender cap               # 送信者ID設定
+    python slack_bridge.py state-summary                # system_state サマリー
+    python slack_bridge.py state-audit                  # state整合性チェック
+    python slack_bridge.py approve --task ebay-review --by cap  # cap承認
 
     # 旧互換
     python slack_bridge.py send "メッセージ"
@@ -23,8 +26,16 @@ import argparse
 import subprocess
 import threading
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
+
+# root .env から SLACK_BOT_TOKEN を読み込む（Git管理外）
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(Path(__file__).parent / ".env", override=False)
+except ImportError:
+    pass
 
 try:
     from slack_sdk import WebClient
@@ -66,7 +77,15 @@ OLD_LAST_SEEN_FILE = Path.home() / ".slack_bridge_last_seen"
 OLD_LATEST_MSG_FILE = Path.home() / ".slack_bridge_latest_msg"
 
 # ACK不要のメッセージタイプ（ループ防止）
-NO_ACK_TYPES = {"ACK", "DONE", "ERROR", "ESCALATE"}
+NO_ACK_TYPES = {"ACK", "DONE", "ERROR", "BLOCKED", "ESCALATE"}
+
+# メッセージ起動元
+SOURCE_AUTO   = "auto"    # 依存チェーンによる自動起動
+SOURCE_MANUAL = "manual"  # 人手による起動
+
+# State管理ファイル
+STATE_FILE = Path(__file__).parent / "state" / "system_state.json"
+MAX_HISTORY = 50  # recent_historyの最大保持件数
 
 
 # ============================================================
@@ -89,12 +108,582 @@ ensure_data_dir()
 
 
 # ============================================================
+# State管理（system_state.json 原子的更新）v4.0
+# ============================================================
+
+# ERROR分類
+class ErrorType:
+    CONFIG_MISSING   = "CONFIG_MISSING"    # 設定・ファイル不足
+    ACK_TIMEOUT      = "ACK_TIMEOUT"       # ACK待ちタイムアウト
+    DONE_TIMEOUT     = "DONE_TIMEOUT"      # DONE待ちタイムアウト
+    EXECUTION_ERROR  = "EXECUTION_ERROR"   # ハンドラ実行時例外
+    MANUAL_REQUIRED  = "MANUAL_REQUIRED"   # 人手介入が必要
+    DEPENDENCY_FAILED = "DEPENDENCY_FAILED" # 依存タスクが失敗
+    UNKNOWN          = "UNKNOWN"           # 分類不能
+
+# タスク依存関係マップ（タスク名 → 前提タスク名 / 次タスク名）
+# format: task_name -> {"requires": prev_task, "next": next_task, "to": default_receiver}
+TASK_FLOW: dict[str, dict] = {
+    "git-pull":    {"requires": None,           "next": "ebay-search", "to": "cyber"},
+    "ebay-search": {"requires": "git-pull",     "next": "ebay-review", "to": "cyber"},
+    "ebay-review": {"requires": "ebay-search",  "next": "ceo-report",  "to": "cap"},
+    "ceo-report":  {"requires": "ebay-review",  "next": None,          "to": "cap"},
+    "test-ping":   {"requires": None,           "next": None,          "to": "cyber"},
+    "report":      {"requires": None,           "next": None,          "to": "cyber"},
+    "set-env":     {"requires": None,           "next": None,          "to": "cyber"},
+}
+# 後方互換のため TASK_DEPS も維持
+TASK_DEPS: dict[str, str | None] = {k: v.get("next") for k, v in TASK_FLOW.items()}
+
+# 全ステータス
+class TaskStatus:
+    QUEUED        = "queued"         # 送信済み ACK待ち
+    WAITING_ACK   = "waiting_ack"    # ACK明示待ち（queued の別名、summary用）
+    RECEIVED      = "received"       # 受信側で受信済み
+    ACKNOWLEDGED  = "acknowledged"   # ACK送受信済み
+    RUNNING       = "running"        # ハンドラ実行中
+    WAITING_DONE  = "waiting_done"   # DONE明示待ち
+    WAITING_MANUAL = "waiting_manual" # 人手介入待ち
+    BLOCKED       = "blocked"        # 依存タスク未完了/失敗でブロック
+    DONE          = "done"           # 正常完了
+    ERROR         = "error"          # エラー終了
+
+# 状態 → next_action テキスト（機械的に決まる）
+_NEXT_ACTION_MAP: dict[str, str] = {
+    TaskStatus.QUEUED:         "waiting ACK from receiver",
+    TaskStatus.WAITING_ACK:    "waiting ACK from receiver",
+    TaskStatus.RECEIVED:       "sending ACK to sender",
+    TaskStatus.ACKNOWLEDGED:   "executing task handler",
+    TaskStatus.RUNNING:        "waiting for handler completion",
+    TaskStatus.WAITING_DONE:   "waiting DONE from executor",
+    TaskStatus.WAITING_MANUAL: "waiting for manual intervention",
+    TaskStatus.BLOCKED:        "waiting for dependency to complete",
+    TaskStatus.DONE:           "",   # 動的に算出
+    TaskStatus.ERROR:          "",   # 動的に算出
+}
+
+# エラーメッセージ → ErrorType の優先マッチリスト（長いパターンを先に置く）
+_ERROR_KEYWORDS: list[tuple[str, str]] = [
+    ("DONE timeout", ErrorType.DONE_TIMEOUT),    # "timeout" より先にチェック
+    ("timed out",    ErrorType.ACK_TIMEOUT),
+    ("timeout",      ErrorType.ACK_TIMEOUT),
+    ("not found",    ErrorType.CONFIG_MISSING),
+    ("Script not",   ErrorType.CONFIG_MISSING),
+    ("interrupted",  ErrorType.MANUAL_REQUIRED),
+]
+
+JST = timezone(timedelta(hours=9))
+
+
+def _classify_error(msg: str) -> str:
+    """エラーメッセージからErrorTypeを自動判定"""
+    for keyword, etype in _ERROR_KEYWORDS:
+        if keyword.lower() in msg.lower():
+            return etype
+    return ErrorType.EXECUTION_ERROR
+
+
+def _calc_next_action(status: str, task_name: str, error_type: str = None,
+                      waiting_for: str = None, depends_on_next: str = None) -> str | None:
+    """状態に応じて次アクションを機械的に算出"""
+    if status == "done":
+        if depends_on_next:
+            return f"trigger next task: {depends_on_next}"
+        return None
+    if status == "error":
+        if error_type == ErrorType.CONFIG_MISSING:
+            return "fix config / check .env then retry"
+        if error_type in (ErrorType.ACK_TIMEOUT, ErrorType.DONE_TIMEOUT):
+            return "check receiver status then retry-pending"
+        if error_type == ErrorType.MANUAL_REQUIRED:
+            return "manual intervention required"
+        return "review error log then retry"
+    if status == "queued" and waiting_for:
+        return f"waiting ACK from {waiting_for}"
+    return _NEXT_ACTION_MAP.get(status)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _timeout_iso(seconds: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+
+
+class StateManager:
+    """system_state.json の読み書き。atomic write で破損防止。v3.0"""
+
+    def __init__(self, path: Path = STATE_FILE):
+        self.path = path
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def load(self) -> dict:
+        if not self.path.exists():
+            return self._default_state()
+        try:
+            with open(self.path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return self._default_state()
+
+    def save(self, state: dict):
+        """atomic write: tmpに書いてrenameで置き換え"""
+        state["updated_at"] = datetime.now(JST).isoformat()
+        tmp = self.path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        tmp.replace(self.path)
+
+    def _default_state(self) -> dict:
+        return {
+            "version": "3.0",
+            "updated_at": datetime.now(JST).isoformat(),
+            "system_status": "idle",
+            "next_action": None,
+            "current_tasks": [],
+            "recent_history": [],
+        }
+
+    def _make_task_entry(self, task_id: str, task_name: str, owner: str,
+                         status: str, waiting_for: str = None,
+                         depends_on: str = None, max_retries: int = 3,
+                         timeout_sec: int = ACK_TIMEOUT_SEC,
+                         source: str = SOURCE_MANUAL,
+                         workflow_id: str = None) -> dict:
+        """タスクエントリを標準フォーマットで生成"""
+        depends_on_next = TASK_DEPS.get(task_name)
+        return {
+            "task_id":      task_id,
+            "task_name":    task_name,
+            "owner":        owner,
+            "status":       status,
+            "source":       source,
+            "workflow_id":  workflow_id or str(uuid.uuid4()),
+            "created_at":   _now_iso(),
+            "updated_at":   _now_iso(),
+            "waiting_for":  waiting_for,
+            "depends_on":   depends_on,
+            "depends_on_next": depends_on_next,
+            "retry_count":  0,
+            "max_retries":  max_retries,
+            "timeout_at":   _timeout_iso(timeout_sec),
+            "last_error":   None,
+            "error_type":   None,
+            "next_action":  _calc_next_action(status, task_name, waiting_for=waiting_for),
+            "review_status": None,
+            "approved_by":   None,
+            "approved_at":   None,
+            "report_status":   None,
+            "reported_at":     None,
+            "reported_channel": None,
+        }
+
+    # --- 状態遷移メソッド ---
+
+    def task_received(self, task_id: str, task_name: str, owner: str,
+                      depends_on: str = None, workflow_id: str = None):
+        """TASK受信時 (status=received)"""
+        state = self.load()
+        entry = self._make_task_entry(
+            task_id, task_name, owner, "received",
+            depends_on=depends_on, timeout_sec=DONE_TIMEOUT_SEC,
+            workflow_id=workflow_id,
+        )
+        state["current_tasks"].append(entry)
+        state["system_status"] = "busy"
+        state["next_action"] = _calc_next_action("received", task_name)
+        self.save(state)
+
+    def task_queued(self, task_id: str, task_name: str, owner: str, to: str,
+                    depends_on: str = None, workflow_id: str = None):
+        """タスク送信時 (status=queued)"""
+        state = self.load()
+        entry = self._make_task_entry(
+            task_id, task_name, owner, "queued",
+            waiting_for=to, depends_on=depends_on,
+            timeout_sec=ACK_TIMEOUT_SEC,
+            workflow_id=workflow_id,
+        )
+        state["current_tasks"].append(entry)
+        state["system_status"] = "busy"
+        state["next_action"] = _calc_next_action("queued", task_name, waiting_for=to)
+        self.save(state)
+
+    def task_acknowledged(self, task_id: str):
+        """ACK受信/送信時 (status=acknowledged)"""
+        state = self.load()
+        for t in state["current_tasks"]:
+            if t["task_id"] == task_id:
+                t["status"] = "acknowledged"
+                t["waiting_for"] = None
+                t["timeout_at"] = _timeout_iso(DONE_TIMEOUT_SEC)
+                t["updated_at"] = _now_iso()
+                t["next_action"] = _calc_next_action("acknowledged", t.get("task_name", ""))
+                break
+        state["next_action"] = _calc_next_action("acknowledged", "")
+        self.save(state)
+
+    def task_running(self, task_id: str):
+        """実行開始時 (status=running)"""
+        state = self.load()
+        for t in state["current_tasks"]:
+            if t["task_id"] == task_id:
+                t["status"] = "running"
+                t["updated_at"] = _now_iso()
+                t["next_action"] = _calc_next_action("running", t.get("task_name", ""))
+                break
+        state["next_action"] = "waiting for handler completion"
+        self.save(state)
+
+    def task_done(self, task_id: str, result_summary: str = None):
+        """完了時 → recent_historyへ移動"""
+        state = self.load()
+        task = self._pop_task(state, task_id)
+        if task:
+            task["status"] = "done"
+            task["updated_at"] = _now_iso()
+            task["timeout_at"] = None
+            if result_summary:
+                task["result"] = result_summary
+            depends_on_next = task.get("depends_on_next")
+            task["next_action"] = _calc_next_action(
+                "done", task.get("task_name", ""), depends_on_next=depends_on_next)
+            state["recent_history"].insert(0, task)
+            state["recent_history"] = state["recent_history"][:MAX_HISTORY]
+        state["system_status"] = "busy" if state["current_tasks"] else "idle"
+        state["next_action"] = (
+            state["current_tasks"][0].get("next_action") if state["current_tasks"] else None
+        )
+        self.save(state)
+
+    def task_error(self, task_id: str, error_msg: str,
+                   error_type: str = None):
+        """エラー時 → recent_historyへ移動"""
+        etype = error_type or _classify_error(error_msg)
+        state = self.load()
+        task = self._pop_task(state, task_id)
+        if task:
+            task["status"] = "error"
+            task["updated_at"] = _now_iso()
+            task["timeout_at"] = None
+            task["last_error"] = error_msg
+            task["error_type"] = etype
+            task["next_action"] = _calc_next_action("error", task.get("task_name", ""), etype)
+            state["recent_history"].insert(0, task)
+            state["recent_history"] = state["recent_history"][:MAX_HISTORY]
+        # system_status: 他に active なタスクがあれば busy、なければ error
+        active = [t for t in state["current_tasks"]
+                  if t.get("status") not in (TaskStatus.BLOCKED,)]
+        state["system_status"] = "busy" if active else "error"
+        state["next_action"] = task.get("next_action") if task else "review error"
+        self.save(state)
+
+    def task_retry(self, task_id: str):
+        """リトライ時: retry_countをインクリメント"""
+        state = self.load()
+        for t in state["current_tasks"]:
+            if t["task_id"] == task_id:
+                t["retry_count"] = t.get("retry_count", 0) + 1
+                t["status"] = "queued"
+                t["last_error"] = None
+                t["error_type"] = None
+                t["timeout_at"] = _timeout_iso(ACK_TIMEOUT_SEC)
+                t["updated_at"] = _now_iso()
+                t["next_action"] = _calc_next_action("queued", t.get("task_name", ""),
+                                                      waiting_for=t.get("waiting_for"))
+                break
+        self.save(state)
+
+    def task_waiting_manual(self, task_id: str, reason: str):
+        """人手介入待ち (status=waiting_manual)"""
+        state = self.load()
+        for t in state["current_tasks"]:
+            if t["task_id"] == task_id:
+                t["status"] = TaskStatus.WAITING_MANUAL
+                t["last_error"] = reason
+                t["error_type"] = ErrorType.MANUAL_REQUIRED
+                t["updated_at"] = _now_iso()
+                t["next_action"] = _calc_next_action(
+                    TaskStatus.WAITING_MANUAL, t.get("task_name", ""))
+                break
+        state["system_status"] = "waiting_manual"
+        state["next_action"] = "manual intervention required"
+        self.save(state)
+
+    def task_blocked(self, task_id: str, blocked_by: str):
+        """依存タスク未完了/失敗によるブロック (status=blocked)"""
+        state = self.load()
+        for t in state["current_tasks"]:
+            if t["task_id"] == task_id:
+                t["status"] = TaskStatus.BLOCKED
+                t["last_error"] = f"blocked by: {blocked_by}"
+                t["error_type"] = ErrorType.DEPENDENCY_FAILED
+                t["updated_at"] = _now_iso()
+                t["next_action"] = f"wait for {blocked_by} to complete"
+                break
+        state["system_status"] = "blocked"
+        state["next_action"] = f"resolve dependency: {blocked_by}"
+        self.save(state)
+
+    # --- 依存制御 ---
+
+    def check_dependency(self, task_name: str) -> tuple[bool, str | None]:
+        """
+        依存タスクが完了しているか確認。
+        ceo-report は ebay-review が done かつ review_status=approved が必須。
+        Returns: (can_run, blocked_reason)
+          can_run=True  → 実行可能
+          can_run=False → blocked_reason に理由
+        """
+        flow = TASK_FLOW.get(task_name, {})
+        requires = flow.get("requires")
+        if requires is None:
+            return True, None
+
+        state = self.load()
+        # current_tasks に requires が処理中ならブロック
+        for t in state.get("current_tasks", []):
+            if t.get("task_name") == requires:
+                s = t.get("status", "")
+                if s in (TaskStatus.ERROR, TaskStatus.BLOCKED):
+                    return False, f"{requires} failed (status={s})"
+                return False, f"{requires} still in progress (status={s})"
+
+        # recent_history で requires が done を確認
+        for t in state.get("recent_history", []):
+            if t.get("task_name") == requires:
+                if t.get("status") != TaskStatus.DONE:
+                    return False, f"{requires} ended with status={t.get('status')}"
+                # ceo-report は ebay-review の承認が必須
+                if task_name == "ceo-report" and requires == "ebay-review":
+                    rev = t.get("review_status")
+                    if rev != "approved":
+                        return False, (
+                            f"ebay-review not approved by cap "
+                            f"(review_status={rev or 'pending'}). "
+                            f"Run: python slack_bridge.py approve --task ebay-review"
+                        )
+                return True, None
+
+        # history にも存在しない → 未実行
+        return False, f"{requires} has not run yet"
+
+    def enqueue_next(self, from_task_name: str, from_task_id: str,
+                     parent_workflow_id: str = None) -> str | None:
+        """
+        from_task_name が done のとき、TASK_FLOW の next タスクを
+        state に queued エントリとして自動追加し、task_id を返す。
+        実際の Slack 送信は呼び出し側が行う。
+
+        安全ガード:
+        - current_tasks に同名の未完了タスクがある場合はスキップ
+        - recent_history の直近に同名の done があり、完了時刻が60秒以内の場合はスキップ（重複起動防止）
+        - source=auto を付与
+
+        parent_workflow_id:
+        - 指定された場合はそれを使用（親コンテキスト直接継承・優先）
+        - 省略時は recent_history から検索（fallback）
+
+        Returns: new task_id or None (skip の場合)
+        """
+        flow = TASK_FLOW.get(from_task_name, {})
+        next_task = flow.get("next")
+        if not next_task:
+            return None
+
+        state = self.load()
+
+        # ガード1: current_tasks に同名の未完了タスクが存在する
+        for t in state.get("current_tasks", []):
+            if t.get("task_name") == next_task and t.get("status") not in (
+                    TaskStatus.DONE, TaskStatus.ERROR):
+                logger.info(f"enqueue_next: {next_task} already active (status={t.get('status')}), skip")
+                return None
+
+        # ガード2: recent_history の直近60秒以内に同名 done がある（重複起動防止）
+        now_utc = datetime.now(timezone.utc)
+        for t in state.get("recent_history", [])[:5]:
+            if t.get("task_name") == next_task and t.get("status") == TaskStatus.DONE:
+                updated = t.get("updated_at", "")
+                try:
+                    dt = datetime.fromisoformat(updated)
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    if (now_utc - dt).total_seconds() < 60:
+                        logger.info(f"enqueue_next: {next_task} completed <60s ago, skip duplicate")
+                        return None
+                except ValueError:
+                    pass
+
+        # 親 workflow_id を引き継ぐ（親コンテキスト直接継承を優先、なければ history から検索）
+        parent_wf_id = parent_workflow_id
+        if parent_wf_id is None:
+            for t in state.get("recent_history", []):
+                if t.get("task_name") == from_task_name and t.get("status") == TaskStatus.DONE:
+                    parent_wf_id = t.get("workflow_id")
+                    break
+
+        new_id = str(uuid.uuid4())
+        owner  = get_sender()
+        to     = flow.get("to", "cyber")
+        entry  = self._make_task_entry(
+            new_id, next_task, owner, TaskStatus.QUEUED,
+            waiting_for=to, depends_on=from_task_name,
+            source=SOURCE_AUTO,
+            workflow_id=parent_wf_id,
+        )
+        state["current_tasks"].append(entry)
+        state["system_status"] = "busy"
+        state["next_action"] = f"[auto] enqueued {next_task} -> {to}"
+        self.save(state)
+        logger.info(f"enqueue_next: {from_task_name} done -> auto-enqueue {next_task} (id={new_id[:8]})")
+        return new_id
+
+    def approve_task(self, task_name: str, approved_by: str) -> bool:
+        """
+        直近の done タスク（task_name）に承認フラグを設定。
+        ceo-report 自動起動の条件として使用。
+        Returns: True if approval was recorded, False if task not found.
+        """
+        state = self.load()
+        for t in state.get("recent_history", []):
+            if t.get("task_name") == task_name and t.get("status") == TaskStatus.DONE:
+                t["review_status"] = "approved"
+                t["approved_by"]   = approved_by
+                t["approved_at"]   = _now_iso()
+                self.save(state)
+                logger.info(f"approve_task: {task_name} approved by {approved_by}")
+                log_event("approved", {"task": task_name, "approved_by": approved_by})
+                return True
+        logger.warning(f"approve_task: no done {task_name} found in history")
+        return False
+
+    def is_approved(self, task_name: str) -> bool:
+        """task_name の直近 done エントリが review_status=approved か確認"""
+        state = self.load()
+        for t in state.get("recent_history", []):
+            if t.get("task_name") == task_name and t.get("status") == TaskStatus.DONE:
+                return t.get("review_status") == "approved"
+        return False
+
+    def task_report_sent(self, task_id: str, channel: str,
+                         status: str = "sent") -> bool:
+        """
+        ceo-report 送信結果を記録する。
+        recent_history の該当エントリに report_status / reported_at / reported_channel を設定。
+        Returns: True if entry found and updated.
+        """
+        state = self.load()
+        # recent_history を優先（task_done 後は history に移動済み）
+        for t in state.get("recent_history", []):
+            if t.get("task_id") == task_id:
+                t["report_status"]   = status
+                t["reported_at"]     = _now_iso()
+                t["reported_channel"] = channel
+                self.save(state)
+                logger.info(f"task_report_sent: {task_id[:8]} status={status} channel={channel}")
+                return True
+        # まだ current_tasks にある場合（稀）
+        for t in state.get("current_tasks", []):
+            if t.get("task_id") == task_id:
+                t["report_status"]   = status
+                t["reported_at"]     = _now_iso()
+                t["reported_channel"] = channel
+                self.save(state)
+                return True
+        logger.warning(f"task_report_sent: task_id {task_id[:8]} not found")
+        return False
+
+    def get_task_by_id(self, task_id: str) -> dict | None:
+        """current_tasks + recent_history からタスクを検索"""
+        state = self.load()
+        for t in state.get("current_tasks", []):
+            if t["task_id"] == task_id:
+                return t
+        for t in state.get("recent_history", []):
+            if t["task_id"] == task_id:
+                return t
+        return None
+
+    # --- 監査 ---
+
+    def audit(self) -> list[dict]:
+        """
+        state の整合性チェック。問題リストを返す。
+        - DONE なのに current_tasks に残っている
+        - error なのに retry_count が max_retries 未満なのにそのまま
+        - blocked なのに depends_on が存在しない
+        - timeout_at を過ぎているのに running のまま
+        """
+        issues = []
+        state = self.load()
+        now_utc = datetime.now(timezone.utc)
+
+        for t in state.get("current_tasks", []):
+            tid  = t.get("task_id", "?")[:8]
+            name = t.get("task_name", "?")
+            st   = t.get("status", "?")
+
+            # timeout_at を過ぎているのに running / waiting_ack
+            if st in (TaskStatus.RUNNING, TaskStatus.WAITING_ACK, TaskStatus.QUEUED):
+                timeout_at = t.get("timeout_at")
+                if timeout_at:
+                    try:
+                        deadline = datetime.fromisoformat(timeout_at)
+                        if deadline.tzinfo is None:
+                            deadline = deadline.replace(tzinfo=timezone.utc)
+                        if now_utc > deadline:
+                            issues.append({
+                                "level": "WARN",
+                                "task_id": tid, "task_name": name,
+                                "issue": f"timeout_at exceeded but status={st}",
+                            })
+                    except ValueError:
+                        pass
+
+            # blocked なのに depends_on が TASK_FLOW に存在しない
+            if st == TaskStatus.BLOCKED:
+                dep = t.get("depends_on")
+                if dep and dep not in TASK_FLOW:
+                    issues.append({
+                        "level": "ERROR",
+                        "task_id": tid, "task_name": name,
+                        "issue": f"blocked by unknown dependency: {dep}",
+                    })
+
+        return issues
+
+    def _pop_task(self, state: dict, task_id: str) -> dict | None:
+        for i, t in enumerate(state["current_tasks"]):
+            if t["task_id"] == task_id:
+                return state["current_tasks"].pop(i)
+        return {
+            "task_id":   task_id,
+            "task_name": "unknown",
+            "owner":     get_sender(),
+            "created_at": _now_iso(),
+            "last_error": None,
+            "error_type": None,
+            "next_action": None,
+            "depends_on_next": None,
+        }
+
+
+# グローバルインスタンス
+state_mgr = StateManager()
+
+
+# ============================================================
 # ログ
 # ============================================================
 logger = logging.getLogger("slack_bridge")
 logger.setLevel(logging.DEBUG)
 
-_fh = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
+_fh = RotatingFileHandler(
+    str(LOG_FILE), encoding="utf-8",
+    maxBytes=5 * 1024 * 1024,   # 5 MB でローテーション
+    backupCount=3,               # bridge.log.1 / .2 / .3 を保持
+)
 _fh.setLevel(logging.DEBUG)
 _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logger.addHandler(_fh)
@@ -105,15 +694,38 @@ _sh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
 logger.addHandler(_sh)
 
 
+_EVENTS_MAX_LINES = 10_000   # これを超えたら古い行を半分削除
+
 def log_event(event_type: str, data: dict):
-    """events.jsonlにJSONLイベントを追記"""
+    """events.jsonlにJSONLイベントを追記。10,000行超で古い半分を自動削除"""
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event_type,
         **data,
     }
+    line = json.dumps(entry, ensure_ascii=False) + "\n"
     with open(EVENTS_FILE, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        f.write(line)
+    # 定期的な行数チェック（100イベントに1回で十分）
+    try:
+        import random as _rnd
+        if _rnd.randint(0, 99) == 0:
+            _prune_events_file()
+    except Exception:
+        pass
+
+
+def _prune_events_file():
+    """events.jsonl が _EVENTS_MAX_LINES 超なら古い半分を削除（atomic write）"""
+    if not EVENTS_FILE.exists():
+        return
+    lines = EVENTS_FILE.read_text(encoding="utf-8").splitlines(keepends=True)
+    if len(lines) <= _EVENTS_MAX_LINES:
+        return
+    keep = lines[len(lines) // 2:]   # 新しい半分を残す
+    tmp = EVENTS_FILE.with_suffix(".jsonl.tmp")
+    tmp.write_text("".join(keep), encoding="utf-8")
+    tmp.replace(EVENTS_FILE)
 
 
 # ============================================================
@@ -186,8 +798,14 @@ def parse_bridge_message(text: str) -> dict | None:
 
 def make_task_msg(from_id: str, to_id: str, task: str, payload: dict = None,
                   msg_type: str = "TASK", task_id: str = None,
-                  correlation_id: str = None) -> dict:
-    """標準メッセージ構造を生成"""
+                  correlation_id: str = None,
+                  source: str = SOURCE_MANUAL,
+                  workflow_id: str = None) -> dict:
+    """標準メッセージ構造を生成。
+    - source=auto: 依存チェーン自動起動
+    - source=manual: 手動起動
+    - workflow_id: 依存チェーン全体の追跡ID（省略時は新規生成）
+    """
     return {
         "version": MSG_VERSION,
         "from": from_id,
@@ -196,7 +814,9 @@ def make_task_msg(from_id: str, to_id: str, task: str, payload: dict = None,
         "task": task,
         "task_id": task_id or str(uuid.uuid4()),
         "correlation_id": correlation_id or str(uuid.uuid4()),
+        "workflow_id": workflow_id or str(uuid.uuid4()),
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
         "payload": payload or {},
     }
 
@@ -255,6 +875,9 @@ def send_bridge_msg(msg_data: dict, channel: str = None) -> bool:
         display = f"[{sender}] [{msg_type}] {task} エラー"
     elif msg_type == "ACK":
         display = f"[{sender}] [{msg_type}] {task} 受信確認"
+    elif msg_type == "BLOCKED":
+        wait_for = msg_data.get("payload", {}).get("wait_for", "")
+        display = f"[{sender}] [BLOCKED] {task} 待機中 (requires: {wait_for})"
     elif msg_type == "ESCALATE":
         display = f"[{sender}] [ESCALATE] {task} エスカレーション"
 
@@ -445,11 +1068,13 @@ def handle_ebay_search(msg_data: dict) -> dict:
     new_matches = [m for m in matches if m.get("is_new", False)]
 
     # 新規候補があればキャップにebay-review TASK送信
+    # workflow_id を引き継いで同一チェーンとして追跡
     if new_matches:
         review_msg = make_task_msg(
             from_id=get_sender(),
             to_id="cap",
             task="ebay-review",
+            workflow_id=msg_data.get("workflow_id"),   # 親チェーンのID引き継ぎ
             payload={
                 "candidates": new_matches,
                 "count": len(new_matches),
@@ -459,6 +1084,10 @@ def handle_ebay_search(msg_data: dict) -> dict:
         )
         send_bridge_msg(review_msg)
         add_pending_task(review_msg)
+        state_mgr.task_queued(review_msg["task_id"], "ebay-review",
+                              get_sender(), "cap",
+                              depends_on="ebay-search",
+                              workflow_id=review_msg.get("workflow_id"))
         logger.info(f"ebay-review TASK送信: 新規{len(new_matches)}件 (全{len(matches)}マッチ)")
 
     return {
@@ -497,10 +1126,13 @@ def handle_ebay_review(msg_data: dict) -> dict:
         print(f"   URL: {c.get('ebay_url','')}")
     print(f"\n{'='*60}")
     print(f"保存先: {outfile}")
-    print(f"CEO報告: python slack_bridge.py ceo-report")
+    print(f"[!] ceo-report を起動するには cap の承認が必要です:")
+    print(f"    python slack_bridge.py approve --task ebay-review --by cap")
     print(f"{'='*60}\n")
 
-    return {"saved_to": str(outfile), "count": len(candidates)}
+    return {"saved_to": str(outfile), "count": len(candidates),
+            "review_status": "pending",
+            "note": "cap approval required before ceo-report auto-trigger"}
 
 
 def handle_git_pull(msg_data: dict) -> dict:
@@ -612,13 +1244,25 @@ def handle_set_env(msg_data: dict) -> dict:
     return {"status": "updated", "keys": updated_keys}
 
 
+def handle_ceo_report(msg_data: dict) -> dict:
+    """ceo-report タスクハンドラ: CEO報告を#ceo-roomに送信"""
+    task_id  = msg_data.get("task_id", "")
+    payload  = msg_data.get("payload", {})
+    file_path = payload.get("file_path")
+    success = cmd_ceo_report(file_path=file_path, task_id=task_id)
+    if success:
+        return {"status": "sent", "channel": CEO_ROOM_CHANNEL}
+    return {"status": "failed", "error": "CEO報告送信失敗"}
+
+
 HANDLERS = {
-    "test-ping": handle_test_ping,
+    "test-ping":   handle_test_ping,
     "ebay-search": handle_ebay_search,
     "ebay-review": handle_ebay_review,
-    "git-pull": handle_git_pull,
-    "report": handle_report,
-    "set-env": handle_set_env,
+    "git-pull":    handle_git_pull,
+    "report":      handle_report,
+    "set-env":     handle_set_env,
+    "ceo-report":  handle_ceo_report,
 }
 
 
@@ -628,7 +1272,22 @@ HANDLERS = {
 def dispatch_task(msg_data: dict):
     """ハンドラをバックグラウンドスレッドで実行し、DONE/ERRORを返送"""
     task_name = msg_data.get("task", "")
-    task_id = msg_data.get("task_id", "")
+    task_id   = msg_data.get("task_id", "")
+
+    # --- 依存チェック ---
+    can_run, blocked_reason = state_mgr.check_dependency(task_name)
+    if not can_run:
+        logger.warning(f"依存タスク未完了でブロック: {task_name} ({blocked_reason})")
+        state_mgr.task_blocked(task_id, blocked_reason or "dependency not met")
+        # ERROR ではなく BLOCKED タイプで返送（失敗ではなく待機状態）
+        blocked_msg = make_response_msg(msg_data, "BLOCKED",
+                                        {"reason": blocked_reason,
+                                         "error_type": ErrorType.DEPENDENCY_FAILED,
+                                         "wait_for": TASK_FLOW.get(task_name, {}).get("requires")})
+        send_bridge_msg(blocked_msg)
+        save_task_registry_entry(task_id, "BLOCKED", {"task": task_name, "reason": blocked_reason})
+        log_event("blocked", {"task_id": task_id, "task": task_name, "reason": blocked_reason})
+        return
 
     handler = HANDLERS.get(task_name)
     if handler is None:
@@ -636,22 +1295,48 @@ def dispatch_task(msg_data: dict):
         err_msg = make_response_msg(msg_data, "ERROR", {"error": f"Unknown task: {task_name}"})
         send_bridge_msg(err_msg)
         save_task_registry_entry(task_id, "ERROR", {"task": task_name})
+        state_mgr.task_error(task_id, f"Unknown task: {task_name}",
+                             error_type=ErrorType.CONFIG_MISSING)
         return
 
     def _run():
         try:
             logger.info(f"タスク実行開始: {task_name} (id={task_id[:8]})")
+            state_mgr.task_running(task_id)
             result = handler(msg_data)
             done_msg = make_response_msg(msg_data, "DONE", result)
             send_bridge_msg(done_msg)
             save_task_registry_entry(task_id, "DONE", {"task": task_name})
+            state_mgr.task_done(task_id, f"{task_name} completed")
             logger.info(f"タスク完了: {task_name} (id={task_id[:8]})")
             log_event("done", {"task_id": task_id, "task": task_name})
+
+            # --- 自動 enqueue: 次タスクを state に積んで Slack 送信 ---
+            parent_wf_id = msg_data.get("workflow_id")   # 親コンテキストから直接取得
+            next_task_id = state_mgr.enqueue_next(task_name, task_id,
+                                                  parent_workflow_id=parent_wf_id)
+            if next_task_id:
+                flow = TASK_FLOW.get(task_name, {})
+                next_name = flow.get("next")
+                to_id     = flow.get("to", "cyber")
+                auto_msg  = make_task_msg(
+                    from_id=get_sender(), to_id=to_id,
+                    task=next_name, task_id=next_task_id,
+                    source=SOURCE_AUTO,
+                    workflow_id=parent_wf_id,
+                    payload={"auto_triggered_by": task_name, "parent_id": task_id},
+                )
+                send_bridge_msg(auto_msg)
+                add_pending_task(auto_msg)
+                logger.info(f"自動enqueue: {next_name} -> {to_id} (id={next_task_id[:8]})")
+                log_event("auto_enqueue", {"task": next_name, "task_id": next_task_id, "to": to_id})
+
         except Exception as e:
             logger.error(f"タスク実行エラー: {task_name} - {e}")
             err_msg = make_response_msg(msg_data, "ERROR", {"error": str(e)})
             send_bridge_msg(err_msg)
             save_task_registry_entry(task_id, "ERROR", {"task": task_name, "error": str(e)})
+            state_mgr.task_error(task_id, str(e))
             log_event("error", {"task_id": task_id, "task": task_name, "error": str(e)})
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -683,6 +1368,7 @@ def check_pending_tasks():
                     t["retry_count"] = retry_count + 1
                     t["sent_at"] = now.isoformat()
                     send_bridge_msg(t["msg_data"])
+                    state_mgr.task_retry(task_id)
                     log_event("retry", {"task_id": task_id, "retry_count": t["retry_count"]})
                     changed = True
                 else:
@@ -700,6 +1386,8 @@ def check_pending_tasks():
                     send_bridge_msg(escalate_msg, channel=CEO_ROOM_CHANNEL)
                     t["status"] = "escalated"
                     save_task_registry_entry(task_id, "ESCALATED", {"reason": "ACK timeout"})
+                    state_mgr.task_error(task_id, "ACK timeout after 3 attempts",
+                                         error_type=ErrorType.ACK_TIMEOUT)
                     log_event("escalate", {"task_id": task_id, "reason": "ACK timeout"})
                     changed = True
 
@@ -721,6 +1409,8 @@ def check_pending_tasks():
                 send_bridge_msg(escalate_msg, channel=CEO_ROOM_CHANNEL)
                 t["status"] = "escalated"
                 save_task_registry_entry(task_id, "ESCALATED", {"reason": "DONE timeout"})
+                state_mgr.task_error(task_id, "DONE timeout after 30min",
+                                     error_type=ErrorType.DONE_TIMEOUT)
                 log_event("escalate", {"task_id": task_id, "reason": "DONE timeout"})
                 changed = True
 
@@ -737,6 +1427,18 @@ def watch_channel(interval: int = 5):
     """ai-bridgeチャンネルを定期ポーリングで監視"""
     logger.info(f"Slack監視開始 (間隔: {interval}秒, sender: {get_sender()})")
 
+    # --- 起動時 state 復元 ---
+    state = state_mgr.load()
+    stale = [t for t in state.get("current_tasks", [])
+             if t.get("status") in ("running", "received", "acknowledged")]
+    if stale:
+        logger.warning(f"前回セッションの未完了タスク {len(stale)}件を検出:")
+        for t in stale:
+            logger.warning(f"  [{t.get('status')}] {t.get('task_name')} id={t.get('task_id','?')[:8]}")
+            # running/acknowledged → error（前セッションで中断されたため）
+            state_mgr.task_error(t["task_id"], "interrupted: watch restarted")
+        logger.warning("これらのタスクはerrorに移行しました。必要に応じてリトライしてください。")
+
     last_seen_ts = get_last_seen_ts()
     my_sender = get_sender()
     last_retry_check = time.time()
@@ -744,7 +1446,7 @@ def watch_channel(interval: int = 5):
     while True:
         try:
             # --- 1回のconversations.history ---
-            messages = receive_messages(limit=10)
+            messages = receive_messages(limit=50)
 
             if messages:
                 # messagesは新しい順。逆順にして古い方から処理
@@ -811,12 +1513,19 @@ def _handle_bridge_msg(bridge_data: dict, my_sender: str):
             logger.info(f"重複タスク。スキップ: {task_id[:8]}")
             return
 
+        # state: received（workflow_id をメッセージから引き継ぐ）
+        wf_id = bridge_data.get("workflow_id")
+        state_mgr.task_received(task_id, task_name, my_sender, workflow_id=wf_id)
+
         # ACK返送（ループ防止: TASKのみACKを返す）
         ack_msg = make_response_msg(bridge_data, "ACK")
         send_bridge_msg(ack_msg)
         save_task_registry_entry(task_id, "ACK", {"task": task_name})
         log_event("ack_sent", {"task_id": task_id, "task": task_name})
         logger.info(f"ACK送信: {task_name} (id={task_id[:8]})")
+
+        # state: acknowledged
+        state_mgr.task_acknowledged(task_id)
 
         # ハンドラディスパッチ（スレッドで非同期実行）
         dispatch_task(bridge_data)
@@ -828,44 +1537,63 @@ def _handle_bridge_msg(bridge_data: dict, my_sender: str):
             "status": "acked",
             "ack_at": datetime.now(timezone.utc).isoformat(),
         })
+        state_mgr.task_acknowledged(task_id)
         log_event("ack_received", {"task_id": task_id})
 
     elif msg_type == "DONE":
         logger.info(f"DONE受信: {task_name} (id={task_id[:8]})")
         remove_pending_task(task_id)
         save_task_registry_entry(task_id, "DONE_RECEIVED", {"task": task_name})
+        state_mgr.task_done(task_id, f"DONE received for {task_name}")
         log_event("done_received", {"task_id": task_id, "payload": bridge_data.get("payload", {})})
 
     elif msg_type == "ERROR":
         logger.warning(f"ERROR受信: {task_name} (id={task_id[:8]})")
         remove_pending_task(task_id)
         save_task_registry_entry(task_id, "ERROR_RECEIVED", {"task": task_name})
+        error_detail = bridge_data.get("payload", {}).get("error", "unknown error")
+        state_mgr.task_error(task_id, error_detail)
         log_event("error_received", {"task_id": task_id, "payload": bridge_data.get("payload", {})})
+
+    elif msg_type == "BLOCKED":
+        # 自分が送ったタスクがブロックされた（待機状態。エラーではない）
+        reason = bridge_data.get("payload", {}).get("reason", "dependency not met")
+        wait_for = bridge_data.get("payload", {}).get("wait_for", "")
+        logger.info(f"BLOCKED受信: {task_name} (id={task_id[:8]}) reason={reason}")
+        # pending から除去しない（wait_for 完了後にリトライ可能）
+        update_pending_task(task_id, {"status": "blocked", "blocked_reason": reason})
+        state_mgr.task_blocked(task_id, reason)
+        log_event("blocked_received", {"task_id": task_id, "reason": reason, "wait_for": wait_for})
 
     elif msg_type == "ESCALATE":
         logger.error(f"ESCALATE受信: {task_name} (id={task_id[:8]})")
         log_event("escalate_received", {"task_id": task_id})
 
-    # ACK/DONE/ERROR/ESCALATEに対してACKは返さない（ループ防止）
+    # ACK/DONE/ERROR/BLOCKED/ESCALATEに対してACKは返さない（ループ防止）
 
 
 # ============================================================
 # CLIコマンド
 # ============================================================
-def cmd_send_task(task: str, to: str, payload: dict = None):
-    """タスク送信"""
+def cmd_send_task(task: str, to: str, payload: dict = None,
+                  source: str = SOURCE_MANUAL):
+    """タスク送信。source=manual（デフォルト）または source=auto"""
     sender = get_sender()
     msg = make_task_msg(
         from_id=sender,
         to_id=to,
         task=task,
+        source=source,
         payload=payload or {},
     )
     success = send_bridge_msg(msg)
     if success:
         add_pending_task(msg)
-        logger.info(f"タスク送信完了: {task} -> {to} (id={msg['task_id'][:8]})")
-        log_event("task_sent", {"task_id": msg["task_id"], "task": task, "to": to})
+        state_mgr.task_queued(msg["task_id"], task, sender, to,
+                              workflow_id=msg.get("workflow_id"))
+        logger.info(f"タスク送信完了 [{source}]: {task} -> {to} (id={msg['task_id'][:8]})")
+        log_event("task_sent", {"task_id": msg["task_id"], "task": task, "to": to,
+                                "source": source})
     return success
 
 
@@ -926,7 +1654,7 @@ def cmd_status():
 # ============================================================
 # 旧互換コマンド
 # ============================================================
-def cmd_ceo_report(file_path: str = None):
+def cmd_ceo_report(file_path: str = None, task_id: str = None):
     """ebay_review_candidates.jsonを読み込み、#ceo-roomに承認済み候補を報告"""
     if file_path:
         candidates_file = Path(file_path)
@@ -986,10 +1714,324 @@ def cmd_ceo_report(file_path: str = None):
     if success:
         logger.info(f"CEO報告送信完了: {len(candidates)}件")
         print(f"CEO報告を#ceo-roomに送信しました（{len(candidates)}件）")
+        if task_id:
+            state_mgr.task_report_sent(task_id, CEO_ROOM_CHANNEL, status="sent")
     else:
         logger.error("CEO報告送信失敗")
         print("Error: CEO報告送信失敗")
+        if task_id:
+            state_mgr.task_report_sent(task_id, CEO_ROOM_CHANNEL, status="failed")
     return success
+
+
+def _fmt_ts(iso: str | None) -> str:
+    """ISOタイムスタンプを JST HH:MM:SS 形式に変換。Noneや不正な値は '-' を返す"""
+    if not iso:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(iso)
+        dt_jst = dt.astimezone(JST)
+        return dt_jst.strftime("%m/%d %H:%M:%S")
+    except ValueError:
+        return iso[:19]
+
+
+def _status_label(status: str) -> str:
+    """ステータスを固定幅ラベルに変換"""
+    labels = {
+        TaskStatus.QUEUED:         "QUEUED  ",
+        TaskStatus.WAITING_ACK:    "WAIT_ACK",
+        TaskStatus.RECEIVED:       "RECV    ",
+        TaskStatus.ACKNOWLEDGED:   "ACK     ",
+        TaskStatus.RUNNING:        "RUNNING ",
+        TaskStatus.WAITING_DONE:   "WAIT_DON",
+        TaskStatus.WAITING_MANUAL: "MANUAL! ",
+        TaskStatus.BLOCKED:        "BLOCKED ",
+        TaskStatus.DONE:           "DONE    ",
+        TaskStatus.ERROR:          "ERROR   ",
+    }
+    return labels.get(status, f"{status:<8}")
+
+
+def cmd_approve(task_name: str, approved_by: str):
+    """
+    タスクの review_status を approved に設定し、ceo-report 自動起動の条件を満たす。
+    python slack_bridge.py approve --task ebay-review --by cap
+    """
+    ok = state_mgr.approve_task(task_name, approved_by)
+    if ok:
+        print(f"[OK] {task_name} approved by {approved_by}")
+        print(f"     ceo-report は次回の自動 enqueue で起動されます。")
+
+        # 承認直後に ceo-report を自動 enqueue できるか確認
+        can_run, reason = state_mgr.check_dependency("ceo-report")
+        if can_run:
+            flow    = TASK_FLOW.get("ebay-review", {})
+            next_id = state_mgr.enqueue_next("ebay-review", "approved")
+            if next_id:
+                to_id    = TASK_FLOW.get("ceo-report", {}).get("to", "cap")
+                # ebay-review の workflow_id を引き継ぐ
+                parent_wf_id = None
+                _s = state_mgr.load()
+                for _t in _s.get("recent_history", []):
+                    if _t.get("task_name") == "ebay-review" and _t.get("status") == TaskStatus.DONE:
+                        parent_wf_id = _t.get("workflow_id")
+                        break
+                auto_msg = make_task_msg(
+                    from_id=get_sender(), to_id=to_id,
+                    task="ceo-report", task_id=next_id,
+                    source=SOURCE_AUTO,
+                    workflow_id=parent_wf_id,
+                    payload={"auto_triggered_by": "ebay-review",
+                             "approved_by": approved_by},
+                )
+                success = send_bridge_msg(auto_msg)
+                if success:
+                    add_pending_task(auto_msg)
+                    print(f"[AUTO] ceo-report -> {to_id} (id={next_id[:8]})")
+                    log_event("auto_enqueue_after_approve",
+                              {"task": "ceo-report", "task_id": next_id, "to": to_id})
+                else:
+                    print(f"[WARN] ceo-report enqueue failed (Slack送信エラー)")
+            else:
+                print(f"[INFO] ceo-report は既に進行中のためスキップ")
+        else:
+            print(f"[WAIT] ceo-report 実行条件未達: {reason}")
+    else:
+        print(f"[FAIL] {task_name} の done エントリが見つかりません。")
+        print(f"       ebay-review が完了してから承認してください。")
+
+
+def cmd_state_audit():
+    """
+    state と Slack ログの整合性を確認する簡易監査コマンド。
+    python slack_bridge.py state-audit
+    """
+    W = 64
+    print(f"\n{'='*W}")
+    print(f"  State Audit")
+    print(f"  {_fmt_ts(datetime.now(JST).isoformat())}")
+    print(f"{'='*W}")
+
+    # 1. StateManager 内部チェック
+    issues = state_mgr.audit()
+    print(f"\n  [1] Internal consistency ({len(issues)} issue(s))")
+    if not issues:
+        print("    OK - no issues found")
+    for iss in issues:
+        lvl  = iss.get("level", "WARN")
+        name = iss.get("task_name", "?")
+        tid  = iss.get("task_id", "?")[:8]
+        msg  = iss.get("issue", "")
+        print(f"    [{lvl}] {name} id={tid}: {msg}")
+
+    # 2. current_tasks に DONE が残っていないか
+    state = state_mgr.load()
+    stuck_done = [t for t in state.get("current_tasks", [])
+                  if t.get("status") == TaskStatus.DONE]
+    print(f"\n  [2] DONE tasks stuck in current_tasks: {len(stuck_done)}")
+    if stuck_done:
+        for t in stuck_done:
+            print(f"    WARN: {t.get('task_name')} id={t.get('task_id','?')[:8]} "
+                  f"should be in history")
+    else:
+        print("    OK")
+
+    # 3. error タスクで retry_count < max_retries なのに history に放置されていないか
+    unretried_errors = [
+        t for t in state.get("recent_history", [])
+        if t.get("status") == TaskStatus.ERROR
+        and t.get("retry_count", 0) < t.get("max_retries", 3)
+        and t.get("error_type") not in (
+            ErrorType.MANUAL_REQUIRED, ErrorType.DEPENDENCY_FAILED)
+    ]
+    print(f"\n  [3] Retriable errors in history not retried: {len(unretried_errors)}")
+    if unretried_errors:
+        for t in unretried_errors[:5]:
+            etype = t.get("error_type", ErrorType.UNKNOWN)
+            print(f"    WARN: {t.get('task_name')} id={t.get('task_id','?')[:8]} "
+                  f"[{etype}] retry={t.get('retry_count',0)}/{t.get('max_retries',3)}")
+        print(f"    -> run: python slack_bridge.py retry-pending")
+    else:
+        print("    OK")
+
+    # 4. Slack の直近レジストリと state の整合チェック
+    registry = load_task_registry()
+    state_ids_current  = {t["task_id"] for t in state.get("current_tasks", [])}
+    state_ids_history  = {t["task_id"] for t in state.get("recent_history", [])}
+    all_state_ids = state_ids_current | state_ids_history
+
+    slack_done_not_in_state = [
+        tid for tid, entry in registry.items()
+        if entry.get("status") in ("DONE", "DONE_RECEIVED")
+        and tid not in all_state_ids
+    ]
+    print(f"\n  [4] Slack DONE tasks not reflected in state: {len(slack_done_not_in_state)}")
+    if slack_done_not_in_state:
+        for tid in slack_done_not_in_state[:5]:
+            entry = registry[tid]
+            print(f"    INFO: task={entry.get('task','?')} id={tid[:8]} "
+                  f"(may be from older session)")
+    else:
+        print("    OK")
+
+    # 5. blocked タスクで依存が解消されているのに放置されていないか
+    blocked_tasks = [t for t in state.get("current_tasks", [])
+                     if t.get("status") == TaskStatus.BLOCKED]
+    resolvable = []
+    for t in blocked_tasks:
+        dep = t.get("depends_on")
+        if dep:
+            can_run, _ = state_mgr.check_dependency(t.get("task_name", ""))
+            if can_run:
+                resolvable.append(t)
+    print(f"\n  [5] Blocked tasks now resolvable: {len(resolvable)}")
+    if resolvable:
+        for t in resolvable:
+            print(f"    ACTION: {t.get('task_name')} id={t.get('task_id','?')[:8]} "
+                  f"-> dependency resolved, ready to retry")
+        print(f"    -> run: python slack_bridge.py retry-pending")
+    else:
+        print("    OK")
+
+    # 6. 自動enqueue の重複チェック（同名タスクが current_tasks に複数存在）
+    state2 = state_mgr.load()
+    from collections import Counter
+    auto_counts = Counter(
+        t.get("task_name") for t in state2.get("current_tasks", [])
+        if t.get("source") == SOURCE_AUTO
+    )
+    dup_autos = {name: cnt for name, cnt in auto_counts.items() if cnt > 1}
+    print(f"\n  [6] Duplicate auto-enqueue in current_tasks: {len(dup_autos)}")
+    if dup_autos:
+        for name, cnt in dup_autos.items():
+            print(f"    WARN: {name} appears {cnt} times (source=auto)")
+    else:
+        print("    OK")
+
+    total_issues = (len(issues) + len(stuck_done) + len(unretried_errors)
+                    + len(resolvable) + len(dup_autos))
+    print(f"\n  {'='*60}")
+    verdict = "CLEAN" if total_issues == 0 else f"NEEDS ATTENTION ({total_issues} items)"
+    print(f"  Result: {verdict}")
+    print(f"  State file: {STATE_FILE}\n")
+
+
+def cmd_state_summary():
+    """system_state.json の内容をCEO/cap/cyber共通で見やすく表示"""
+    state = state_mgr.load()
+    W = 64
+
+    # ヘッダー
+    sys_status = state.get("system_status", "?").upper()
+    updated    = _fmt_ts(state.get("updated_at"))
+    print(f"\n{'='*W}")
+    print(f"  SolarWorks AI  |  System State  |  {sys_status}")
+    print(f"  Updated: {updated}   (v{state.get('version','?')})")
+    print(f"{'='*W}")
+
+    # 次アクション（グローバル）
+    next_act = state.get("next_action")
+    if next_act:
+        print(f"\n  >> NEXT ACTION: {next_act}")
+
+    def _print_task_row(t: dict):
+        tid      = t.get("task_id", "?")[:8]
+        name     = t.get("task_name", "?")
+        owner    = t.get("owner", "?")
+        status   = t.get("status", "?")
+        retries  = t.get("retry_count", 0)
+        maxr     = t.get("max_retries", 3)
+        timeout  = _fmt_ts(t.get("timeout_at"))
+        src      = t.get("source", SOURCE_MANUAL)
+        src_mark = "[A]" if src == SOURCE_AUTO else "   "
+        dep_next = t.get("depends_on_next")
+        rev_st   = t.get("review_status")
+        print(f"    {src_mark}[{_status_label(status)}] {name:<18} owner={owner}  id={tid}")
+        if t.get("waiting_for"):
+            print(f"        waiting : {t['waiting_for']}")
+        if dep_next:
+            print(f"        next dep: {dep_next}")
+        print(f"        retry   : {retries}/{maxr}   timeout: {timeout}")
+        if t.get("next_action"):
+            print(f"        action  : {t['next_action']}")
+        if status == TaskStatus.BLOCKED:
+            print(f"        BLOCKED : {t.get('last_error','')}")
+        elif t.get("last_error"):
+            etype = t.get("error_type", ErrorType.UNKNOWN)
+            print(f"        ERROR   : [{etype}] {t['last_error']}")
+        if rev_st:
+            appr_by = t.get("approved_by", "-")
+            appr_at = _fmt_ts(t.get("approved_at"))
+            print(f"        review  : {rev_st}  by={appr_by}  at={appr_at}")
+
+    # 進行中タスク（blocked / error / その他 を分けて表示）
+    current = state.get("current_tasks", [])
+    active  = [t for t in current if t.get("status") not in
+               (TaskStatus.BLOCKED, TaskStatus.ERROR, TaskStatus.WAITING_MANUAL)]
+    blocked = [t for t in current if t.get("status") == TaskStatus.BLOCKED]
+    errored = [t for t in current if t.get("status") == TaskStatus.ERROR]
+    waiting_m = [t for t in current if t.get("status") == TaskStatus.WAITING_MANUAL]
+
+    print(f"\n  [ Active Tasks: {len(active)} ]")
+    print(f"  {'-'*60}")
+    if not active:
+        print("    (none - system idle)")
+    for t in active:
+        _print_task_row(t)
+    print(f"  {'-'*60}")
+
+    if blocked:
+        print(f"\n  [ Blocked Tasks (waiting dependency): {len(blocked)} ]")
+        print(f"  {'-'*60}")
+        for t in blocked:
+            _print_task_row(t)
+        print(f"  {'-'*60}")
+
+    if waiting_m:
+        print(f"\n  [ Waiting Manual Approval: {len(waiting_m)} ]")
+        print(f"  {'-'*60}")
+        for t in waiting_m:
+            _print_task_row(t)
+        print(f"  {'-'*60}")
+
+    if errored:
+        print(f"\n  [ Error Tasks (in current): {len(errored)} ]")
+        print(f"  {'-'*60}")
+        for t in errored:
+            _print_task_row(t)
+        print(f"  {'-'*60}")
+
+    # 直近履歴（done / error / blocked を区別して色分け）
+    history = state.get("recent_history", [])
+    hist_done    = [t for t in history if t.get("status") == TaskStatus.DONE]
+    hist_error   = [t for t in history if t.get("status") == TaskStatus.ERROR]
+    hist_blocked = [t for t in history if t.get("status") == TaskStatus.BLOCKED]
+
+    print(f"\n  [ Recent History: {len(history)} total  "
+          f"(done={len(hist_done)}  error={len(hist_error)}  blocked={len(hist_blocked)}) ]")
+    print(f"  {'-'*60}")
+    if not history:
+        print("    (none)")
+    for t in history[:10]:
+        tid    = t.get("task_id", "?")[:8]
+        name   = t.get("task_name", "?")
+        owner  = t.get("owner", "?")
+        status = t.get("status", "?")
+        ts     = _fmt_ts(t.get("updated_at"))
+        src    = t.get("source", SOURCE_MANUAL)
+        src_m  = "[A]" if src == SOURCE_AUTO else "   "
+        line   = f"    {src_m}[{_status_label(status)}] {name:<18} owner={owner}  id={tid}  {ts}"
+        if status == TaskStatus.ERROR:
+            etype = t.get("error_type", ErrorType.UNKNOWN)
+            line += f"\n        ERROR: [{etype}] {t.get('last_error','')}"
+        elif status == TaskStatus.BLOCKED:
+            line += f"\n        BLOCKED: {t.get('last_error','')}"
+        elif status == TaskStatus.DONE and t.get("next_action"):
+            line += f"\n        next: {t['next_action']}"
+        print(line)
+    print(f"  {'-'*60}")
+    print(f"\n  [A]=auto-triggered   State file: {STATE_FILE}\n")
 
 
 def read_latest():
@@ -1030,6 +2072,17 @@ def main():
     ss_p = subparsers.add_parser("set-sender", help="送信者IDを設定")
     ss_p.add_argument("sender_id", help="送信者ID (cap/cyber)")
 
+    # state-summary
+    subparsers.add_parser("state-summary", help="system_state.json の状態サマリー表示")
+
+    # state-audit
+    subparsers.add_parser("state-audit", help="state と Slack ログの整合性チェック")
+
+    # approve
+    ap_p = subparsers.add_parser("approve", help="タスクに cap 承認フラグを付与")
+    ap_p.add_argument("--task", required=True, help="承認するタスク名 (例: ebay-review)")
+    ap_p.add_argument("--by",   required=True, help="承認者ID (例: cap)")
+
     # ceo-report
     ceo_p = subparsers.add_parser("ceo-report", help="eBay候補をCEO報告")
     ceo_p.add_argument("--file", default=None, help="候補JSONファイルパス（省略時はデフォルト）")
@@ -1055,6 +2108,12 @@ def main():
         cmd_status()
     elif args.command == "set-sender":
         set_sender(args.sender_id)
+    elif args.command == "state-summary":
+        cmd_state_summary()
+    elif args.command == "state-audit":
+        cmd_state_audit()
+    elif args.command == "approve":
+        cmd_approve(task_name=args.task, approved_by=args.by)
     elif args.command == "ceo-report":
         cmd_ceo_report(file_path=args.file)
     elif args.command == "send":
