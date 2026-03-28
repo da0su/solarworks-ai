@@ -46,3 +46,7 @@ ops/notifications/voicevox/
 
 # Debug files
 coin_business/data/*/_debug*
+
+# Secure store
+.secure_env
+.env.local

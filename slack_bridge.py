@@ -533,12 +533,92 @@ def handle_report(msg_data: dict) -> dict:
     return {"report": content}
 
 
+# ============================================================
+# 安全ストア方式 (CTO Pattern B)
+# ============================================================
+SECURE_STORE_PATHS = [
+    Path(__file__).parent / ".secure_env",          # 優先1: Git管理外
+    Path(__file__).parent / ".env.local",            # 優先3: Git ignore
+]
+ALLOWED_SECURE_KEYS = {"EBAY_APP_ID", "EBAY_CERT_ID", "EBAY_DEV_ID"}
+
+
+def _load_secure_store() -> dict:
+    """安全ストアから値を読み込み。優先順: .secure_env > OS環境変数 > .env.local"""
+    store = {}
+    # ファイルベース（低優先から読み込み、高優先で上書き）
+    for path in reversed(SECURE_STORE_PATHS):
+        if path.exists():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                key, val = key.strip(), val.strip()
+                if key in ALLOWED_SECURE_KEYS:
+                    store[key] = val
+    # OS環境変数（最高優先）
+    for key in ALLOWED_SECURE_KEYS:
+        env_val = os.environ.get(key)
+        if env_val:
+            store[key] = env_val
+    return store
+
+
+def handle_set_env(msg_data: dict) -> dict:
+    """安全ストアからキーを取得し、coin_business/.envに反映"""
+    payload = msg_data.get("payload", {})
+    requested_keys = payload.get("keys", [])
+
+    # 許可キーのみ
+    rejected = [k for k in requested_keys if k not in ALLOWED_SECURE_KEYS]
+    if rejected:
+        return {"error": f"Rejected keys (not in allowlist): {rejected}"}
+
+    # 安全ストアから値取得
+    store = _load_secure_store()
+    missing = [k for k in requested_keys if k not in store]
+    if missing:
+        return {"error": f"Keys not found in secure store: {missing}"}
+
+    # coin_business/.env に反映
+    env_file = Path(__file__).parent / "coin_business" / ".env"
+    if not env_file.exists():
+        return {"error": f".env not found: {env_file}"}
+
+    env_content = env_file.read_text(encoding="utf-8")
+    updated_keys = []
+
+    for key in requested_keys:
+        val = store[key]
+        # 既存行を置換 or 追加
+        import re as _re
+        pattern = _re.compile(rf"^{_re.escape(key)}\s*=.*$", _re.MULTILINE)
+        if pattern.search(env_content):
+            env_content = pattern.sub(f"{key}={val}", env_content)
+        else:
+            env_content = env_content.rstrip() + f"\n{key}={val}\n"
+        updated_keys.append(key)
+
+    # atomic write
+    tmp_file = env_file.with_suffix(".env.tmp")
+    tmp_file.write_text(env_content, encoding="utf-8")
+    tmp_file.replace(env_file)
+
+    # ログには値を出さない（キー名のみ）
+    logger.info(f"set-env完了: {updated_keys}")
+    log_event("set_env", {"keys": updated_keys, "status": "updated"})
+
+    return {"status": "updated", "keys": updated_keys}
+
+
 HANDLERS = {
     "test-ping": handle_test_ping,
     "ebay-search": handle_ebay_search,
     "ebay-review": handle_ebay_review,
     "git-pull": handle_git_pull,
     "report": handle_report,
+    "set-env": handle_set_env,
 }
 
 
