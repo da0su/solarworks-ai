@@ -1067,10 +1067,12 @@ def handle_ebay_search(msg_data: dict) -> dict:
     matches = data.get("matches", [])
     new_matches = [m for m in matches if m.get("is_new", False)]
 
-    # 新規候補があればキャップにebay-review TASK送信
-    # workflow_id を引き継いで同一チェーンとして追跡
+    # 新規候補がある場合、ebay-review TASK を _post_send_msg に入れて返す。
+    # dispatch_task._run が DONE 送信後に送ることで、受信側の競合状態を防ぐ。
+    # （ハンドラ内で直接送ると DONE より先に届き、依存チェック失敗を招く）
+    post_msg = None
     if new_matches:
-        review_msg = make_task_msg(
+        post_msg = make_task_msg(
             from_id=get_sender(),
             to_id="cap",
             task="ebay-review",
@@ -1082,19 +1084,14 @@ def handle_ebay_search(msg_data: dict) -> dict:
                 "searched_at": data.get("searched_at", ""),
             },
         )
-        send_bridge_msg(review_msg)
-        add_pending_task(review_msg)
-        state_mgr.task_queued(review_msg["task_id"], "ebay-review",
-                              get_sender(), "cap",
-                              depends_on="ebay-search",
-                              workflow_id=review_msg.get("workflow_id"))
-        logger.info(f"ebay-review TASK送信: 新規{len(new_matches)}件 (全{len(matches)}マッチ)")
+        logger.info(f"ebay-review TASK準備完了: 新規{len(new_matches)}件 (全{len(matches)}マッチ) - DONE後送信")
 
     return {
         "total_searched": data.get("total_searched", 0),
         "match_count": len(matches),
         "new_count": len(new_matches),
         "review_sent": len(new_matches) > 0,
+        "_post_send_msg": post_msg,   # dispatch_task._run がDONE後に送信
     }
 
 
@@ -1304,12 +1301,29 @@ def dispatch_task(msg_data: dict):
             logger.info(f"タスク実行開始: {task_name} (id={task_id[:8]})")
             state_mgr.task_running(task_id)
             result = handler(msg_data)
+
+            # ハンドラが _post_send_msg を返した場合、DONE送信後に送る（競合回避）
+            post_send_msg = result.pop("_post_send_msg", None) if isinstance(result, dict) else None
+
             done_msg = make_response_msg(msg_data, "DONE", result)
             send_bridge_msg(done_msg)
             save_task_registry_entry(task_id, "DONE", {"task": task_name})
             state_mgr.task_done(task_id, f"{task_name} completed")
             logger.info(f"タスク完了: {task_name} (id={task_id[:8]})")
             log_event("done", {"task_id": task_id, "task": task_name})
+
+            # DONE送信後に後続メッセージ送信（依存チェックが正しく動くよう順序保証）
+            if post_send_msg:
+                send_bridge_msg(post_send_msg)
+                add_pending_task(post_send_msg)
+                pt_name = post_send_msg.get("task", "")
+                pt_id   = post_send_msg.get("task_id", "")
+                state_mgr.task_queued(pt_id, pt_name, get_sender(),
+                                      post_send_msg.get("to", ""),
+                                      depends_on=task_name,
+                                      workflow_id=post_send_msg.get("workflow_id"))
+                logger.info(f"[post-DONE] {pt_name} 送信: id={pt_id[:8]}")
+                log_event("post_send", {"task": pt_name, "task_id": pt_id, "after": task_name})
 
             # --- 自動 enqueue: 次タスクを state に積んで Slack 送信 ---
             parent_wf_id = msg_data.get("workflow_id")   # 親コンテキストから直接取得
