@@ -1072,14 +1072,19 @@ def handle_ebay_search(msg_data: dict) -> dict:
     # （ハンドラ内で直接送ると DONE より先に届き、依存チェック失敗を招く）
     post_msg = None
     if new_matches:
+        # Slack message size limit ~4000 chars: slim candidates to essential display fields only
+        _KEEP = {"mgmt_no", "db_line1", "db_grader", "db_grade",
+                 "ebay_limit_usd", "ebay_limit_jpy", "bid_count", "ebay_url", "is_new"}
+        slim_matches = [{k: v for k, v in m.items() if k in _KEEP}
+                        for m in new_matches[:10]]  # top 10 fits in <4000 chars
         post_msg = make_task_msg(
             from_id=get_sender(),
             to_id="cap",
             task="ebay-review",
             workflow_id=msg_data.get("workflow_id"),   # 親チェーンのID引き継ぎ
             payload={
-                "candidates": new_matches,
-                "count": len(new_matches),
+                "candidates": slim_matches,
+                "count": len(new_matches),       # actual total (may be >15)
                 "total_matches": len(matches),
                 "searched_at": data.get("searched_at", ""),
             },
