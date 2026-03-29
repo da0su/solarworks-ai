@@ -140,6 +140,8 @@ TASK_FLOW: dict[str, dict] = {
     "rakuten-report": {"requires": "rakuten-status", "next": None,            "to": "cap"},
     "daily-check":    {"requires": None,             "next": "daily-report",  "to": "cyber"},
     "daily-report":   {"requires": "daily-check",    "next": None,            "to": "cap"},
+    "coin-status":    {"requires": None,             "next": "coin-report",   "to": "cyber"},
+    "coin-report":    {"requires": "coin-status",    "next": None,            "to": "cap"},
 }
 # 後方互換のため TASK_DEPS も維持
 TASK_DEPS: dict[str, str | None] = {k: v.get("next") for k, v in TASK_FLOW.items()}
@@ -2043,6 +2045,439 @@ def handle_daily_report(msg_data: dict) -> dict:
             "report_status": status, "slot": slot}
 
 
+# ============================================================
+# コイン事業 ステータスハンドラ
+# ============================================================
+def handle_coin_status(msg_data: dict) -> dict:
+    """
+    cyberで実行: コイン事業のステータスを収集してcapにcoin-reportを送信。
+    """
+    import time as _time
+    start_time = _time.time()
+    coin_dir = Path(__file__).parent / "coin_business"
+    wf_id    = msg_data.get("workflow_id", "")
+    errors   = []
+
+    # --- 1. DB件数 + 3か月stats (既存ヘルパー再利用) ---
+    coin_data, coin_errors = _collect_coin_status(coin_dir)
+    errors.extend(coin_errors)
+
+    # --- 2. eBay候補ファイル読み込み ---
+    candidates_file = DATA_DIR / "ebay_review_candidates.json"
+    ebay_candidates = {"count": 0, "received_at": None}
+    try:
+        if candidates_file.exists():
+            with open(candidates_file, encoding="utf-8") as f:
+                cdata = json.load(f)
+            if isinstance(cdata, dict):
+                ebay_candidates = {
+                    "count":       cdata.get("count", len(cdata.get("candidates", []))),
+                    "received_at": cdata.get("received_at"),
+                }
+            elif isinstance(cdata, list):
+                ebay_candidates = {"count": len(cdata), "received_at": None}
+    except (OSError, json.JSONDecodeError) as e:
+        errors.append({"step": "ebay-candidates", "stderr": str(e)[:200]})
+
+    # --- 3. 最終ebay-search日時 (state から取得) ---
+    last_ebay_search = None
+    try:
+        _s = state_mgr.load()
+        for t in _s.get("recent_history", []):
+            if t.get("task_name") == "ebay-search" and t.get("status") == "done":
+                last_ebay_search = t.get("updated_at")
+                break
+    except Exception:
+        pass
+
+    elapsed_sec  = round(_time.time() - start_time, 1)
+    timeout_flag = elapsed_sec > 25
+
+    # --- 4. 全データを coin_status_latest.json に保存 ---
+    status_file  = DATA_DIR / "coin_status_latest.json"
+    collected_at = datetime.now(timezone.utc).isoformat()
+    full_data = {
+        "collected_at":    collected_at,
+        "workflow_id":     wf_id,
+        "coin":            coin_data,
+        "ebay_candidates": ebay_candidates,
+        "last_ebay_search": last_ebay_search,
+        "errors":          errors,
+        "elapsed_sec":     elapsed_sec,
+        "timeout_flag":    timeout_flag,
+    }
+    try:
+        with open(status_file, "w", encoding="utf-8") as f:
+            json.dump(full_data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        errors.append({"step": "save_file", "stderr": str(e)})
+
+    # --- 5. slim payload 構築 ---
+    slim = {
+        "date":             datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "coin":             coin_data,
+        "ebay_candidates":  ebay_candidates,
+        "last_ebay_search": last_ebay_search,
+        "errors":           errors[:3],
+        "file_path":        str(status_file),
+        "workflow_id":      wf_id,
+        "collected_at":     collected_at,
+    }
+
+    # --- 6. coin-report を _post_send_msg で DONE後に自動送信 ---
+    post_msg = make_task_msg(
+        from_id=get_sender(), to_id="cap",
+        task="coin-report",
+        workflow_id=wf_id,
+        payload=slim,
+    )
+
+    return {
+        "collected_at":    collected_at,
+        "file_path":       str(status_file),
+        "coin_status":     coin_data.get("status", "UNKNOWN"),
+        "ebay_candidates": ebay_candidates["count"],
+        "errors":          errors,
+        "elapsed_sec":     elapsed_sec,
+        "_post_send_msg":  post_msg,
+    }
+
+
+def _format_coin_report(payload: dict) -> str:
+    """slim payload をコイン事業CEO向けSlackメッセージに整形"""
+    from datetime import date as _date
+    lines = []
+    date_str = payload.get("date", _date.today().isoformat())
+
+    # --- ヘッダー ---
+    lines.append(f"🪙 *コインリサーチ ステータス* ({date_str})")
+    lines.append("")
+
+    # --- DBレコード ---
+    coin = payload.get("coin", {})
+    total = coin.get("total_records", 0)
+    lines.append(f"📊 *DBレコード*: {total:,}件")
+    lines.append("")
+
+    # --- 3か月stats ---
+    r3 = coin.get("recent_3m_count")
+    if r3 is not None:
+        avg_p = coin.get("avg_price_jpy")
+        med_p = coin.get("med_price_jpy")
+        parts = [f"件数: {r3:,}件"]
+        if avg_p:
+            parts.append(f"平均: ¥{avg_p:,}")
+        if med_p:
+            parts.append(f"中央: ¥{med_p:,}")
+        lines.append(f"📈 *直近3か月* (仕入判断データ)")
+        lines.append(f"  {' | '.join(parts)}")
+        lines.append("")
+
+    c_status = coin.get("status", "UNKNOWN")
+    if c_status != "OK":
+        icon = "⚠️" if c_status == "WARNING" else "🚨"
+        lines.append(f"{icon} coin status: {c_status}")
+        lines.append("")
+
+    # --- eBay候補 ---
+    ec = payload.get("ebay_candidates", {})
+    ec_count = ec.get("count", 0)
+    if ec_count > 0:
+        ec_recv = ec.get("received_at", "")
+        ec_date = ec_recv[:10] if ec_recv else "?"
+        lines.append(f"🔍 *eBay候補* (未レビュー): {ec_count}件  ({ec_date})")
+        lines.append(f"  → `python slack_bridge.py send-task --task ebay-review --to cap`")
+    else:
+        lines.append(f"🔍 *eBay候補*: なし  (`python slack_bridge.py send-task --task ebay-search --to cyber` を実行)")
+    lines.append("")
+
+    # --- 最終eBay検索 ---
+    les = payload.get("last_ebay_search")
+    if les:
+        try:
+            _dt = datetime.fromisoformat(les).astimezone(JST)
+            les_str = _dt.strftime("%Y-%m-%d %H:%M JST")
+        except Exception:
+            les_str = les[:19]
+        lines.append(f"📅 *最終eBay検索*: {les_str}")
+        lines.append("")
+
+    # --- エラー ---
+    errs = payload.get("errors", [])
+    if errs:
+        lines.append(f"⚠️ *収集エラー*")
+        for e in errs[:3]:
+            if isinstance(e, dict):
+                lines.append(f"  - [{e.get('step','?')}] {e.get('stderr','')[:100]}")
+            else:
+                lines.append(f"  - {str(e)[:100]}")
+        lines.append("")
+
+    # --- フッター ---
+    wf = payload.get("workflow_id", "")[:8]
+    lines.append(f"_(詳細: `coin_status_latest.json` | wf={wf})_")
+
+    return "\n".join(lines)
+
+
+def handle_coin_report(msg_data: dict) -> dict:
+    """
+    capで実行: coin-statusの結果を#ceo-roomに整形投稿。
+    """
+    task_id = msg_data.get("task_id", "")
+    payload = msg_data.get("payload", {})
+
+    text = _format_coin_report(payload)
+
+    # 2500文字上限チェック
+    if len(text) > 2500:
+        text = text[:2450] + "\n...(省略)"
+
+    success = send_message(text, channel=CEO_ROOM_CHANNEL)
+    status  = "sent" if success else "failed"
+
+    if task_id:
+        state_mgr.task_report_sent(task_id, CEO_ROOM_CHANNEL, status=status)
+
+    return {"status": status, "channel": CEO_ROOM_CHANNEL, "report_status": status}
+
+
+# ============================================================
+# 日次申し送り (daily-handoff) — cap local コマンド
+# ============================================================
+HANDOFF_FILE = DATA_DIR / "daily_handoff.json"
+
+
+def _generate_daily_handoff() -> dict:
+    """
+    既存データファイルから構造化申し送りドキュメントを生成。
+    サイバーへの送信なし。すべてcap-local。
+    """
+    from datetime import date as _date
+
+    now_jst  = datetime.now(JST)
+    today    = now_jst.strftime("%Y-%m-%d")
+    now_str  = now_jst.strftime("%Y-%m-%d %H:%M JST")
+
+    # --- データ収集 ---
+    state_data       = state_mgr.load()
+    sched_state      = _load_schedule_state()
+    daily_check_data = _safe_load_json(DATA_DIR / "daily_check_latest.json")
+    rakuten_data     = _safe_load_json(DATA_DIR / "rakuten_status_latest.json")
+    coin_data        = _safe_load_json(DATA_DIR / "coin_status_latest.json")
+    candidates_data  = _safe_load_json(DATA_DIR / "ebay_review_candidates.json")
+
+    # --- 楽天ROOM状態 ---
+    rakuten_health = "不明"
+    rakuten_pool   = 0
+    if rakuten_data:
+        h = rakuten_data.get("health", {}).get("stats", {})
+        if not h:
+            h = rakuten_data.get("health", {})
+        rakuten_health = h.get("status", "不明")
+        rakuten_pool   = h.get("pool_size", 0)
+    elif daily_check_data:
+        h = daily_check_data.get("rakuten", {}).get("health", {})
+        rakuten_health = h.get("status", "不明")
+        rakuten_pool   = h.get("pool_size", 0)
+
+    # --- コイン状態 ---
+    coin_total  = 0
+    coin_recent = None
+    if coin_data:
+        c = coin_data.get("coin", {})
+        coin_total  = c.get("total_records", 0)
+        coin_recent = c.get("recent_3m_count")
+    elif daily_check_data:
+        c = daily_check_data.get("coin", {})
+        coin_total  = c.get("total_records", 0)
+        coin_recent = c.get("recent_3m_count")
+
+    # --- eBay候補 ---
+    ebay_count = 0
+    if isinstance(candidates_data, dict):
+        ebay_count = candidates_data.get("count", len(candidates_data.get("candidates", [])))
+    elif isinstance(candidates_data, list):
+        ebay_count = len(candidates_data)
+
+    # --- 最終ebay-search ---
+    last_ebay_search = None
+    for t in state_data.get("recent_history", []):
+        if t.get("task_name") == "ebay-search" and t.get("status") == "done":
+            last_ebay_search = t.get("updated_at", "")[:16].replace("T", " ")
+            break
+
+    # --- 定時スロット状態 ---
+    slot_status = {}
+    for slot in SCHEDULE_SLOTS:
+        entry = sched_state.get(slot, {})
+        if entry.get("last_fired_date") == today:
+            slot_status[slot] = entry.get("status", "fired")
+        else:
+            slot_status[slot] = "not_fired"
+
+    # --- エラー履歴 (当日分のみ) ---
+    recent_errors = [
+        {"task": t.get("task_name"), "error": t.get("last_error", "")[:120],
+         "at": t.get("updated_at", "")[:16]}
+        for t in state_data.get("recent_history", [])
+        if t.get("status") == "error"
+        and t.get("updated_at", "")[:10] == today
+    ][:5]
+
+    # --- 要対応 ---
+    decision_required = []
+    if ebay_count > 0:
+        decision_required.append(
+            f"ebay-review 承認待ち ({ebay_count}件): "
+            f"python slack_bridge.py approve --task ebay-review --by cap"
+        )
+    if rakuten_health in ("WARNING", "CRITICAL"):
+        decision_required.append(
+            f"楽天ROOM health={rakuten_health}: python run.py health で詳細確認"
+        )
+
+    # --- 8セクション構築 ---
+    handoff = {
+        "generated_at":       now_str,
+        "date":               today,
+        "company_direction":  "CEO→CAP（代表COO）→cyber 3層自動運用。楽天ROOM自動投稿+コイン仕入れリサーチ。",
+        "progress": {
+            "daily_check":  f"07:30/12:30/18:30 定時チェック稼働中",
+            "schedule_slots": slot_status,
+            "rakuten":      f"health={rakuten_health} / pool={rakuten_pool}件",
+            "coin":         f"DB={coin_total:,}件 / 直近3か月={coin_recent}件" if coin_recent else f"DB={coin_total:,}件",
+            "ebay":         f"候補{ebay_count}件 / 最終検索={last_ebay_search or '不明'}",
+        },
+        "current_issues":     recent_errors,
+        "next_priority": [
+            "cap/cyber watch 常時起動維持",
+            "daily-check 定時発火 監視 (schedule_state.json 確認)",
+            f"ebay-review 承認待ち ({ebay_count}件)" if ebay_count > 0 else "ebay-search 実行 (候補なし)",
+        ],
+        "risks": [
+            f"楽天ROOM health={rakuten_health}" + ("" if rakuten_health == "OK" else " ⚠️"),
+            "schedule_state.json 未生成の場合は cap watch 再起動が必要" if not sched_state else "スケジュール管理 正常",
+        ],
+        "operational_knowledge": [
+            "Slack 2500字制限: slim payload のみ送信、詳細は*_latest.jsonを参照",
+            "重複発火防止: schedule_state.json の status=done で制御",
+            "セッション引継ぎ: このファイル(daily_handoff.json)を読む",
+            "cyberは git pull 後に watch 再起動で最新コードを読み込む",
+        ],
+        "behavioral_notes": {
+            "ceo":   "batを押すだけ。日次は #ceo-room を確認。判断事項のみCAPに指示。",
+            "cap":   "代表COO。watch常時起動。daily-handoff で日次申し送り生成。",
+            "cyber": "実処理担当。watch常時起動。git pullで最新コード維持。ebay-search実行役。",
+        },
+        "decision_required": decision_required,
+        "state_snapshot": {
+            "system_status": state_data.get("system_status", "?"),
+            "current_tasks": len(state_data.get("current_tasks", [])),
+            "recent_errors": len(recent_errors),
+        },
+        "data_files": {
+            "daily_check_latest":  str(DATA_DIR / "daily_check_latest.json"),
+            "rakuten_status_latest": str(DATA_DIR / "rakuten_status_latest.json"),
+            "coin_status_latest":  str(DATA_DIR / "coin_status_latest.json"),
+            "ebay_candidates":     str(DATA_DIR / "ebay_review_candidates.json"),
+            "handoff":             str(HANDOFF_FILE),
+        },
+    }
+    return handoff
+
+
+def _safe_load_json(path: Path):
+    """JSON読み込み。不存在/破損は None を返す"""
+    try:
+        if path.exists():
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def _format_handoff_summary(handoff: dict) -> str:
+    """CEO向け #ceo-room 投稿用サマリー (< 1000 chars)"""
+    lines = []
+    now_str = handoff.get("generated_at", "")
+    lines.append(f"📋 *日次申し送り* ({now_str})")
+    lines.append("")
+
+    prog = handoff.get("progress", {})
+    r_text = prog.get("rakuten", "")
+    c_text = prog.get("coin", "")
+    e_text = prog.get("ebay", "")
+    r_icon = "✅" if "OK" in r_text else "⚠️"
+    lines.append(f"▶ 楽天ROOM: {r_icon} {r_text}")
+    lines.append(f"▶ コイン: {c_text}")
+    lines.append(f"▶ eBay: {e_text}")
+
+    # 定時スロット
+    slot_st = prog.get("schedule_slots", {})
+    slot_line = []
+    for slot in SCHEDULE_SLOTS:
+        s = slot_st.get(slot, "not_fired")
+        icon = "✅" if s == "done" else ("🔄" if s == "running" else "⏳")
+        slot_line.append(f"{slot}{icon}")
+    lines.append(f"▶ 定時チェック: {' '.join(slot_line)}")
+    lines.append("")
+
+    decisions = handoff.get("decision_required", [])
+    if decisions:
+        lines.append("⚡ *CEO判断が必要*:")
+        for d in decisions[:3]:
+            lines.append(f"  - {d[:100]}")
+        lines.append("")
+
+    issues = handoff.get("current_issues", [])
+    if issues:
+        lines.append(f"⚠️ *本日エラー*: {len(issues)}件")
+        lines.append("")
+
+    lines.append(f"📁 詳細: `daily_handoff.json`")
+    return "\n".join(lines)
+
+
+def cmd_daily_handoff():
+    """
+    日次申し送り生成・保存・#ceo-room投稿。
+    capのローカル実行のみ。cyberへの送信なし。
+    """
+    logger.info("daily-handoff 生成開始")
+    handoff = _generate_daily_handoff()
+
+    # JSON保存 (atomic write)
+    tmp = HANDOFF_FILE.with_suffix(".tmp")
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(handoff, f, ensure_ascii=False, indent=2)
+        tmp.replace(HANDOFF_FILE)
+        logger.info(f"daily_handoff.json 保存完了: {HANDOFF_FILE}")
+    except OSError as e:
+        logger.error(f"daily_handoff.json 保存失敗: {e}")
+        print(f"[ERROR] 保存失敗: {e}")
+        return
+
+    # Slack投稿
+    summary = _format_handoff_summary(handoff)
+    success = send_message(summary, channel=CEO_ROOM_CHANNEL)
+    if success:
+        logger.info("daily-handoff #ceo-room 投稿完了")
+    else:
+        logger.warning("daily-handoff #ceo-room 投稿失敗 (ファイルは保存済み)")
+
+    # ターミナル表示 (CP932環境でのUnicodeエラーを回避)
+    try:
+        print(summary)
+    except UnicodeEncodeError:
+        print(summary.encode("utf-8", errors="replace").decode("ascii", errors="replace"))
+    print(f"\n詳細: {HANDOFF_FILE}")
+    print(f"decisions: {len(handoff.get('decision_required', []))}件")
+
+
 HANDLERS = {
     "test-ping":      handle_test_ping,
     "ebay-search":    handle_ebay_search,
@@ -2055,6 +2490,8 @@ HANDLERS = {
     "rakuten-report": handle_rakuten_report,
     "daily-check":    handle_daily_check,
     "daily-report":   handle_daily_report,
+    "coin-status":    handle_coin_status,
+    "coin-report":    handle_coin_report,
 }
 
 
@@ -2912,6 +3349,12 @@ def main():
     # daily-check (ショートカット)
     subparsers.add_parser("daily-check", help="全事業定時チェックをcyberへ送信 (#ceo-room報告)")
 
+    # coin-status (ショートカット)
+    subparsers.add_parser("coin-status", help="コイン事業ステータスをcyberへ問い合わせ (#ceo-room報告)")
+
+    # daily-handoff (cap-local)
+    subparsers.add_parser("daily-handoff", help="日次申し送り生成・保存・#ceo-room投稿 (cap-local)")
+
     # --- 旧互換コマンド ---
     send_p = subparsers.add_parser("send", help="メッセージ送信（旧互換）")
     send_p.add_argument("message", help="送信するメッセージ")
@@ -2947,6 +3390,12 @@ def main():
     elif args.command == "daily-check":
         # ショートカット: daily-checkをcyberに送信（手動トリガー）
         cmd_send_task(task="daily-check", to="cyber")
+    elif args.command == "coin-status":
+        # ショートカット: coin-statusをcyberに送信
+        cmd_send_task(task="coin-status", to="cyber")
+    elif args.command == "daily-handoff":
+        # cap-local: 日次申し送り生成
+        cmd_daily_handoff()
     elif args.command == "send":
         send_message(args.message, sender=args.sender)
     elif args.command == "receive":
