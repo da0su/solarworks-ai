@@ -128,9 +128,11 @@ TASK_FLOW: dict[str, dict] = {
     "ebay-search": {"requires": "git-pull",     "next": "ebay-review", "to": "cyber"},
     "ebay-review": {"requires": "ebay-search",  "next": "ceo-report",  "to": "cap"},
     "ceo-report":  {"requires": "ebay-review",  "next": None,          "to": "cap"},
-    "test-ping":   {"requires": None,           "next": None,          "to": "cyber"},
-    "report":      {"requires": None,           "next": None,          "to": "cyber"},
-    "set-env":     {"requires": None,           "next": None,          "to": "cyber"},
+    "test-ping":      {"requires": None,             "next": None,            "to": "cyber"},
+    "report":         {"requires": None,             "next": None,            "to": "cyber"},
+    "set-env":        {"requires": None,             "next": None,            "to": "cyber"},
+    "rakuten-status": {"requires": None,             "next": "rakuten-report","to": "cyber"},
+    "rakuten-report": {"requires": "rakuten-status", "next": None,            "to": "cap"},
 }
 # 後方互換のため TASK_DEPS も維持
 TASK_DEPS: dict[str, str | None] = {k: v.get("next") for k, v in TASK_FLOW.items()}
@@ -1306,14 +1308,311 @@ def handle_ceo_report(msg_data: dict) -> dict:
     return {"status": "failed", "error": "CEO報告送信失敗"}
 
 
+# ============================================================
+# 楽天ROOM ステータスハンドラ
+# ============================================================
+def _parse_queue_stats(text: str) -> dict:
+    """queue-status stdout から数値をパース"""
+    import re
+    def _int(pattern):
+        m = re.search(pattern, text)
+        return int(m.group(1)) if m else 0
+    return {
+        "total":   _int(r"合計:\s+(\d+)"),
+        "queued":  _int(r"待機:\s+(\d+)"),
+        "running": _int(r"実行中:\s+(\d+)"),
+        "posted":  _int(r"成功:\s+(\d+)"),
+        "failed":  _int(r"失敗:\s+(\d+)"),
+        "skipped": _int(r"スキップ:\s+(\d+)"),
+    }
+
+
+def _parse_health_stats(text: str) -> dict:
+    """health stdout から主要指標をパース"""
+    import re
+    def _str(pattern, default="?"):
+        m = re.search(pattern, text)
+        return m.group(1).strip() if m else default
+    def _int(pattern, default=0):
+        m = re.search(pattern, text)
+        return int(m.group(1)) if m else default
+    def _float(pattern, default=0.0):
+        m = re.search(pattern, text)
+        return float(m.group(1)) if m else default
+    return {
+        "status":           _str(r"総合ステータス:\s+(\S+)"),
+        "pool_size":        _int(r"pool_size.*?(\d+)"),
+        "consecutive_fails":_int(r"consecutive_fails.*?(\d+)"),
+        "success_rate":     _float(r"success_rate.*?([\d.]+)"),
+        "skip_rate":        _float(r"skip_rate.*?([\d.]+)"),
+        "pool_depletion_days": _int(r"pool_depletion_days.*?(\d+)", default=-1),
+    }
+
+
+def _load_schedule(bot_dir: Path) -> tuple[list, list, bool, str]:
+    """
+    daily_plan.json から今日・翌日バッチを取得。
+    Returns: (today_batches, tomorrow_batches, schedule_unknown, warning_msg)
+    """
+    from datetime import date as _date, timedelta
+    today_str    = _date.today().isoformat()
+    tomorrow_str = (_date.today() + timedelta(days=1)).isoformat()
+    plan_file = bot_dir / "data" / "daily_plan.json"
+    try:
+        with open(plan_file, encoding="utf-8") as f:
+            plan = json.load(f)
+        plan_date = plan.get("date", "")
+        batches_raw = plan.get("post", {}).get("batches", [])
+        if not batches_raw:
+            return [], [], True, "daily_plan.jsonにbatchesキーが存在しません"
+        slim_batches = [
+            {"id": b.get("id","?"), "start": b.get("start","?"),
+             "count": b.get("count",0), "status": b.get("status","pending")}
+            for b in batches_raw
+        ]
+        if plan_date == today_str:
+            return slim_batches, [], False, ""
+        elif plan_date == tomorrow_str:
+            return [], slim_batches, False, ""
+        else:
+            # 日付が合わない → 参考情報として返す
+            return slim_batches, [], False, f"daily_plan.jsonの日付({plan_date})が今日({today_str})と異なります"
+    except FileNotFoundError:
+        return [], [], True, "daily_plan.jsonが存在しません (23:50以降に生成予定)"
+    except (json.JSONDecodeError, KeyError) as e:
+        return [], [], True, f"daily_plan.json読み込み失敗: {e}"
+
+
+def _month_end_check(pool_count: int, daily_avg: int = 95) -> dict:
+    """月末チェック: 残日数とプール不足警告"""
+    from datetime import date as _date, timedelta
+    today = _date.today()
+    next_month = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+    days_left = (next_month - timedelta(days=1) - today).days
+    needed = days_left * daily_avg if days_left > 0 else 0
+    short  = max(0, needed - pool_count)
+    return {
+        "flag":       days_left <= 5,
+        "days_left":  days_left,
+        "pool_count": pool_count,
+        "needed":     needed,
+        "short":      short,
+    }
+
+
+def handle_rakuten_status(msg_data: dict) -> dict:
+    """
+    楽天ROOM botの全体ステータスを収集してcapに報告。
+    cyber側で実行 → DONE後にrakuten-reportをcapへ自動送信。
+    """
+    bot_dir = Path(__file__).parent / "rakuten-room" / "bot"
+    wf_id   = msg_data.get("workflow_id", "")
+    errors  = []
+
+    # --- 1. queue-status ---
+    q_result = subprocess.run(
+        ["python", "run.py", "queue-status"],
+        cwd=str(bot_dir), capture_output=True, text=True,
+        timeout=30, check=False, encoding="utf-8", errors="replace",
+    )
+    queue_stats = _parse_queue_stats(q_result.stdout) if q_result.returncode == 0 else {}
+    if q_result.returncode != 0:
+        errors.append(f"queue-status failed(rc={q_result.returncode}): {q_result.stderr[:200]}")
+
+    # --- 2. health ---
+    h_result = subprocess.run(
+        ["python", "run.py", "health"],
+        cwd=str(bot_dir), capture_output=True, text=True,
+        timeout=30, check=False, encoding="utf-8", errors="replace",
+    )
+    health_stats = _parse_health_stats(h_result.stdout) if h_result.returncode == 0 else {"status": "UNKNOWN"}
+    if h_result.returncode != 0:
+        errors.append(f"health failed(rc={h_result.returncode}): {h_result.stderr[:200]}")
+
+    # --- 3. schedule (daily_plan.json) ---
+    today_batches, tomorrow_batches, schedule_unknown, schedule_warn = _load_schedule(bot_dir)
+    if schedule_unknown or schedule_warn:
+        errors.append(f"schedule_warning: {schedule_warn}")
+
+    # --- 4. 月末チェック ---
+    pool_count   = health_stats.get("pool_size", 0)
+    month_end    = _month_end_check(pool_count)
+
+    # --- 5. 全データを latest.json に保存 ---
+    status_file = DATA_DIR / "rakuten_status_latest.json"
+    full_data = {
+        "collected_at":   datetime.now(timezone.utc).isoformat(),
+        "workflow_id":    wf_id,
+        "queue":          {"stats": queue_stats, "stdout": q_result.stdout, "stderr": q_result.stderr},
+        "health":         {"stats": health_stats, "stdout": h_result.stdout, "stderr": h_result.stderr},
+        "schedule":       {"today": today_batches, "tomorrow": tomorrow_batches,
+                           "unknown": schedule_unknown, "warning": schedule_warn},
+        "month_end":      month_end,
+        "errors":         errors,
+    }
+    try:
+        with open(status_file, "w", encoding="utf-8") as f:
+            json.dump(full_data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        errors.append(f"latest.json保存失敗: {e}")
+
+    # --- 6. slim payload 構築 (< 2500 chars 目標) ---
+    slim = {
+        "date":      datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "queue":     queue_stats,
+        "health":    health_stats,
+        "schedule":  {"today": today_batches, "tomorrow": tomorrow_batches,
+                      "unknown": schedule_unknown},
+        "month_end": month_end,
+        "file_path": str(status_file),
+        "workflow_id": wf_id,
+        "errors":    errors[:3],   # 最大3件
+    }
+
+    # schedule_unknown を state に warning として記録
+    if schedule_unknown:
+        try:
+            _s = state_mgr.load()
+            _s["next_action"] = f"[WARNING] rakuten-status: {schedule_warn}"
+            state_mgr.save(_s)
+        except Exception:
+            pass
+
+    # --- 7. rakuten-report を _post_send_msg で DONE後に自動送信 ---
+    post_msg = make_task_msg(
+        from_id=get_sender(), to_id="cap",
+        task="rakuten-report",
+        workflow_id=wf_id,
+        payload=slim,
+    )
+
+    return {
+        "collected_at": full_data["collected_at"],
+        "file_path":    str(status_file),
+        "queue":        queue_stats,
+        "health_status": health_stats.get("status", "UNKNOWN"),
+        "schedule_unknown": schedule_unknown,
+        "month_end_flag": month_end["flag"],
+        "errors":       errors,
+        "_post_send_msg": post_msg,
+    }
+
+
+def _format_rakuten_report(payload: dict) -> str:
+    """slim payload を CEO向けSlackメッセージに整形"""
+    from datetime import date as _date
+    lines = []
+    date_str = payload.get("date", _date.today().isoformat())
+
+    # --- 月末警告（先頭） ---
+    me = payload.get("month_end", {})
+    if me.get("flag"):
+        days = me.get("days_left", 0)
+        pool = me.get("pool_count", 0)
+        needed = me.get("needed", 0)
+        short  = me.get("short", 0)
+        lines.append(f"⚠️ *月末チェック* [月末まで{days}日]")
+        lines.append(f"  プール残高: {pool}件 / 必要推定: {needed}件")
+        if short > 0:
+            lines.append(f"  → ⚡ {short}件不足！`python run.py replenish` を実行してください")
+        else:
+            lines.append(f"  → ✅ プール残量は十分です")
+        lines.append("")
+
+    # --- ヘッダー ---
+    lines.append(f"🏠 *楽天ROOM ステータス* ({date_str})")
+    lines.append("")
+
+    # --- キュー状況 ---
+    q = payload.get("queue", {})
+    total   = q.get("total", "?")
+    posted  = q.get("posted", "?")
+    failed  = q.get("failed", "?")
+    queued  = q.get("queued", "?")
+    skipped = q.get("skipped", "?")
+    lines.append(f"📊 *本日キュー*")
+    lines.append(f"  合計: {total}件 | 成功: {posted} | 失敗: {failed} | 待機: {queued} | スキップ: {skipped}")
+    lines.append("")
+
+    # --- ヘルス ---
+    h = payload.get("health", {})
+    hs = h.get("status", "UNKNOWN")
+    icon = {"OK": "✅", "WARNING": "⚠️", "CRITICAL": "🚨"}.get(hs, "❓")
+    pool_sz  = h.get("pool_size", "?")
+    con_fail = h.get("consecutive_fails", "?")
+    suc_rate = h.get("success_rate", 0)
+    suc_pct  = f"{suc_rate * 100:.0f}%" if isinstance(suc_rate, float) else "?"
+    lines.append(f"💪 *ヘルス*: {icon} {hs}")
+    lines.append(f"  プール: {pool_sz}件 | 連続失敗: {con_fail} | 成功率: {suc_pct}")
+    lines.append("")
+
+    # --- スケジュール ---
+    sched = payload.get("schedule", {})
+    if sched.get("unknown"):
+        lines.append(f"📅 *スケジュール*: ⚠️ 取得できませんでした (daily_plan.json未生成か破損)")
+    else:
+        today_b    = sched.get("today", [])
+        tomorrow_b = sched.get("tomorrow", [])
+        if today_b:
+            lines.append(f"📅 *本日スケジュール*")
+            for b in today_b:
+                st_icon = {"completed": "✅", "running": "🔄", "failed": "❌"}.get(b.get("status",""), "⏳")
+                lines.append(f"  {b.get('id','batch'):8s}: {b.get('start','?')} 開始 — {b.get('count','?')}件 {st_icon}")
+        if tomorrow_b:
+            lines.append(f"📅 *明日スケジュール*")
+            for b in tomorrow_b:
+                lines.append(f"  {b.get('id','batch'):8s}: {b.get('start','?')} 開始 — {b.get('count','?')}件 (予定)")
+    lines.append("")
+
+    # --- エラー ---
+    errs = payload.get("errors", [])
+    if errs:
+        lines.append(f"⚠️ *収集エラー*")
+        for e in errs[:3]:
+            lines.append(f"  - {e[:120]}")
+        lines.append("")
+
+    # --- フッター ---
+    fp = payload.get("file_path", "")
+    wf = payload.get("workflow_id", "")[:8]
+    lines.append(f"_(詳細: `rakuten_status_latest.json` | wf={wf})_")
+
+    return "\n".join(lines)
+
+
+def handle_rakuten_report(msg_data: dict) -> dict:
+    """
+    capで実行: rakuten-statusの結果を#ceo-roomに整形投稿。
+    """
+    task_id = msg_data.get("task_id", "")
+    payload = msg_data.get("payload", {})
+
+    text = _format_rakuten_report(payload)
+
+    # 2500文字上限チェック
+    if len(text) > 2500:
+        text = text[:2450] + "\n...(省略)"
+
+    success = send_message(text, channel=CEO_ROOM_CHANNEL)
+    status  = "sent" if success else "failed"
+
+    # state に report_status を記録
+    if task_id:
+        state_mgr.task_report_sent(task_id, CEO_ROOM_CHANNEL, status=status)
+
+    return {"status": status, "channel": CEO_ROOM_CHANNEL, "report_status": status}
+
+
 HANDLERS = {
-    "test-ping":   handle_test_ping,
-    "ebay-search": handle_ebay_search,
-    "ebay-review": handle_ebay_review,
-    "git-pull":    handle_git_pull,
-    "report":      handle_report,
-    "set-env":     handle_set_env,
-    "ceo-report":  handle_ceo_report,
+    "test-ping":      handle_test_ping,
+    "ebay-search":    handle_ebay_search,
+    "ebay-review":    handle_ebay_review,
+    "git-pull":       handle_git_pull,
+    "report":         handle_report,
+    "set-env":        handle_set_env,
+    "ceo-report":     handle_ceo_report,
+    "rakuten-status": handle_rakuten_status,
+    "rakuten-report": handle_rakuten_report,
 }
 
 
@@ -2155,6 +2454,9 @@ def main():
     ceo_p = subparsers.add_parser("ceo-report", help="eBay候補をCEO報告")
     ceo_p.add_argument("--file", default=None, help="候補JSONファイルパス（省略時はデフォルト）")
 
+    # rakuten-status (ショートカット)
+    subparsers.add_parser("rakuten-status", help="楽天ROOM botのステータスをcyberへ問い合わせ (#ceo-room報告)")
+
     # --- 旧互換コマンド ---
     send_p = subparsers.add_parser("send", help="メッセージ送信（旧互換）")
     send_p.add_argument("message", help="送信するメッセージ")
@@ -2184,6 +2486,9 @@ def main():
         cmd_approve(task_name=args.task, approved_by=args.by)
     elif args.command == "ceo-report":
         cmd_ceo_report(file_path=args.file)
+    elif args.command == "rakuten-status":
+        # ショートカット: rakuten-statusをcyberに送信
+        cmd_send_task(task="rakuten-status", to="cyber")
     elif args.command == "send":
         send_message(args.message, sender=args.sender)
     elif args.command == "receive":
