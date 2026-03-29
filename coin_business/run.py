@@ -129,6 +129,15 @@ def cmd_explore():
     explore_main()
 
 
+def cmd_ebay_search():
+    """eBay仕入候補をAPIで探索し judge_opportunity で判定。
+    使い方:
+        python run.py ebay-search
+    """
+    from scripts.ebay_auction_search import main as ebay_search_main
+    ebay_search_main()
+
+
 def cmd_calc_ref():
     """仕入上限(ref1/ref2)を全件再計算。NULLレコードも補完。
     使い方:
@@ -206,7 +215,8 @@ COMMANDS = {
     "search": cmd_search,
     "stats": cmd_stats,
     "count": cmd_count,
-    "calc-ref": cmd_calc_ref,      # 仕入上限再計算（新規登録）
+    "ebay-search": cmd_ebay_search,  # eBay仕入候補探索・判定
+    "calc-ref": cmd_calc_ref,        # 仕入上限再計算（新規登録）
     "collect": cmd_collect,
     "analyze": cmd_analyze,
     "report": cmd_report,
