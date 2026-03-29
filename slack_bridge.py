@@ -1070,26 +1070,49 @@ def handle_ebay_search(msg_data: dict) -> dict:
     # 新規候補がある場合、ebay-review TASK を _post_send_msg に入れて返す。
     # dispatch_task._run が DONE 送信後に送ることで、受信側の競合状態を防ぐ。
     # （ハンドラ内で直接送ると DONE より先に届き、依存チェック失敗を招く）
+    #
+    # 【Slack長文対策 正式仕様】
+    # Slackには要約のみ送る（候補数・上位10件スリム）。
+    # 詳細は candidates_YYYYMMDD_HHMMSS.json に保存し、ファイルパスをペイロードに含める。
+    # Slack 4000文字制限: 21件フル送信は ~10,650 chars → 切り捨てでJSONパース失敗するため禁止。
     post_msg = None
     if new_matches:
-        # Slack message size limit ~4000 chars: slim candidates to essential display fields only
+        # 1) 全候補をファイル保存（詳細参照用）
+        from datetime import datetime as _dt
+        _ts_str = _dt.now().strftime("%Y%m%d_%H%M%S")
+        candidates_file = DATA_DIR / f"ebay_candidates_{_ts_str}.json"
+        _save_data = {
+            "workflow_id": msg_data.get("workflow_id", ""),
+            "searched_at": data.get("searched_at", ""),
+            "total_count": len(new_matches),
+            "candidates": new_matches,
+        }
+        with open(candidates_file, "w", encoding="utf-8") as _f:
+            json.dump(_save_data, _f, ensure_ascii=False, indent=2)
+        logger.info(f"候補ファイル保存: {candidates_file} ({len(new_matches)}件)")
+
+        # 2) Slack送信はスリム要約のみ（上位10件・必須フィールドのみ）
         _KEEP = {"mgmt_no", "db_line1", "db_grader", "db_grade",
                  "ebay_limit_usd", "ebay_limit_jpy", "bid_count", "ebay_url", "is_new"}
         slim_matches = [{k: v for k, v in m.items() if k in _KEEP}
-                        for m in new_matches[:10]]  # top 10 fits in <4000 chars
+                        for m in new_matches[:10]]  # 上位10件 ≈ 3,258 chars < 4,000
+
         post_msg = make_task_msg(
             from_id=get_sender(),
             to_id="cap",
             task="ebay-review",
             workflow_id=msg_data.get("workflow_id"),   # 親チェーンのID引き継ぎ
             payload={
-                "candidates": slim_matches,
-                "count": len(new_matches),       # actual total (may be >15)
+                "candidates": slim_matches,            # 表示用スリム版（上位10件）
+                "count": len(new_matches),             # 実際の全候補数
                 "total_matches": len(matches),
                 "searched_at": data.get("searched_at", ""),
+                "candidates_file": str(candidates_file),  # 詳細ファイルパス（参照用）
+                "workflow_id": msg_data.get("workflow_id", ""),
             },
         )
-        logger.info(f"ebay-review TASK準備完了: 新規{len(new_matches)}件 (全{len(matches)}マッチ) - DONE後送信")
+        logger.info(f"ebay-review TASK準備完了: 新規{len(new_matches)}件 (上位10件のみSlack送信, "
+                    f"全件: {candidates_file.name}) - DONE後送信")
 
     return {
         "total_searched": data.get("total_searched", 0),
@@ -1101,25 +1124,45 @@ def handle_ebay_search(msg_data: dict) -> dict:
 
 
 def handle_ebay_review(msg_data: dict) -> dict:
-    """候補リストを受け取り、ファイルに保存 + コンソール表示"""
+    """候補リストを受け取り、ファイルに保存 + コンソール表示
+
+    ペイロード仕様（Slack長文対策 正式仕様）:
+      candidates      : スリム候補リスト（上位10件・必須フィールドのみ）
+      count           : 実際の全候補数（Slack上の表示件数と異なる場合あり）
+      candidates_file : サイバーさん上の詳細ファイルパス（参照用）
+      workflow_id     : 親チェーンのworkflow_id
+    """
     payload = msg_data.get("payload", {})
     candidates = payload.get("candidates", [])
     searched_at = payload.get("searched_at", "")
+    total_count = payload.get("count", len(candidates))   # 全候補数（Slack上は上位10件）
+    candidates_file_ref = payload.get("candidates_file", "")  # cyberの詳細ファイルパス
+    wf_id = payload.get("workflow_id") or msg_data.get("workflow_id", "")
 
-    # ファイル保存
+    # ファイル保存（受信した分を保存）
     review_data = {
         "received_at": datetime.now(timezone.utc).isoformat(),
+        "workflow_id": wf_id,
         "searched_at": searched_at,
-        "count": len(candidates),
+        "displayed_count": len(candidates),
+        "total_count": total_count,
+        "candidates_file_on_cyber": candidates_file_ref,  # 詳細参照先
         "candidates": candidates,
     }
     outfile = DATA_DIR / "ebay_review_candidates.json"
     with open(outfile, "w", encoding="utf-8") as f:
         json.dump(review_data, f, ensure_ascii=False, indent=2)
 
+    if candidates_file_ref:
+        logger.info(f"詳細ファイル参照: {candidates_file_ref} (全{total_count}件)")
+
     # コンソールに候補一覧表示
+    _display_count = len(candidates)
+    _note = f"（全{total_count}件中 上位{_display_count}件表示）" if total_count > _display_count else f"（{_display_count}件）"
     print(f"\n{'='*60}")
-    print(f"eBay仕入れ候補（新規 {len(candidates)}件）")
+    print(f"eBay仕入れ候補 {_note}")
+    if candidates_file_ref:
+        print(f"詳細ファイル: {candidates_file_ref}")
     print(f"{'='*60}")
     for i, c in enumerate(candidates, 1):
         print(f"\n{i}. #{c.get('mgmt_no','')} | {c.get('db_line1','')} {c.get('db_grader','')} {c.get('db_grade','')}")
@@ -1132,9 +1175,15 @@ def handle_ebay_review(msg_data: dict) -> dict:
     print(f"    python slack_bridge.py approve --task ebay-review --by cap")
     print(f"{'='*60}\n")
 
-    return {"saved_to": str(outfile), "count": len(candidates),
-            "review_status": "pending",
-            "note": "cap approval required before ceo-report auto-trigger"}
+    return {
+        "saved_to": str(outfile),
+        "displayed_count": len(candidates),
+        "total_count": total_count,
+        "candidates_file_on_cyber": candidates_file_ref,
+        "workflow_id": wf_id,
+        "review_status": "pending",
+        "note": "cap approval required before ceo-report auto-trigger",
+    }
 
 
 def handle_git_pull(msg_data: dict) -> dict:
