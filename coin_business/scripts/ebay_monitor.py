@@ -16,6 +16,7 @@
 """
 
 import json
+import random
 import re
 import sys
 import time
@@ -58,6 +59,11 @@ DEFAULT_QUERIES = [
 
 LOG_DIR = PROJECT_ROOT / "data" / "ebay_monitor"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _random_interval() -> float:
+    """REQUEST_INTERVAL の範囲でランダム待機秒数を返す。"""
+    return random.uniform(REQUEST_INTERVAL[0], REQUEST_INTERVAL[1])
 
 
 # ============================================================

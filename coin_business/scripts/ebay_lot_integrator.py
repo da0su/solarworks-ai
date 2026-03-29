@@ -217,6 +217,21 @@ def integrate_ebay_candidates(
 
     logger.info(f"  [eBay integrator] 変換完了: {len(overseas_lots)}件")
 
+    # mgmt_no で重複除去（同一管理番号が複数ある場合は先勝ち）
+    seen_mgmt: set[str] = set()
+    deduped: list[dict] = []
+    for lot in overseas_lots:
+        mgmt = lot.get("management_no") or ""
+        if mgmt and mgmt in seen_mgmt:
+            logger.debug(f"  [eBay integrator] 重複スキップ: {mgmt}")
+            continue
+        if mgmt:
+            seen_mgmt.add(mgmt)
+        deduped.append(lot)
+    if len(deduped) < len(overseas_lots):
+        logger.info(f"  [eBay integrator] 重複除去: {len(overseas_lots)} → {len(deduped)}件")
+    overseas_lots = deduped
+
     if dry_run:
         logger.info("  [eBay integrator] DRY-RUN: 書き込みスキップ")
         for lot in overseas_lots[:3]:
