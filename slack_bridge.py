@@ -87,6 +87,11 @@ SOURCE_MANUAL = "manual"  # 人手による起動
 STATE_FILE = Path(__file__).parent / "state" / "system_state.json"
 MAX_HISTORY = 50  # recent_historyの最大保持件数
 
+# 定時スケジュール（JST）
+SCHEDULE_SLOTS = ["07:30", "12:30", "18:30"]
+SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"
+SCHEDULE_CHECK_INTERVAL = 60  # 60秒ごとにスロット確認
+
 
 # ============================================================
 # 初期化
@@ -133,6 +138,8 @@ TASK_FLOW: dict[str, dict] = {
     "set-env":        {"requires": None,             "next": None,            "to": "cyber"},
     "rakuten-status": {"requires": None,             "next": "rakuten-report","to": "cyber"},
     "rakuten-report": {"requires": "rakuten-status", "next": None,            "to": "cap"},
+    "daily-check":    {"requires": None,             "next": "daily-report",  "to": "cyber"},
+    "daily-report":   {"requires": "daily-check",    "next": None,            "to": "cap"},
 }
 # 後方互換のため TASK_DEPS も維持
 TASK_DEPS: dict[str, str | None] = {k: v.get("next") for k, v in TASK_FLOW.items()}
@@ -1400,6 +1407,136 @@ def _month_end_check(pool_count: int, daily_avg: int = 95) -> dict:
     }
 
 
+# ============================================================
+# 定時スケジュール管理
+# ============================================================
+def _load_schedule_state() -> dict:
+    """~/.slack_bridge/schedule_state.json を読む。不存在は {}"""
+    try:
+        if SCHEDULE_STATE_FILE.exists():
+            with open(SCHEDULE_STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        pass
+    return {}
+
+
+def _save_schedule_state(state: dict):
+    """schedule_state.json に atomic write"""
+    tmp = SCHEDULE_STATE_FILE.with_suffix(".tmp")
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+        tmp.replace(SCHEDULE_STATE_FILE)
+    except OSError as e:
+        logger.warning(f"schedule_state保存失敗: {e}")
+
+
+def _check_and_fire_schedules():
+    """
+    SCHEDULE_SLOTS の各時刻を確認し、未発火スロットがあれば daily-check を送信。
+    重複発火防止: last_fired_date == today かつ status in (running, done) ならスキップ。
+    """
+    now   = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    state = _load_schedule_state()
+
+    for slot in SCHEDULE_SLOTS:
+        hour, minute = map(int, slot.split(":"))
+        slot_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now < slot_time:
+            continue  # まだ時刻に達していない
+
+        slot_entry = state.get(slot, {})
+        last_fired = slot_entry.get("last_fired_date", "")
+        slot_status = slot_entry.get("status", "")
+
+        if last_fired == today and slot_status in ("running", "done"):
+            continue  # 重複発火防止
+
+        # 発火
+        wf_id = str(uuid.uuid4())
+        my_sender = get_sender()
+        task_msg = make_task_msg(
+            from_id=my_sender, to_id="cyber",
+            task="daily-check",
+            payload={"slot": slot, "date": today},
+            workflow_id=wf_id,
+            source=SOURCE_AUTO,
+        )
+        success = send_bridge_msg(task_msg)
+        if success:
+            add_pending_task(task_msg)
+            task_id = task_msg["task_id"]
+            state_mgr.task_queued(task_id, "daily-check", my_sender, "cyber",
+                                  workflow_id=wf_id)
+            state[slot] = {
+                "last_fired_date": today,
+                "status":          "running",
+                "workflow_id":     wf_id,
+                "task_id":         task_id,
+                "fired_at":        now.isoformat(),
+            }
+            _save_schedule_state(state)
+            logger.info(f"[scheduler] {slot} fired: daily-check wf={wf_id[:8]}")
+            log_event("schedule_fired", {"slot": slot, "workflow_id": wf_id})
+        else:
+            logger.warning(f"[scheduler] {slot} 発火失敗 (Slack送信エラー)")
+
+
+# ============================================================
+# コインリサーチ ステータス収集
+# ============================================================
+def _collect_coin_status(coin_dir: Path) -> tuple[dict, list]:
+    """
+    coin_business/run.py count + stats --clean を実行し、slim dictを返す。
+    Returns: (coin_data, errors_list)
+    """
+    import re
+    errors = []
+    coin_data: dict = {"status": "OK", "total_records": 0,
+                       "recent_3m_count": None, "avg_price_jpy": None}
+
+    # --- count ---
+    r_count = subprocess.run(
+        ["python", "run.py", "count"],
+        cwd=str(coin_dir), capture_output=True, text=True,
+        timeout=30, check=False, encoding="utf-8", errors="replace",
+    )
+    if r_count.returncode != 0:
+        errors.append({"step": "coin-count", "stderr": r_count.stderr[:300]})
+        coin_data["status"] = "WARNING"
+    else:
+        m = re.search(r"合計\s+([\d,]+)件", r_count.stdout)
+        if m:
+            coin_data["total_records"] = int(m.group(1).replace(",", ""))
+
+    # --- stats --clean --time ---
+    r_stats = subprocess.run(
+        ["python", "run.py", "stats", "--clean", "--time"],
+        cwd=str(coin_dir), capture_output=True, text=True,
+        timeout=60, check=False, encoding="utf-8", errors="replace",
+    )
+    if r_stats.returncode != 0:
+        errors.append({"step": "coin-stats", "stderr": r_stats.stderr[:300]})
+        coin_data["status"] = "WARNING"
+    else:
+        # 直近3か月行: ">>>  直近3か月     5,000件    150,000円    100,000円"
+        m3 = re.search(
+            r">>>\s*直近3か月\s+([\d,]+)件\s+([\d,]+)円\s+([\d,]+)円",
+            r_stats.stdout
+        )
+        if m3:
+            coin_data["recent_3m_count"] = int(m3.group(1).replace(",", ""))
+            coin_data["avg_price_jpy"]   = int(m3.group(2).replace(",", ""))
+            coin_data["med_price_jpy"]   = int(m3.group(3).replace(",", ""))
+
+    if not errors:
+        coin_data["status"] = "OK"
+    return coin_data, errors
+
+
 def handle_rakuten_status(msg_data: dict) -> dict:
     """
     楽天ROOM botの全体ステータスを収集してcapに報告。
@@ -1603,6 +1740,309 @@ def handle_rakuten_report(msg_data: dict) -> dict:
     return {"status": status, "channel": CEO_ROOM_CHANNEL, "report_status": status}
 
 
+# ============================================================
+# 全事業 日次チェック ハンドラ
+# ============================================================
+def handle_daily_check(msg_data: dict) -> dict:
+    """
+    cyberで実行: 全事業のステータスを収集してcapにdaily-reportを送信。
+    07:30 / 12:30 / 18:30 の定時スロットから自動発火。
+    """
+    import time as _time
+    start_time = _time.time()
+    bot_dir  = Path(__file__).parent / "rakuten-room" / "bot"
+    coin_dir = Path(__file__).parent / "coin_business"
+    wf_id    = msg_data.get("workflow_id", "")
+    payload_in = msg_data.get("payload", {})
+    slot     = payload_in.get("slot", "??:??")
+
+    # errors を事業単位で分離 (CTO要件)
+    errors: dict = {"rakuten": [], "coin": [], "web": []}
+
+    # -------------------------------------------------------
+    # 1. 楽天ROOM (既存ヘルパー再利用)
+    # -------------------------------------------------------
+    q_result = subprocess.run(
+        ["python", "run.py", "queue-status"],
+        cwd=str(bot_dir), capture_output=True, text=True,
+        timeout=30, check=False, encoding="utf-8", errors="replace",
+    )
+    queue_stats = _parse_queue_stats(q_result.stdout) if q_result.returncode == 0 else {}
+    if q_result.returncode != 0:
+        errors["rakuten"].append({"step": "queue-status",
+                                  "stderr": q_result.stderr[:200]})
+
+    h_result = subprocess.run(
+        ["python", "run.py", "health"],
+        cwd=str(bot_dir), capture_output=True, text=True,
+        timeout=30, check=False, encoding="utf-8", errors="replace",
+    )
+    health_stats = (_parse_health_stats(h_result.stdout)
+                    if h_result.returncode == 0 else {"status": "UNKNOWN"})
+    if h_result.returncode != 0:
+        errors["rakuten"].append({"step": "health",
+                                  "stderr": h_result.stderr[:200]})
+
+    today_batches, tomorrow_batches, schedule_unknown, schedule_warn = _load_schedule(bot_dir)
+    if schedule_unknown or schedule_warn:
+        errors["rakuten"].append({"step": "schedule", "warn": schedule_warn})
+
+    pool_count = health_stats.get("pool_size", 0)
+    month_end  = _month_end_check(pool_count)
+
+    if schedule_unknown:
+        try:
+            _s = state_mgr.load()
+            _s["next_action"] = f"[WARNING] daily-check: {schedule_warn}"
+            state_mgr.save(_s)
+        except Exception:
+            pass
+
+    rakuten_data = {
+        "queue":     queue_stats,
+        "health":    health_stats,
+        "schedule":  {"today": today_batches, "tomorrow": tomorrow_batches,
+                      "unknown": schedule_unknown},
+        "month_end": month_end,
+    }
+
+    # -------------------------------------------------------
+    # 2. コインリサーチ
+    # -------------------------------------------------------
+    coin_data, coin_errors = _collect_coin_status(coin_dir)
+    errors["coin"].extend(coin_errors)
+
+    # -------------------------------------------------------
+    # 3. WEB事業 (placeholder)
+    # -------------------------------------------------------
+    web_data = {"status": "not_implemented"}
+
+    # -------------------------------------------------------
+    # 4. 実行時間計測 (CTO要件)
+    # -------------------------------------------------------
+    elapsed_sec  = round(_time.time() - start_time, 1)
+    timeout_flag = elapsed_sec > 25   # 30s timeout の 5s 前
+
+    # -------------------------------------------------------
+    # 5. 全データを daily_check_latest.json に保存
+    # -------------------------------------------------------
+    status_file = DATA_DIR / "daily_check_latest.json"
+    collected_at = datetime.now(timezone.utc).isoformat()
+    full_data = {
+        "collected_at": collected_at,
+        "workflow_id":  wf_id,
+        "slot":         slot,
+        "rakuten":      {**rakuten_data,
+                         "queue_stdout":   q_result.stdout,
+                         "health_stdout":  h_result.stdout},
+        "coin":         coin_data,
+        "web":          web_data,
+        "errors":       errors,
+        "elapsed_sec":  elapsed_sec,
+        "timeout_flag": timeout_flag,
+    }
+    try:
+        with open(status_file, "w", encoding="utf-8") as f:
+            json.dump(full_data, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        errors["rakuten"].append({"step": "save_file", "stderr": str(e)})
+
+    # -------------------------------------------------------
+    # 6. slim payload 構築 (< 2500 chars)
+    # -------------------------------------------------------
+    slim = {
+        "slot":        slot,
+        "date":        datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "rakuten":     rakuten_data,
+        "coin":        coin_data,
+        "web":         web_data,
+        "errors":      errors,
+        "elapsed_sec": elapsed_sec,
+        "timeout_flag": timeout_flag,
+        "file_path":   str(status_file),
+        "workflow_id": wf_id,
+        "collected_at": collected_at,
+    }
+
+    # -------------------------------------------------------
+    # 7. daily-report を _post_send_msg で DONE後に自動送信
+    # -------------------------------------------------------
+    post_msg = make_task_msg(
+        from_id=get_sender(), to_id="cap",
+        task="daily-report",
+        workflow_id=wf_id,
+        payload=slim,
+    )
+
+    return {
+        "collected_at":   collected_at,
+        "file_path":      str(status_file),
+        "slot":           slot,
+        "elapsed_sec":    elapsed_sec,
+        "timeout_flag":   timeout_flag,
+        "health_status":  health_stats.get("status", "UNKNOWN"),
+        "coin_status":    coin_data.get("status", "UNKNOWN"),
+        "errors":         errors,
+        "_post_send_msg": post_msg,
+    }
+
+
+def _format_daily_report(payload: dict) -> str:
+    """slim payload を全事業 CEO向けSlackメッセージに整形"""
+    from datetime import date as _date
+    lines = []
+    date_str = payload.get("date", _date.today().isoformat())
+    slot     = payload.get("slot", "??:??")
+
+    # --- 月末警告（先頭） ---
+    rakuten = payload.get("rakuten", {})
+    me = rakuten.get("month_end", {})
+    if me.get("flag"):
+        days   = me.get("days_left", 0)
+        pool   = me.get("pool_count", 0)
+        needed = me.get("needed", 0)
+        short  = me.get("short", 0)
+        lines.append(f"⚠️ *月末チェック* [月末まで{days}日]")
+        lines.append(f"  プール残高: {pool}件 / 必要推定: {needed}件")
+        if short > 0:
+            lines.append(f"  → ⚡ {short}件不足！`python run.py replenish`")
+        else:
+            lines.append(f"  → ✅ プール残量は十分です")
+        lines.append("")
+
+    # --- ヘッダー ---
+    lines.append(f"📊 *全事業 定時レポート* ({slot} / {date_str})")
+    lines.append("")
+
+    # --- 楽天ROOM ---
+    lines.append("🏠 *楽天ROOM*")
+    q = rakuten.get("queue", {})
+    h = rakuten.get("health", {})
+    if q:
+        total  = q.get("total", "?")
+        posted = q.get("posted", "?")
+        failed = q.get("failed", "?")
+        queued = q.get("queued", "?")
+        lines.append(f"  キュー: 合計{total}件 | 成功{posted} | 失敗{failed} | 待機{queued}")
+    if h:
+        hs      = h.get("status", "UNKNOWN")
+        icon    = {"OK": "✅", "WARNING": "⚠️", "CRITICAL": "🚨"}.get(hs, "❓")
+        pool_sz = h.get("pool_size", "?")
+        suc_r   = h.get("success_rate", 0)
+        suc_pct = f"{suc_r * 100:.0f}%" if isinstance(suc_r, float) else "?"
+        lines.append(f"  ヘルス: {icon} {hs} | プール{pool_sz}件 | 成功率{suc_pct}")
+    sched = rakuten.get("schedule", {})
+    if sched.get("unknown"):
+        lines.append("  スケジュール: ⚠️ 未生成か破損")
+    else:
+        today_b = sched.get("today", [])
+        if today_b:
+            parts = []
+            for b in today_b:
+                st_icon = {"completed": "✅", "running": "🔄", "failed": "❌"}.get(
+                    b.get("status", ""), "⏳")
+                parts.append(f"{b.get('id','?')} {b.get('start','?')}({b.get('count','?')}件{st_icon})")
+            lines.append(f"  スケジュール: {' / '.join(parts)}")
+    lines.append("")
+
+    # --- コインリサーチ ---
+    coin = payload.get("coin", {})
+    lines.append("🪙 *コインリサーチ*")
+    total_r = coin.get("total_records", 0)
+    lines.append(f"  DBレコード: {total_r:,}件")
+    r3 = coin.get("recent_3m_count")
+    if r3 is not None:
+        avg_p = coin.get("avg_price_jpy")
+        med_p = coin.get("med_price_jpy")
+        avg_s = f"平均¥{avg_p:,}" if avg_p else ""
+        med_s = f"中央¥{med_p:,}" if med_p else ""
+        detail = " | ".join(filter(None, [f"直近3か月: {r3:,}件", avg_s, med_s]))
+        lines.append(f"  {detail}")
+    c_status = coin.get("status", "UNKNOWN")
+    if c_status != "OK":
+        lines.append(f"  ⚠️ coin status: {c_status}")
+    lines.append("")
+
+    # --- WEB事業 ---
+    web = payload.get("web", {})
+    lines.append("🌐 *WEB事業*")
+    w_status = web.get("status", "?")
+    if w_status == "not_implemented":
+        lines.append("  (未実装)")
+    else:
+        lines.append(f"  ステータス: {w_status}")
+    lines.append("")
+
+    # --- エラー ---
+    errors = payload.get("errors", {})
+    all_errs = []
+    for biz, errs in (errors.items() if isinstance(errors, dict) else []):
+        for e in errs:
+            step = e.get("step", "?")
+            msg  = e.get("stderr", e.get("warn", ""))[:80]
+            all_errs.append(f"[{biz}/{step}] {msg}")
+    if all_errs:
+        lines.append("⚠️ *収集エラー*")
+        for e in all_errs[:5]:
+            lines.append(f"  - {e}")
+        lines.append("")
+    else:
+        lines.append("❌ エラー: なし")
+        lines.append("")
+
+    # --- timeout警告 ---
+    if payload.get("timeout_flag"):
+        elapsed = payload.get("elapsed_sec", 0)
+        lines.append(f"⚠️ *タイムアウト警告*: 収集時間 {elapsed}秒 (基準25秒超)")
+        lines.append("")
+
+    # --- フッター ---
+    wf = payload.get("workflow_id", "")[:8]
+    lines.append(f"_(詳細: `daily_check_latest.json` | wf={wf})_")
+
+    return "\n".join(lines)
+
+
+def handle_daily_report(msg_data: dict) -> dict:
+    """
+    capで実行: daily-checkの結果を#ceo-roomに整形投稿。
+    """
+    task_id    = msg_data.get("task_id", "")
+    payload    = msg_data.get("payload", {})
+    wf_id      = msg_data.get("workflow_id", "")
+    slot       = payload.get("slot", "??:??")
+
+    text = _format_daily_report(payload)
+
+    # 2500文字上限チェック
+    if len(text) > 2500:
+        text = text[:2450] + "\n...(省略)"
+
+    success = send_message(text, channel=CEO_ROOM_CHANNEL)
+    status  = "sent" if success else "failed"
+
+    # state に report_status を記録
+    if task_id:
+        state_mgr.task_report_sent(task_id, CEO_ROOM_CHANNEL, status=status)
+
+    # schedule_state の status を "done" に更新
+    try:
+        sched_state = _load_schedule_state()
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        # wf_id で対応するスロットを検索して更新
+        for s_slot, s_entry in sched_state.items():
+            if (s_entry.get("workflow_id") == wf_id
+                    and s_entry.get("last_fired_date") == today_str):
+                s_entry["status"] = "done"
+                break
+        _save_schedule_state(sched_state)
+    except Exception as e:
+        logger.warning(f"schedule_state done更新失敗: {e}")
+
+    return {"status": status, "channel": CEO_ROOM_CHANNEL,
+            "report_status": status, "slot": slot}
+
+
 HANDLERS = {
     "test-ping":      handle_test_ping,
     "ebay-search":    handle_ebay_search,
@@ -1613,6 +2053,8 @@ HANDLERS = {
     "ceo-report":     handle_ceo_report,
     "rakuten-status": handle_rakuten_status,
     "rakuten-report": handle_rakuten_report,
+    "daily-check":    handle_daily_check,
+    "daily-report":   handle_daily_report,
 }
 
 
@@ -1809,6 +2251,7 @@ def watch_channel(interval: int = 5):
     last_seen_ts = get_last_seen_ts()
     my_sender = get_sender()
     last_retry_check = time.time()
+    last_schedule_check = time.time()
 
     while True:
         try:
@@ -1851,6 +2294,15 @@ def watch_channel(interval: int = 5):
             if now - last_retry_check >= RETRY_CHECK_INTERVAL:
                 check_pending_tasks()
                 last_retry_check = now
+
+            # --- 定時スケジュールチェック（60秒ごと、cap のみ発火） ---
+            if now - last_schedule_check >= SCHEDULE_CHECK_INTERVAL:
+                if my_sender == "cap":
+                    try:
+                        _check_and_fire_schedules()
+                    except Exception as se:
+                        logger.error(f"定時スケジュールチェックエラー: {se}")
+                last_schedule_check = now
 
         except Exception as e:
             logger.error(f"監視ループエラー: {e}")
@@ -2457,6 +2909,9 @@ def main():
     # rakuten-status (ショートカット)
     subparsers.add_parser("rakuten-status", help="楽天ROOM botのステータスをcyberへ問い合わせ (#ceo-room報告)")
 
+    # daily-check (ショートカット)
+    subparsers.add_parser("daily-check", help="全事業定時チェックをcyberへ送信 (#ceo-room報告)")
+
     # --- 旧互換コマンド ---
     send_p = subparsers.add_parser("send", help="メッセージ送信（旧互換）")
     send_p.add_argument("message", help="送信するメッセージ")
@@ -2489,6 +2944,9 @@ def main():
     elif args.command == "rakuten-status":
         # ショートカット: rakuten-statusをcyberに送信
         cmd_send_task(task="rakuten-status", to="cyber")
+    elif args.command == "daily-check":
+        # ショートカット: daily-checkをcyberに送信（手動トリガー）
+        cmd_send_task(task="daily-check", to="cyber")
     elif args.command == "send":
         send_message(args.message, sender=args.sender)
     elif args.command == "receive":
