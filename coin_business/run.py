@@ -180,7 +180,7 @@ def cmd_overseas_watch():
     import logging
 
     parser = argparse.ArgumentParser(prog="run.py overseas-watch", add_help=False)
-    parser.add_argument("--source",     default=None,  help="監視ソース (heritage/numisbids/all)")
+    parser.add_argument("--source",     default=None,  help="監視ソース (heritage/numisbids/noble/noonans/spink/sincona/all)")
     parser.add_argument("--dry-run",    action="store_true")
     parser.add_argument("--schedule",   action="store_true", help="監視スケジュール表示のみ")
     parser.add_argument("--candidates", action="store_true", help="daily_candidates 現状確認")
@@ -254,9 +254,22 @@ def cmd_overseas_watch():
         except Exception as e:
             logger.warning(f"  [Heritage] 取得エラー: {e}")
 
-    # ── NumisBids (Noble / Noonans / Spink) — 次点実装予定
-    if source in ("all", "numisbids"):
-        logger.info("  [NumisBids] 未実装 (P1フェーズで追加予定)")
+    # ── NumisBids (Noble / Noonans / Spink / SINCONA)
+    if source in ("all", "numisbids", "noble", "noonans", "spink", "sincona"):
+        try:
+            from scripts.numisbids_fetcher import fetch_numisbids_lots, NUMISBIDS_SOURCES
+            nb_sources = None  # all
+            if source not in ("all", "numisbids"):
+                nb_sources = [source]
+            numisbids_lots = fetch_numisbids_lots(
+                sources=nb_sources,
+                dry_run=args.dry_run,
+                max_pages=args.pages,
+            )
+            all_lots.extend(numisbids_lots)
+            logger.info(f"  [NumisBids] {len(numisbids_lots)}件取得")
+        except Exception as e:
+            logger.warning(f"  [NumisBids] 取得エラー: {e}")
 
     if not all_lots:
         logger.info("取得ロット: 0件 — 終了")

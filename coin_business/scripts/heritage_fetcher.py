@@ -44,6 +44,7 @@ from auction_status_checker import (
     get_all_auctions_with_status,
     STATUS_ACTIVE, STATUS_IMMINENT,
 )
+from auction_cost_calculator import enrich_lot_with_cost
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,6 @@ REQUEST_DELAY  = 2.5   # 秒
 MAX_PAGES      = 5     # 1オークション最大ページ数
 LOTS_PER_PAGE  = 100   # Heritage 1ページ最大件数
 USD_JPY_RATE   = 150.0 # 暫定為替レート（fetch_daily_rates.py で更新予定）
-SHIPPING_JPY   = 2_000 # US転送費（概算）
-IMPORT_TAX_RATE = 1.10 # 関税込み係数
 
 # Heritage のロット検索エンドポイント（catalog mode）
 HERITAGE_SEARCH_BASE = "https://coins.ha.com/c/search/results.zx"
@@ -322,29 +321,18 @@ def _parse_html_lots(html: str, sale_no: str) -> list[dict]:
     return lots
 
 
-# ── 基本コスト計算 ─────────────────────────────────────────────────
-
-def _calc_cost_jpy(price_usd: float, fx_rate: float = USD_JPY_RATE) -> float:
-    """
-    eBay準拠のコスト計算:
-      仕入コスト = (USD × 為替) × 1.10 + 転送費¥2,000
-    """
-    if price_usd <= 0:
-        return 0.0
-    return price_usd * fx_rate * IMPORT_TAX_RATE + SHIPPING_JPY
-
-
 # ── lots → overseas_lot スキーマ変換 ─────────────────────────────
 
 def _to_overseas_lot(raw: dict, auction: dict, fx_rate: float = USD_JPY_RATE) -> dict:
     """
     Heritage から取得した生ロットデータを overseas_lot 標準スキーマに変換。
+    コスト計算は auction_cost_calculator.enrich_lot_with_cost() に委譲。
+    （Heritage は ceo_confirmed=False のため estimated_cost_jpy=None となる）
     """
-    price_usd   = float(raw.get("current_price") or 0)
-    cost_jpy    = _calc_cost_jpy(price_usd, fx_rate)
-    price_jpy   = int(price_usd * fx_rate) if price_usd > 0 else 0
+    price_usd = float(raw.get("current_price") or 0)
+    price_jpy = int(price_usd * fx_rate) if price_usd > 0 else 0
 
-    return {
+    lot = {
         # ── 出所情報
         "source":         "heritage",
         "auction_house":  "Heritage Auctions",
@@ -377,8 +365,6 @@ def _to_overseas_lot(raw: dict, auction: dict, fx_rate: float = USD_JPY_RATE) ->
         "judgment":           "pending",
         "judgment_reason":    None,
         "buy_limit_jpy":      None,   # coin_matcher で設定
-        "estimated_cost_jpy": cost_jpy if cost_jpy > 0 else None,
-        "estimated_margin_pct": None,
 
         # ── 運用メタ
         "priority":          auction.get("priority", 1),
@@ -389,6 +375,11 @@ def _to_overseas_lot(raw: dict, auction: dict, fx_rate: float = USD_JPY_RATE) ->
         # ── dedup (candidates_writer で生成)
         "dedup_key": None,
     }
+
+    # auction_fee_rules.json に基づくコスト計算
+    # Heritage は ceo_confirmed=False → estimated_cost_jpy=None (安全ロック)
+    lot = enrich_lot_with_cost(lot, fx_rate=fx_rate, require_confirmed=True)
+    return lot
 
 
 # ── メイン取得関数 ─────────────────────────────────────────────────
