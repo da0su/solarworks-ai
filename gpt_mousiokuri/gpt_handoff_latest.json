@@ -1,0 +1,74 @@
+{
+  "generated_at": "2026-03-29 16:11 JST",
+  "date": "2026-03-29",
+  "company_direction": "CEO→CAP（代表COO）→cyber 3層自動運用。楽天ROOM自動投稿+コイン仕入れリサーチ。",
+  "progress": {
+    "daily_check": "07:30/12:30/18:30 定時チェック稼働中",
+    "schedule_slots": {
+      "07:30": "not_fired",
+      "12:30": "not_fired",
+      "18:30": "not_fired"
+    },
+    "rakuten": "health=CRITICAL / pool=0件",
+    "coin": "DB=0件",
+    "ebay": "候補21件 / 最終検索=2026-03-28 17:24"
+  },
+  "current_issues": [
+    {
+      "task": "unknown",
+      "error": "Unknown task: rakuten-status",
+      "at": "2026-03-29T06:01"
+    },
+    {
+      "task": "rakuten-status",
+      "error": "Unknown task: rakuten-status",
+      "at": "2026-03-29T06:01"
+    },
+    {
+      "task": "unknown",
+      "error": "Unknown task: rakuten-status",
+      "at": "2026-03-29T06:00"
+    },
+    {
+      "task": "rakuten-status",
+      "error": "Unknown task: rakuten-status",
+      "at": "2026-03-29T06:00"
+    }
+  ],
+  "next_priority": [
+    "cap/cyber watch 常時起動維持",
+    "daily-check 定時発火 監視 (schedule_state.json 確認)",
+    "ebay-review 承認待ち (21件)"
+  ],
+  "risks": [
+    "楽天ROOM health=CRITICAL ⚠️",
+    "schedule_state.json 未生成の場合は cap watch 再起動が必要"
+  ],
+  "operational_knowledge": [
+    "Slack 2500字制限: slim payload のみ送信、詳細は*_latest.jsonを参照",
+    "重複発火防止: schedule_state.json の status=done で制御",
+    "セッション引継ぎ: このファイル(daily_handoff.json)を読む",
+    "cyberは git pull 後に watch 再起動で最新コードを読み込む"
+  ],
+  "behavioral_notes": {
+    "ceo": "batを押すだけ。日次は #ceo-room を確認。判断事項のみCAPに指示。",
+    "cap": "代表COO。watch常時起動。daily-handoff で日次申し送り生成。",
+    "cyber": "実処理担当。watch常時起動。git pullで最新コード維持。ebay-search実行役。"
+  },
+  "decision_required": [
+    "ebay-review 承認待ち (21件): python slack_bridge.py approve --task ebay-review --by cap",
+    "楽天ROOM health=CRITICAL: python run.py health で詳細確認"
+  ],
+  "state_snapshot": {
+    "system_status": "idle",
+    "current_tasks": 0,
+    "recent_errors": 4
+  },
+  "data_files": {
+    "daily_check_latest": "C:\\Users\\砂田　紘幸\\.slack_bridge\\daily_check_latest.json",
+    "rakuten_status_latest": "C:\\Users\\砂田　紘幸\\.slack_bridge\\rakuten_status_latest.json",
+    "coin_status_latest": "C:\\Users\\砂田　紘幸\\.slack_bridge\\coin_status_latest.json",
+    "ebay_candidates": "C:\\Users\\砂田　紘幸\\.slack_bridge\\ebay_review_candidates.json",
+    "handoff": "C:\\Users\\砂田　紘幸\\.slack_bridge\\daily_handoff.json"
+  }
+}
