@@ -160,6 +160,125 @@ def cmd_calc_ref():
     calc_main()
 
 
+def cmd_overseas_watch():
+    """
+    全世界オークション常時監視 (Layer 1〜4 統合実行)
+
+    auction_schedule.json を参照し、開催中・直前オークションのロットを取得、
+    judgment → daily_candidates 書き込み → Slack通知 を一括実行。
+
+    使い方:
+        python run.py overseas-watch                     # 全ソース監視
+        python run.py overseas-watch --source heritage   # Heritage のみ
+        python run.py overseas-watch --dry-run           # テスト実行（DB/Slack なし）
+        python run.py overseas-watch --schedule          # 監視スケジュール確認
+        python run.py overseas-watch --candidates        # daily_candidates 現状確認
+        python run.py overseas-watch --ceo-list          # CEO判断リスト表示
+    """
+    import sys
+    import argparse
+    import logging
+
+    parser = argparse.ArgumentParser(prog="run.py overseas-watch", add_help=False)
+    parser.add_argument("--source",     default=None,  help="監視ソース (heritage/numisbids/all)")
+    parser.add_argument("--dry-run",    action="store_true")
+    parser.add_argument("--schedule",   action="store_true", help="監視スケジュール表示のみ")
+    parser.add_argument("--candidates", action="store_true", help="daily_candidates 現状確認")
+    parser.add_argument("--ceo-list",   action="store_true", help="CEO判断リスト表示")
+    parser.add_argument("--detail",     default=None,  help="管理番号で詳細表示")
+    parser.add_argument("--pages",      type=int, default=5, help="1オークション最大ページ数")
+
+    # run.py コマンドの後続引数をパース
+    args, _ = parser.parse_known_args(sys.argv[2:])
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+    logger = logging.getLogger("overseas_watch")
+
+    # ── --schedule: スケジュール確認のみ
+    if args.schedule:
+        from scripts.auction_status_checker import print_schedule_summary, get_active_auctions
+        print_schedule_summary()
+        actives = get_active_auctions()
+        print(f"今すぐ監視すべき: {len(actives)}件")
+        return
+
+    # ── --candidates: daily_candidates 現状確認
+    if args.candidates:
+        from scripts.candidates_writer import print_candidate_summary
+        print_candidate_summary()
+        return
+
+    # ── --ceo-list: CEO判断リスト
+    if args.ceo_list:
+        from scripts.candidates_writer import get_ceo_list
+        ceo = get_ceo_list()
+        if not ceo:
+            print("CEO判断待ち案件: なし")
+            return
+        print(f"\n=== CEO判断リスト ({len(ceo)}件) ===\n")
+        for i, c in enumerate(ceo, 1):
+            print(f"{i:2}. {c.get('lot_title', '')[:55]}")
+            print(f"     仕入推定: ¥{c.get('estimated_cost_jpy') or 0:,.0f}  "
+                  f"上限: ¥{c.get('buy_limit_jpy') or 0:,.0f}")
+            print(f"     理由: {c.get('judgment_reason', '')[:60]}")
+            print(f"     {c.get('auction_house', '')} | {c.get('lot_url', '')[:60]}")
+            print()
+        return
+
+    # ── メイン監視実行
+    from scripts.auction_status_checker import get_active_auctions
+    actives = get_active_auctions()
+
+    if not actives:
+        logger.info("現在監視対象のオークションなし (active/imminent なし)")
+        return
+
+    logger.info(f"監視対象: {len(actives)}件")
+    for a in actives:
+        logger.info(f"  {a.get('name', '')[:50]} [{a.get('_status')}] "
+                    f"→ {a.get('_interval_min')}分ごと")
+
+    all_lots = []
+
+    # ── Heritage
+    source = (args.source or "all").lower()
+    if source in ("all", "heritage"):
+        try:
+            from scripts.heritage_fetcher import fetch_heritage_lots
+            heritage_lots = fetch_heritage_lots(dry_run=args.dry_run, max_pages=args.pages)
+            all_lots.extend(heritage_lots)
+            logger.info(f"  [Heritage] {len(heritage_lots)}件取得")
+        except Exception as e:
+            logger.warning(f"  [Heritage] 取得エラー: {e}")
+
+    # ── NumisBids (Noble / Noonans / Spink) — 次点実装予定
+    if source in ("all", "numisbids"):
+        logger.info("  [NumisBids] 未実装 (P1フェーズで追加予定)")
+
+    if not all_lots:
+        logger.info("取得ロット: 0件 — 終了")
+        return
+
+    logger.info(f"合計取得: {len(all_lots)}件 → daily_candidates へ書き込み")
+
+    # ── candidates_writer で判定・DB書き込み・Slack通知
+    from scripts.candidates_writer import write_candidates
+    result = write_candidates(all_lots, dry_run=args.dry_run)
+
+    logger.info(
+        f"\n=== overseas-watch 完了 ===\n"
+        f"  取得: {len(all_lots)}件\n"
+        f"  OK:     {result.get('ok', 0)}件\n"
+        f"  REVIEW: {result.get('review', 0)}件\n"
+        f"  CEO判断: {result.get('ceo', 0)}件\n"
+        f"  NG:     {result.get('ng', 0)}件\n"
+        f"  エラー: {result.get('error', 0)}件"
+    )
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -228,8 +347,9 @@ COMMANDS = {
     "stats": cmd_stats,
     "count": cmd_count,
     "ebay-search":     cmd_ebay_search,    # eBay仕入候補探索・判定
-    "overseas-fetch":  cmd_overseas_fetch, # 海外オークション落札データ取得（P0-1）
-    "calc-ref":        cmd_calc_ref,       # 仕入上限再計算
+    "overseas-fetch":  cmd_overseas_fetch,  # 海外オークション落札済みデータ取得
+    "overseas-watch":  cmd_overseas_watch,  # 全世界オークション常時監視 (Layer 1-4)
+    "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,
     "report": cmd_report,
