@@ -149,40 +149,35 @@ def _parse_pcgs_date(date_str: str) -> Optional[str]:
 
 # ── レコード変換 ─────────────────────────────────────────────
 
-def _parse_apr_response(data: dict, cert_number: str, source_label: str = "pcgs") -> list[dict]:
+def _parse_apr_response(data: dict, cert_number: str, mgmt_no: str = "") -> list[dict]:
     """
-    PCGS API レスポンスを market_transactions 形式に変換
+    PCGS API レスポンスを pcgs_auction_reference テーブル形式に変換。
+    （market_transactions には混ぜない。補助参照専用）
     """
     from supabase_client import make_dedup_key
 
     records = []
     auctions = data.get("Auctions") or []
-    coin_name = str(data.get("Name") or "")
-    grade_str = str(data.get("Grade") or "")
+    coin_name   = str(data.get("Name") or "")
+    grade_str   = str(data.get("Grade") or "")
     cert_number = str(cert_number or "")
-    pcgs_no   = data.get("PCGSNo", "")
-
-    year_m = re.search(r"\b(1[0-9]{3}|20[0-9]{2})\b", coin_name)
-    year   = year_m.group(1) if year_m else ""
 
     for auction in auctions:
         price_usd = float(auction.get("Price") or 0)
         if price_usd <= 0:
             continue
 
-        sold_date = _parse_pcgs_date(auction.get("Date", ""))
-        lot_url   = auction.get("AuctionLotUrl") or ""
-        auctioneer = auction.get("Auctioneer", "")
-        sale_name  = auction.get("SaleName", "")
+        sold_date  = _parse_pcgs_date(auction.get("Date", ""))
+        lot_url    = auction.get("AuctionLotUrl") or ""
+        auctioneer = str(auction.get("Auctioneer") or "")
+        sale_name  = str(auction.get("SaleName") or "")
         lot_no     = str(auction.get("LotNo") or "")
         is_cac     = bool(auction.get("IsCAC", False))
 
-        title = f"{coin_name} {grade_str}"
-        if auctioneer:
-            title += f" [{auctioneer}]"
+        title = f"{coin_name} {grade_str}".strip()
 
         dedup_key = make_dedup_key(
-            source=source_label,
+            source="pcgs",
             url=lot_url or None,
             title=title,
             price=int(price_usd),
@@ -190,24 +185,19 @@ def _parse_apr_response(data: dict, cert_number: str, source_label: str = "pcgs"
         )
 
         records.append({
-            "source":      source_label,
-            "platform":    "pcgs",
-            "title":       title,
-            "price_jpy":   0,          # USD→JPY換算は stats 側で対応
-            "price_usd":   price_usd,
-            "sold_date":   sold_date,
-            "url":         lot_url or None,
-            "grader":      "PCGS",
-            "grade":       grade_str,
-            "year":        year,
-            "dedup_key":   dedup_key,
-            # 拡張フィールド（市場分析用）
-            "_pcgs_no":    pcgs_no,
-            "_cert_no":    cert_number,
-            "_auctioneer": auctioneer,
-            "_sale_name":  sale_name,
-            "_lot_no":     lot_no,
-            "_is_cac":     is_cac,
+            "management_no": mgmt_no or None,
+            "cert_number":   cert_number,
+            "coin_name":     coin_name,
+            "grade":         grade_str,
+            "auctioneer":    auctioneer or None,
+            "lot_no":        lot_no or None,
+            "sale_name":     sale_name or None,
+            "sold_date":     sold_date,
+            "price_usd":     price_usd,
+            "price_jpy":     None,   # USD→JPY換算は参照時に実施
+            "is_cac":        is_cac,
+            "auction_url":   lot_url or None,
+            "dedup_key":     dedup_key,
         })
 
     return records
@@ -318,8 +308,8 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
             skip_count += 1
             continue
 
-        # Step 2: cert単位のAPR
-        cert_records = _parse_apr_response(data, cert_number, source_label="pcgs")
+        # Step 2: cert単位のAPR → pcgs_auction_reference 形式
+        cert_records = _parse_apr_response(data, cert_number, mgmt_no=mgmt_no)
 
         # Step 3: PCGSNoが取得できた場合、同グレード全体の相場も取得（オプション）
         pcgs_no = data.get("PCGSNo", "")
@@ -331,24 +321,18 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
             time.sleep(REQUEST_DELAY)
 
             if grade_data:
-                grade_records = _parse_apr_response(grade_data, cert_number="", source_label="pcgs")
+                grade_records = _parse_apr_response(grade_data, cert_number="", mgmt_no=mgmt_no)
                 # cert_recordsと重複しないものを追加
                 existing_dedup = {r["dedup_key"] for r in cert_records}
                 new_recs = [r for r in grade_records if r["dedup_key"] not in existing_dedup]
                 cert_records.extend(new_recs)
 
-        # _で始まる拡張フィールドを除去（DBカラム外）
-        clean_records = []
-        for r in cert_records:
-            clean = {k: v for k, v in r.items() if not k.startswith("_")}
-            clean_records.append(clean)
+        all_records.extend(cert_records)
 
-        all_records.extend(clean_records)
-
-        auctions_count = len([r for r in (data.get("Auctions") or [])])
+        auctions_count = len(data.get("Auctions") or [])
         logger.info(
             f"  [{mgmt_no}] PCGS cert={cert_number} ({grade_str}): "
-            f"APR {auctions_count}件 / 変換レコード {len(clean_records)}件"
+            f"APR {auctions_count}件 / 変換レコード {len(cert_records)}件"
         )
 
     logger.info(f"  [PCGS] 取得完了: {len(all_records)}件 / API呼び出し: {call_count}回 / スキップ: {skip_count}件")
@@ -358,19 +342,22 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
         return 0
 
     if dry_run:
-        logger.info(f"  [DRY-RUN] {len(all_records)}件（DB投入スキップ）")
-        # サンプル表示
+        logger.info(f"  [DRY-RUN] {len(all_records)}件（pcgs_auction_reference 投入スキップ）")
         for r in all_records[:3]:
-            logger.info(f"    {r.get('sold_date')} | USD {r.get('price_usd'):,.0f} | {r.get('title', '')[:50]}")
+            logger.info(
+                f"    {r.get('sold_date')} | USD {r.get('price_usd'):,.0f} "
+                f"| {r.get('coin_name', '')[:40]} {r.get('grade', '')}"
+            )
         return len(all_records)
 
+    # pcgs_auction_reference へ upsert（market_transactions には混ぜない）
     client = get_client()
     ok = 0
     ng = 0
     for i in range(0, len(all_records), BATCH_SIZE):
         batch = all_records[i:i + BATCH_SIZE]
         try:
-            resp = client.table("market_transactions").upsert(
+            resp = client.table("pcgs_auction_reference").upsert(
                 batch, on_conflict="dedup_key"
             ).execute()
             ok += len(resp.data)
@@ -378,5 +365,5 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
             logger.warning(f"  [PCGS] upsert エラー: {e}")
             ng += len(batch)
 
-    logger.info(f"  [PCGS] DB登録: {ok}件 / エラー: {ng}件")
+    logger.info(f"  [PCGS] pcgs_auction_reference 登録: {ok}件 / エラー: {ng}件")
     return ok
