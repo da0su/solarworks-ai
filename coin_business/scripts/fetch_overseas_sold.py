@@ -99,7 +99,7 @@ def _load_coin_slab_data(mgmt_no: Optional[str] = None) -> list[dict]:
         # ページごとに query を新規構築（builderの再利用を避ける）
         q = (
             client.table("coin_slab_data")
-            .select("id,management_no,grader,slab_line1,slab_line2,grade,material,ref2_yahoo_price_jpy")
+            .select("id,management_no,grader,slab_line1,slab_line2,grade,material,ref2_yahoo_price_jpy,cert_number")
             .eq("status", "completed_hit")
             .gt("ref2_yahoo_price_jpy", 0)
             .order("id")
@@ -294,7 +294,7 @@ def is_high_priority_active() -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="海外オークション落札データ取得")
-    parser.add_argument("--source", choices=["heritage", "stacks_bowers", "all"],
+    parser.add_argument("--source", choices=["heritage", "stacks_bowers", "pcgs", "all"],
                         default="all", help="取得ソース（default: all）")
     parser.add_argument("--coin", default=None,
                         help="特定の管理番号のみ取得（例: 001001）")
@@ -321,8 +321,16 @@ def main():
         logger.info("--- Heritage Auctions ---")
         total += fetch_heritage(coins, session, dry_run=args.dry_run)
 
+    if args.source in ("pcgs", "all"):
+        logger.info("--- PCGS Auction Prices Realized (APR) ---")
+        try:
+            from pcgs_api_client import fetch_pcgs
+            total += fetch_pcgs(coins, dry_run=args.dry_run)
+        except Exception as e:
+            logger.warning(f"  PCGS 取得エラー: {e}")
+
     # Stack's Bowers / Noonans は将来実装
-    if args.source in ("stacks_bowers", "all"):
+    if args.source in ("stacks_bowers",):
         logger.info("--- Stack's Bowers: 将来実装予定 ---")
 
     logger.info(f"=== 完了: 合計 {total}件 DB登録 ===")
