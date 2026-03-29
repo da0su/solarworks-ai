@@ -705,6 +705,10 @@ logger.addHandler(_fh)
 _sh = logging.StreamHandler(sys.stdout)
 _sh.setLevel(logging.INFO)
 _sh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+# CP932 環境 (Windows) でも emoji を含むログが落ちないよう stream を UTF-8 ラップ
+if hasattr(sys.stdout, "buffer") and getattr(sys.stdout, "encoding", "").upper() not in ("UTF-8", "UTF8"):
+    import io as _io
+    _sh.stream = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 logger.addHandler(_sh)
 
 
@@ -2658,13 +2662,18 @@ def cmd_daily_handoff():
     else:
         logger.warning("daily-handoff #ceo-room 投稿失敗 (ファイルは保存済み)")
 
-    # ターミナル表示 (CP932環境でのUnicodeエラーを回避)
+    # ターミナル表示 (CP932環境でのUnicodeエラーを回避: buffer直接書き込み)
     try:
         print(summary)
     except UnicodeEncodeError:
-        print(summary.encode("utf-8", errors="replace").decode("ascii", errors="replace"))
-    print(f"\n詳細: {HANDOFF_FILE}")
-    print(f"decisions: {len(handoff.get('decision_required', []))}件")
+        import sys as _sys
+        _sys.stdout.buffer.write((summary + "\n").encode("utf-8", errors="replace"))
+        _sys.stdout.buffer.flush()
+    try:
+        print(f"\n詳細: {HANDOFF_FILE}")
+        print(f"decisions: {len(handoff.get('decision_required', []))}件")
+    except UnicodeEncodeError:
+        pass
 
 
 HANDLERS = {
