@@ -51,6 +51,43 @@ MAX_DAILY_CALLS = 900    # 1,000上限に対して余裕を持たせる
 BATCH_SIZE      = 50
 
 
+# ── cert_number 正規化 ──────────────────────────────────────
+
+def _normalize_cert(raw: str) -> Optional[str]:
+    """
+    DB の cert_number フィールドを PCGS API 用の純粋な cert 番号に変換。
+
+    パターン:
+      '500649.62/56954662'  → '56954662'   (PCGSNo.Grade/CertNo 形式)
+      '83876669/40609227'   → '40609227'   (barcode/CertNo 形式)
+      '89223170-44112511'   → '89223170'   (A-B 形式: 前半が cert)
+      '88213052'            → '88213052'   (正常 8桁)
+      'ID 29717'            → None         (非PCGS形式)
+      '52626090848'         → None         (桁数異常)
+    """
+    if not raw:
+        return None
+    s = str(raw).strip()
+
+    # スラッシュ区切り: 後半が cert
+    if "/" in s:
+        s = s.split("/")[-1].strip()
+
+    # ハイフン区切り: 前半が cert（後半は barcode 等）
+    elif "-" in s:
+        s = s.split("-")[0].strip()
+
+    # スペース含む (例: 'ID 29717') → 数字のみ取り出し
+    if " " in s:
+        digits = re.sub(r"[^\d]", "", s)
+        s = digits
+
+    # 数字のみ・6〜10桁のものが有効な cert 番号
+    if re.fullmatch(r"\d{6,10}", s):
+        return s
+    return None
+
+
 # ── トークン管理 ───────────────────────────────────────────
 
 def _get_token() -> str:
@@ -120,8 +157,9 @@ def _parse_apr_response(data: dict, cert_number: str, source_label: str = "pcgs"
 
     records = []
     auctions = data.get("Auctions") or []
-    coin_name = data.get("Name", "")
-    grade_str = data.get("Grade", "")
+    coin_name = str(data.get("Name") or "")
+    grade_str = str(data.get("Grade") or "")
+    cert_number = str(cert_number or "")
     pcgs_no   = data.get("PCGSNo", "")
 
     year_m = re.search(r"\b(1[0-9]{3}|20[0-9]{2})\b", coin_name)
@@ -260,9 +298,16 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
             logger.warning(f"  [PCGS] 日次上限 {MAX_DAILY_CALLS} に達したため中断")
             break
 
-        mgmt_no     = coin.get("management_no", "")
-        cert_number = str(coin.get("cert_number", "")).strip()
-        grade_str   = coin.get("grade", "")
+        mgmt_no   = coin.get("management_no", "")
+        raw_cert  = str(coin.get("cert_number") or "").strip()
+        grade_str = str(coin.get("grade") or "")
+
+        # cert_number 正規化（A.grade/CertNo → CertNo 等）
+        cert_number = _normalize_cert(raw_cert)
+        if not cert_number:
+            logger.debug(f"  [{mgmt_no}] cert正規化スキップ: raw={raw_cert!r}")
+            skip_count += 1
+            continue
 
         # Step 1: GetAPRByCertNo で落札履歴取得
         data = get_apr_by_cert(cert_number, session)
