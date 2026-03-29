@@ -7,6 +7,7 @@
     python run.py import-yahoo <excel_path> [--dry-run]  # ヤフオクExcel投入
     python run.py search [--country XX] [--grade XX] [--grader XX] [--year XXXX] [--limit N]
     python run.py stats [--clean] [--country XX] [--grader NGC|PCGS]  # 簡易集計レポート
+    python run.py explore            # eBay vs Yahoo 価格差自動探索
     python run.py count              # 全テーブル件数表示
     python run.py collect            # 価格データ取得
     python run.py analyze            # 分析実行
@@ -122,6 +123,22 @@ def cmd_ebay_watch():
     monitor_main()
 
 
+def cmd_explore():
+    """eBay vs Yahoo 価格差自動探索"""
+    from scripts.auto_explorer import main as explore_main
+    explore_main()
+
+
+def cmd_calc_ref():
+    """仕入上限(ref1/ref2)を全件再計算。NULLレコードも補完。
+    使い方:
+        python run.py calc-ref           # 全件
+        python run.py calc-ref --null    # ref1_buy_limit_jpy=NULLのみ
+    """
+    from scripts.calc_ref_values import main as calc_main
+    calc_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -185,9 +202,11 @@ COMMANDS = {
     "update-yahoo": cmd_update_yahoo,
     "update-ebay": cmd_update_ebay,
     "ebay-watch": cmd_ebay_watch,
+    "explore": cmd_explore,
     "search": cmd_search,
     "stats": cmd_stats,
     "count": cmd_count,
+    "calc-ref": cmd_calc_ref,      # 仕入上限再計算（新規登録）
     "collect": cmd_collect,
     "analyze": cmd_analyze,
     "report": cmd_report,

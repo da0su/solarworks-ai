@@ -855,10 +855,12 @@ def main():
     ceo_count = 0
 
     for m in all_matches:
-        # 判定
+        # 判定 ── 結果を match dict に書き戻す（Slack連携・daily_candidates挿入に使う）
         judgment, reason = judge_opportunity(
             m, m.get('yahoo_active', []), m.get('yahoo_closed', []), usd_jpy
         )
+        m['judgment'] = judgment
+        m['judgment_reason'] = reason
 
         if judgment == 'OK':
             ok_count += 1
@@ -982,6 +984,8 @@ def _save_matches_json(all_matches, total_searched):
             'bid_count': m.get('bid_count', 0),
             'ebay_url': m.get('ebay_url', ''),
             'is_new': is_new,
+            'judgment': m.get('judgment', ''),          # OK/NG/REVIEW/CEO判断
+            'judgment_reason': m.get('judgment_reason', ''),  # 判定根拠
         })
 
     result = {

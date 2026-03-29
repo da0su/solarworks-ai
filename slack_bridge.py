@@ -1111,9 +1111,39 @@ def handle_ebay_search(msg_data: dict) -> dict:
 
         # 2) Slack送信はスリム要約のみ（上位10件・必須フィールドのみ）
         _KEEP = {"mgmt_no", "db_line1", "db_grader", "db_grade",
-                 "ebay_limit_usd", "ebay_limit_jpy", "bid_count", "ebay_url", "is_new"}
+                 "ebay_limit_usd", "ebay_limit_jpy", "bid_count", "ebay_url", "is_new",
+                 "judgment", "judgment_reason"}   # 判定結果を追加（切断点①修正）
         slim_matches = [{k: v for k, v in m.items() if k in _KEEP}
                         for m in new_matches[:10]]  # 上位10件 ≈ 3,258 chars < 4,000
+
+        # 3) daily_candidates テーブルへ OK/REVIEW 案件を INSERT（切断点②修正）
+        _ok_matches = [m for m in new_matches if m.get("judgment") in ("OK", "REVIEW")]
+        if _ok_matches:
+            try:
+                from scripts.supabase_client import get_client as _get_supabase
+                _conn = _get_supabase()
+                _now_iso = _dt.now(timezone.utc).isoformat()
+                _rows = [
+                    {
+                        "mgmt_no": m.get("mgmt_no", ""),
+                        "ebay_url": m.get("ebay_url", ""),
+                        "buy_limit_jpy": m.get("ebay_limit_jpy", 0),
+                        "judgment": m.get("judgment", ""),
+                        "judgment_reason": m.get("judgment_reason", ""),
+                        "ebay_title": m.get("ebay_title", ""),
+                        "api_price_usd": m.get("api_price_usd"),
+                        "bid_count": m.get("bid_count", 0),
+                        "created_at": _now_iso,
+                        "updated_at": _now_iso,
+                    }
+                    for m in _ok_matches
+                ]
+                _conn.table("daily_candidates").upsert(
+                    _rows, on_conflict="mgmt_no,ebay_url"
+                ).execute()
+                logger.info(f"daily_candidates INSERT: {len(_rows)}件 (OK/REVIEW)")
+            except Exception as _e:
+                logger.warning(f"daily_candidates INSERT失敗（処理は続行）: {_e}")
 
         post_msg = make_task_msg(
             from_id=get_sender(),
@@ -1183,9 +1213,13 @@ def handle_ebay_review(msg_data: dict) -> dict:
         print(f"詳細ファイル: {candidates_file_ref}")
     print(f"{'='*60}")
     for i, c in enumerate(candidates, 1):
-        print(f"\n{i}. #{c.get('mgmt_no','')} | {c.get('db_line1','')} {c.get('db_grader','')} {c.get('db_grade','')}")
+        _jdg = c.get('judgment', '')
+        _jdg_label = {"OK": "✅OK", "REVIEW": "🔶REVIEW", "NG": "❌NG", "CEO判断": "👤CEO判断"}.get(_jdg, _jdg)
+        print(f"\n{i}. #{c.get('mgmt_no','')} | {c.get('db_line1','')} {c.get('db_grader','')} {c.get('db_grade','')}  [{_jdg_label}]")
         print(f"   仕入上限: USD{c.get('ebay_limit_usd',0):,} ({c.get('ebay_limit_jpy',0):,}円)")
         print(f"   入札: {c.get('bid_count',0)}件")
+        if c.get('judgment_reason'):
+            print(f"   判定根拠: {c.get('judgment_reason','')}")
         print(f"   URL: {c.get('ebay_url','')}")
     print(f"\n{'='*60}")
     print(f"保存先: {outfile}")
