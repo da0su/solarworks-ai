@@ -2335,20 +2335,36 @@ def _generate_daily_handoff() -> dict:
         else:
             slot_status[slot] = "not_fired"
 
-    # --- エラー履歴 (当日分のみ) ---
+    # --- エラー履歴 (当日分 & 未処理のみ: max_retries=0は承認済みスタレとして除外) ---
     recent_errors = [
         {"task": t.get("task_name"), "error": t.get("last_error", "")[:120],
          "at": t.get("updated_at", "")[:16]}
         for t in state_data.get("recent_history", [])
         if t.get("status") == "error"
         and t.get("updated_at", "")[:10] == today
+        and t.get("max_retries", 3) > 0  # max_retries=0 は手動処理済みとして除外
     ][:5]
+
+    # --- 未承認eBay候補数 (承認済みは除外) ---
+    pending_count = 0
+    try:
+        if isinstance(candidates_data, dict):
+            cands = candidates_data.get("candidates", [])
+            if cands:
+                pending_count = len([c for c in cands if not c.get("approved")])
+            elif candidates_data.get("review_status") != "approved":
+                pending_count = ebay_count  # fallback: 個別フラグなければ全件
+        elif isinstance(candidates_data, list):
+            pending_count = len([c for c in candidates_data if not c.get("approved")])
+        pending_count = max(0, int(pending_count or 0))
+    except Exception:
+        pending_count = 0
 
     # --- 要対応 ---
     decision_required = []
-    if ebay_count > 0:
+    if pending_count > 0:
         decision_required.append(
-            f"ebay-review 承認待ち ({ebay_count}件): "
+            f"ebay-review 承認待ち ({pending_count}件): "
             f"python slack_bridge.py approve --task ebay-review --by cap"
         )
     if rakuten_health in ("WARNING", "CRITICAL"):
@@ -2366,13 +2382,13 @@ def _generate_daily_handoff() -> dict:
             "schedule_slots": slot_status,
             "rakuten":      f"health={rakuten_health} / pool={rakuten_pool}件",
             "coin":         f"DB={coin_total:,}件 / 直近3か月={coin_recent}件" if coin_recent else f"DB={coin_total:,}件",
-            "ebay":         f"候補{ebay_count}件 / 最終検索={last_ebay_search or '不明'}",
+            "ebay":         f"候補{ebay_count}件 (未承認{pending_count}件) / 最終検索={last_ebay_search or '不明'}",
         },
         "current_issues":     recent_errors,
         "next_priority": [
             "cap/cyber watch 常時起動維持",
             "daily-check 定時発火 監視 (schedule_state.json 確認)",
-            f"ebay-review 承認待ち ({ebay_count}件)" if ebay_count > 0 else "ebay-search 実行 (候補なし)",
+            f"ebay-review 承認待ち ({pending_count}件)" if pending_count > 0 else "ebay-search 次回実行予定",
         ],
         "risks": [
             f"楽天ROOM health={rakuten_health}" + ("" if rakuten_health == "OK" else " ⚠️"),
