@@ -91,7 +91,8 @@ MAX_HISTORY = 50  # recent_historyの最大保持件数
 SCHEDULE_SLOTS = ["07:30", "12:30", "18:30"]
 SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"
 SCHEDULE_CHECK_INTERVAL = 60  # 60秒ごとにスロット確認
-EBAY_AUTO_INTERVAL_SEC = 3600  # P0-1: eBay自動探索間隔（1時間）
+EBAY_AUTO_INTERVAL_SEC        = 3600  # P0-1: eBay自動探索間隔（1時間）
+EBAY_AUTO_INTERVAL_EVENT_SEC  = 1800  # P0-2: アクティブオークション期間中は30分
 
 # GPT申し送りディレクトリ
 GPT_MOUSIOKURI_DIR = Path(__file__).parent / "gpt_mousiokuri"
@@ -1532,8 +1533,9 @@ def _check_and_fire_schedules():
 def _check_and_fire_ebay_auto():
     """
     P0-1: 1時間ごとに git-pull→ebay-search を自動発火（cap のみ実行）。
+    P0-2: アクティブオークション期間中は間隔を30分に短縮（イベント駆動）。
     重複発火防止:
-      - 前回発火から EBAY_AUTO_INTERVAL_SEC 以内はスキップ
+      - 前回発火から interval_sec 以内はスキップ
       - git-pull / ebay-search が実行中ならスキップ
     """
     state_file = _load_schedule_state()
@@ -1542,12 +1544,23 @@ def _check_and_fire_ebay_auto():
 
     now = datetime.now()
 
+    # P0-2: アクティブオークション期間中は間隔短縮
+    try:
+        coin_dir = Path(__file__).parent / "coin_business"
+        import sys as _sys; _sys.path.insert(0, str(coin_dir))
+        from scripts.fetch_overseas_sold import is_high_priority_active
+        _interval = EBAY_AUTO_INTERVAL_EVENT_SEC if is_high_priority_active() else EBAY_AUTO_INTERVAL_SEC
+        _trigger  = "ebay_auto_event_driven" if _interval < EBAY_AUTO_INTERVAL_SEC else "ebay_auto_hourly"
+    except Exception:
+        _interval = EBAY_AUTO_INTERVAL_SEC
+        _trigger  = "ebay_auto_hourly"
+
     # 前回発火から間隔チェック
     if last_fired_str:
         try:
             last_fired = datetime.fromisoformat(last_fired_str)
             elapsed = (now - last_fired).total_seconds()
-            if elapsed < EBAY_AUTO_INTERVAL_SEC:
+            if elapsed < _interval:
                 return  # まだ間隔未達
         except ValueError:
             pass
@@ -1566,7 +1579,7 @@ def _check_and_fire_ebay_auto():
     task_msg = make_task_msg(
         from_id=my_sender, to_id="cyber",
         task="git-pull",
-        payload={"trigger": "ebay_auto_hourly"},
+        payload={"trigger": _trigger, "interval_sec": _interval},
         workflow_id=wf_id,
         source=SOURCE_AUTO,
     )
@@ -1580,10 +1593,11 @@ def _check_and_fire_ebay_auto():
             "last_fired_at": now.isoformat(),
             "workflow_id":   wf_id,
             "task_id":       task_id,
+            "trigger":       _trigger,
         }
         _save_schedule_state(state_file)
-        logger.info(f"[ebay-auto] git-pull 発火 (→ebay-search) wf={wf_id[:8]}")
-        log_event("ebay_auto_fired", {"workflow_id": wf_id})
+        logger.info(f"[ebay-auto] git-pull 発火 (→ebay-search) wf={wf_id[:8]} interval={_interval//60}min trigger={_trigger}")
+        log_event("ebay_auto_fired", {"workflow_id": wf_id, "trigger": _trigger})
     else:
         logger.warning("[ebay-auto] git-pull 発火失敗 (Slack送信エラー)")
 
@@ -1965,6 +1979,25 @@ def handle_daily_check(msg_data: dict) -> dict:
         else:
             logger.info("[calc-ref] 完了")
 
+        # 2d. overseas-fetch（P0-1: 海外オークション落札データ取得 / 失敗でも続行）
+        try:
+            _r_overseas = subprocess.run(
+                ["python", "run.py", "overseas-fetch", "--source", "heritage"],
+                cwd=str(coin_dir), capture_output=True, text=True,
+                timeout=240, check=False, encoding="utf-8", errors="replace",
+            )
+            if _r_overseas.returncode != 0:
+                errors["coin"].append({"step": "overseas-fetch", "stderr": _r_overseas.stderr[:200]})
+                logger.warning(f"[overseas-fetch] 失敗 rc={_r_overseas.returncode}")
+            else:
+                _m3 = _re.search(r'(\d+)件登録', _r_overseas.stdout)
+                _cnt3 = int(_m3.group(1)) if _m3 else 0
+                coin_fetch_stats["overseas_new"] = _cnt3
+                logger.info(f"[overseas-fetch] 完了 新規≈{_cnt3}件")
+        except subprocess.TimeoutExpired:
+            errors["coin"].append({"step": "overseas-fetch", "stderr": "timeout 240s"})
+            logger.warning("[overseas-fetch] タイムアウト（処理続行）")
+
     coin_data, coin_errors = _collect_coin_status(coin_dir)
     coin_data["fetch_stats"] = coin_fetch_stats  # P0-3: 新規取得件数
 
@@ -2138,6 +2171,9 @@ def _format_daily_report(payload: dict) -> str:
             parts.append(f"Yahoo新規: {y_new}件")
         if e_new is not None:
             parts.append(f"eBay新規: {e_new}件")
+        o_new = fetch.get("overseas_new")
+        if o_new is not None:
+            parts.append(f"海外落札: {o_new}件")
         if parts:
             lines.append(f"  📥 {' / '.join(parts)}")
     # P0-3: daily_candidates 件数
