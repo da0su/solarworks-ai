@@ -7,7 +7,13 @@ Notion オークションスケジュール DB セットアップスクリプト
   2. スケジュールを貼り付けたいページを開き、IntegrationをConnectする
   3. ページURLからページIDを取得（32桁の英数字）
 
-使い方:
+使い方（推奨: .env に記載してコマンド引数なしで実行）:
+  # .env に追記:
+  #   NOTION_TOKEN=secret_xxx
+  #   NOTION_PARENT_ID=<32桁ページID>
+  python scripts/setup_notion_schedule.py
+
+使い方（引数指定）:
   python scripts/setup_notion_schedule.py --token <token> --parent-id <page_id>
 
 実行すると:
@@ -17,12 +23,22 @@ Notion オークションスケジュール DB セットアップスクリプト
 """
 
 import json
+import os
 import sys
 import argparse
 from pathlib import Path
 from datetime import datetime
 
 import requests
+
+# .env 読み込み
+_ENV_FILE = Path(__file__).parent.parent / ".env"
+if _ENV_FILE.exists():
+    for _line in _ENV_FILE.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 # auction_schedule.json のパス
 SCHEDULE_FILE = Path(__file__).parent.parent / "data" / "auction_schedule.json"
@@ -167,9 +183,18 @@ def add_auction(token: str, db_id: str, auction: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Notion オークションスケジュール DB セットアップ")
-    parser.add_argument("--token", required=True, help="Notion Integration Token (secret_xxx)")
-    parser.add_argument("--parent-id", required=True, help="貼り付け先ページID（URLから取得）")
+    parser.add_argument("--token",     default=os.environ.get("NOTION_TOKEN", ""),
+                        help="Notion Integration Token (secret_xxx) [env: NOTION_TOKEN]")
+    parser.add_argument("--parent-id", default=os.environ.get("NOTION_PARENT_ID", ""),
+                        help="貼り付け先ページID（URLから取得）[env: NOTION_PARENT_ID]")
     args = parser.parse_args()
+
+    if not args.token:
+        print("❌ Notion Token が未設定です。.env に NOTION_TOKEN=secret_xxx を追記するか、--token で指定してください。")
+        sys.exit(1)
+    if not args.parent_id:
+        print("❌ 親ページID が未設定です。.env に NOTION_PARENT_ID=<32桁ID> を追記するか、--parent-id で指定してください。")
+        sys.exit(1)
 
     # スケジュール読み込み
     if not SCHEDULE_FILE.exists():
