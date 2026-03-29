@@ -91,6 +91,7 @@ MAX_HISTORY = 50  # recent_historyの最大保持件数
 SCHEDULE_SLOTS = ["07:30", "12:30", "18:30"]
 SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"
 SCHEDULE_CHECK_INTERVAL = 60  # 60秒ごとにスロット確認
+EBAY_AUTO_INTERVAL_SEC = 3600  # P0-1: eBay自動探索間隔（1時間）
 
 # GPT申し送りディレクトリ
 GPT_MOUSIOKURI_DIR = Path(__file__).parent / "gpt_mousiokuri"
@@ -1528,6 +1529,65 @@ def _check_and_fire_schedules():
             logger.warning(f"[scheduler] {slot} 発火失敗 (Slack送信エラー)")
 
 
+def _check_and_fire_ebay_auto():
+    """
+    P0-1: 1時間ごとに git-pull→ebay-search を自動発火（cap のみ実行）。
+    重複発火防止:
+      - 前回発火から EBAY_AUTO_INTERVAL_SEC 以内はスキップ
+      - git-pull / ebay-search が実行中ならスキップ
+    """
+    state_file = _load_schedule_state()
+    entry = state_file.get("ebay_auto", {})
+    last_fired_str = entry.get("last_fired_at", "")
+
+    now = datetime.now()
+
+    # 前回発火から間隔チェック
+    if last_fired_str:
+        try:
+            last_fired = datetime.fromisoformat(last_fired_str)
+            elapsed = (now - last_fired).total_seconds()
+            if elapsed < EBAY_AUTO_INTERVAL_SEC:
+                return  # まだ間隔未達
+        except ValueError:
+            pass
+
+    # git-pull / ebay-search が現在 running 中ならスキップ
+    s = state_mgr.load()
+    for t in s.get("current_tasks", []):
+        if t.get("task_name") in ("git-pull", "ebay-search") and \
+                t.get("status") not in ("done", "error"):
+            logger.info("[ebay-auto] git-pull/ebay-search 実行中のためスキップ")
+            return
+
+    # 発火: git-pull を cyber へ（auto-chain で ebay-search に続く）
+    wf_id = str(uuid.uuid4())
+    my_sender = get_sender()
+    task_msg = make_task_msg(
+        from_id=my_sender, to_id="cyber",
+        task="git-pull",
+        payload={"trigger": "ebay_auto_hourly"},
+        workflow_id=wf_id,
+        source=SOURCE_AUTO,
+    )
+    success = send_bridge_msg(task_msg)
+    if success:
+        add_pending_task(task_msg)
+        task_id = task_msg["task_id"]
+        state_mgr.task_queued(task_id, "git-pull", my_sender, "cyber",
+                              workflow_id=wf_id)
+        state_file["ebay_auto"] = {
+            "last_fired_at": now.isoformat(),
+            "workflow_id":   wf_id,
+            "task_id":       task_id,
+        }
+        _save_schedule_state(state_file)
+        logger.info(f"[ebay-auto] git-pull 発火 (→ebay-search) wf={wf_id[:8]}")
+        log_event("ebay_auto_fired", {"workflow_id": wf_id})
+    else:
+        logger.warning("[ebay-auto] git-pull 発火失敗 (Slack送信エラー)")
+
+
 # ============================================================
 # コインリサーチ ステータス収集
 # ============================================================
@@ -1850,9 +1910,76 @@ def handle_daily_check(msg_data: dict) -> dict:
     }
 
     # -------------------------------------------------------
-    # 2. コインリサーチ
+    # 2. コインリサーチ（18:30スロット: データ更新パイプライン実行）
     # -------------------------------------------------------
+    import re as _re
+    coin_fetch_stats: dict = {}
+    if slot == "18:30":
+        logger.info("[daily-check 18:30] coin更新パイプライン開始 (update-yahoo→ebay→calc-ref)")
+
+        # 2a. update-yahoo（ヤフオク差分更新）
+        _r_yahoo = subprocess.run(
+            ["python", "run.py", "update-yahoo"],
+            cwd=str(coin_dir), capture_output=True, text=True,
+            timeout=300, check=False, encoding="utf-8", errors="replace",
+        )
+        if _r_yahoo.returncode != 0:
+            errors["coin"].append({"step": "update-yahoo", "stderr": _r_yahoo.stderr[:200]})
+            logger.warning(f"[update-yahoo] 失敗 rc={_r_yahoo.returncode}")
+        else:
+            _m = _re.search(r'新規.*?(\d+)件|(\d+)件.*?新規|inserted.*?(\d+)|(\d+).*?insert',
+                            _r_yahoo.stdout, _re.IGNORECASE)
+            _cnt = int(next(g for g in (_m.groups() if _m else (None,)) if g is not None) or 0) if _m else 0
+            coin_fetch_stats["yahoo_new"] = _cnt
+            logger.info(f"[update-yahoo] 完了 新規≈{_cnt}件")
+
+        # 2b. update-ebay（eBay差分更新 / 失敗でも続行）
+        try:
+            _r_ebay = subprocess.run(
+                ["python", "run.py", "update-ebay"],
+                cwd=str(coin_dir), capture_output=True, text=True,
+                timeout=180, check=False, encoding="utf-8", errors="replace",
+            )
+            if _r_ebay.returncode != 0:
+                errors["coin"].append({"step": "update-ebay", "stderr": _r_ebay.stderr[:200]})
+                logger.warning(f"[update-ebay] 失敗 rc={_r_ebay.returncode}")
+            else:
+                _m2 = _re.search(r'新規.*?(\d+)件|(\d+)件.*?新規|inserted.*?(\d+)|(\d+).*?insert',
+                                 _r_ebay.stdout, _re.IGNORECASE)
+                _cnt2 = int(next(g for g in (_m2.groups() if _m2 else (None,)) if g is not None) or 0) if _m2 else 0
+                coin_fetch_stats["ebay_new"] = _cnt2
+                logger.info(f"[update-ebay] 完了 新規≈{_cnt2}件")
+        except subprocess.TimeoutExpired:
+            errors["coin"].append({"step": "update-ebay", "stderr": "timeout 180s"})
+            logger.warning("[update-ebay] タイムアウト（処理続行）")
+
+        # 2c. calc-ref（NULL補完）
+        _r_calc = subprocess.run(
+            ["python", "run.py", "calc-ref", "--null"],
+            cwd=str(coin_dir), capture_output=True, text=True,
+            timeout=120, check=False, encoding="utf-8", errors="replace",
+        )
+        if _r_calc.returncode != 0:
+            errors["coin"].append({"step": "calc-ref", "stderr": _r_calc.stderr[:200]})
+            logger.warning(f"[calc-ref] 失敗 rc={_r_calc.returncode}")
+        else:
+            logger.info("[calc-ref] 完了")
+
     coin_data, coin_errors = _collect_coin_status(coin_dir)
+    coin_data["fetch_stats"] = coin_fetch_stats  # P0-3: 新規取得件数
+
+    # P0-3: daily_candidates 件数（OK/REVIEW 蓄積件数）
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(coin_dir))
+        from scripts.supabase_client import get_client as _get_supabase
+        _supabase = _get_supabase()
+        _dc_resp = _supabase.table("daily_candidates").select("id", count="exact").limit(0).execute()
+        coin_data["daily_candidates_count"] = _dc_resp.count or 0
+    except Exception as _dc_e:
+        coin_data["daily_candidates_count"] = -1
+        logger.warning(f"daily_candidates件数取得失敗: {_dc_e}")
+
     errors["coin"].extend(coin_errors)
 
     # -------------------------------------------------------
@@ -2001,6 +2128,23 @@ def _format_daily_report(payload: dict) -> str:
         med_s = f"中央¥{med_p:,}" if med_p else ""
         detail = " | ".join(filter(None, [f"直近3か月: {r3:,}件", avg_s, med_s]))
         lines.append(f"  {detail}")
+    # P0-3: 更新件数（18:30スロット）
+    fetch = coin.get("fetch_stats", {})
+    if fetch:
+        y_new = fetch.get("yahoo_new")
+        e_new = fetch.get("ebay_new")
+        parts = []
+        if y_new is not None:
+            parts.append(f"Yahoo新規: {y_new}件")
+        if e_new is not None:
+            parts.append(f"eBay新規: {e_new}件")
+        if parts:
+            lines.append(f"  📥 {' / '.join(parts)}")
+    # P0-3: daily_candidates 件数
+    dc_count = coin.get("daily_candidates_count")
+    if dc_count is not None and dc_count >= 0:
+        dc_icon = "🔔" if dc_count > 0 else "💤"
+        lines.append(f"  {dc_icon} 仕入候補(daily_candidates): {dc_count}件")
     c_status = coin.get("status", "UNKNOWN")
     if c_status != "OK":
         lines.append(f"  ⚠️ coin status: {c_status}")
@@ -2082,8 +2226,38 @@ def handle_daily_report(msg_data: dict) -> dict:
     except Exception as e:
         logger.warning(f"schedule_state done更新失敗: {e}")
 
+    # P0-2 step4: 18:30スロットのみ git-pull→ebay-search を自動発火
+    post_msg = None
+    if slot == "18:30":
+        try:
+            _wf2 = str(uuid.uuid4())
+            _my = get_sender()
+            post_msg = make_task_msg(
+                from_id=_my, to_id="cyber",
+                task="git-pull",
+                payload={"trigger": "daily_check_18:30_coin_update"},
+                workflow_id=_wf2,
+                source=SOURCE_AUTO,
+            )
+            # ebay_auto の last_fired_at も更新してP0-1との重複防止
+            try:
+                _sc = _load_schedule_state()
+                _sc["ebay_auto"] = {
+                    "last_fired_at": datetime.now().isoformat(),
+                    "workflow_id":   _wf2,
+                    "triggered_by":  "daily_report_18:30",
+                }
+                _save_schedule_state(_sc)
+            except Exception:
+                pass
+            logger.info(f"[daily-report 18:30] git-pull→ebay-search 自動発火 wf={_wf2[:8]}")
+        except Exception as _e:
+            logger.warning(f"[daily-report 18:30] ebay-search自動発火失敗: {_e}")
+            post_msg = None
+
     return {"status": status, "channel": CEO_ROOM_CHANNEL,
-            "report_status": status, "slot": slot}
+            "report_status": status, "slot": slot,
+            "_post_send_msg": post_msg}
 
 
 # ============================================================
@@ -2985,6 +3159,7 @@ def watch_channel(interval: int = 5):
                 if my_sender == "cap":
                     try:
                         _check_and_fire_schedules()
+                        _check_and_fire_ebay_auto()    # P0-1: 1時間ごとeBay自動探索
                     except Exception as se:
                         logger.error(f"定時スケジュールチェックエラー: {se}")
                 last_schedule_check = now
