@@ -92,6 +92,9 @@ SCHEDULE_SLOTS = ["07:30", "12:30", "18:30"]
 SCHEDULE_STATE_FILE = DATA_DIR / "schedule_state.json"
 SCHEDULE_CHECK_INTERVAL = 60  # 60秒ごとにスロット確認
 
+# GPT申し送りディレクトリ
+GPT_MOUSIOKURI_DIR = Path(__file__).parent / "gpt_mousiokuri"
+
 
 # ============================================================
 # 初期化
@@ -2070,12 +2073,18 @@ def handle_coin_status(msg_data: dict) -> dict:
             with open(candidates_file, encoding="utf-8") as f:
                 cdata = json.load(f)
             if isinstance(cdata, dict):
+                # count が None / 不正値の場合は candidates リストで代替
+                raw_count = cdata.get("count", None)
+                safe_count = (int(raw_count) if isinstance(raw_count, (int, float))
+                              and raw_count >= 0 else len(cdata.get("candidates", [])))
                 ebay_candidates = {
-                    "count":       cdata.get("count", len(cdata.get("candidates", []))),
+                    "count":       safe_count,
                     "received_at": cdata.get("received_at"),
                 }
             elif isinstance(cdata, list):
                 ebay_candidates = {"count": len(cdata), "received_at": None}
+            # count が負数 / 非整数になっていないか最終確認
+            ebay_candidates["count"] = max(0, int(ebay_candidates.get("count") or 0))
     except (OSError, json.JSONDecodeError) as e:
         errors.append({"step": "ebay-candidates", "stderr": str(e)[:200]})
 
@@ -2293,12 +2302,18 @@ def _generate_daily_handoff() -> dict:
         coin_total  = c.get("total_records", 0)
         coin_recent = c.get("recent_3m_count")
 
-    # --- eBay候補 ---
+    # --- eBay候補 (None/異常値ガード) ---
     ebay_count = 0
-    if isinstance(candidates_data, dict):
-        ebay_count = candidates_data.get("count", len(candidates_data.get("candidates", [])))
-    elif isinstance(candidates_data, list):
-        ebay_count = len(candidates_data)
+    try:
+        if isinstance(candidates_data, dict):
+            raw = candidates_data.get("count", None)
+            ebay_count = (int(raw) if isinstance(raw, (int, float)) and raw >= 0
+                          else len(candidates_data.get("candidates", [])))
+        elif isinstance(candidates_data, list):
+            ebay_count = len(candidates_data)
+        ebay_count = max(0, int(ebay_count or 0))
+    except Exception:
+        ebay_count = 0
 
     # --- 最終ebay-search ---
     last_ebay_search = None
@@ -2440,6 +2455,183 @@ def _format_handoff_summary(handoff: dict) -> str:
     return "\n".join(lines)
 
 
+def _write_gpt_handoff_files(handoff: dict):
+    """
+    gpt_mousiokuri/ に3ファイルを生成する。
+    daily-handoff 実行時に同時呼び出し。
+    """
+    GPT_MOUSIOKURI_DIR.mkdir(parents=True, exist_ok=True)
+
+    prog    = handoff.get("progress", {})
+    issues  = handoff.get("current_issues", [])
+    prio    = handoff.get("next_priority", [])
+    risks   = handoff.get("risks", [])
+    know    = handoff.get("operational_knowledge", [])
+    notes   = handoff.get("behavioral_notes", {})
+    decs    = handoff.get("decision_required", [])
+    snap    = handoff.get("state_snapshot", {})
+    gen_at  = handoff.get("generated_at", "?")
+    date_s  = handoff.get("date", "?")
+    co_dir  = handoff.get("company_direction", "")
+    files_d = handoff.get("data_files", {})
+
+    # ---- ① gpt_handoff_latest.json ----
+    _atomic_write_json(GPT_MOUSIOKURI_DIR / "gpt_handoff_latest.json", handoff)
+
+    # ---- ② gpt_handoff_latest.md ----
+    def _list_md(items):
+        if not items:
+            return "  (なし)\n"
+        out = ""
+        for item in items:
+            if isinstance(item, dict):
+                out += f"  - [{item.get('task','?')}] {item.get('error','')[:100]}  ({item.get('at','')})\n"
+            elif item:
+                out += f"  - {str(item)[:120]}\n"
+        return out or "  (なし)\n"
+
+    md_lines = [
+        f"# GPT申し送り - {gen_at}",
+        "",
+        f"## 1. Company Direction",
+        f"  {co_dir}",
+        "",
+        f"## 2. Progress vs Objective",
+        f"  - 楽天ROOM: {prog.get('rakuten', '不明')}",
+        f"  - コイン: {prog.get('coin', '不明')}",
+        f"  - eBay: {prog.get('ebay', '不明')}",
+        f"  - 定時チェック: {prog.get('daily_check', '不明')}",
+    ]
+    slots = prog.get("schedule_slots", {})
+    for slot, s in slots.items():
+        icon = "✅" if s == "done" else ("🔄" if s == "running" else "⏳")
+        md_lines.append(f"    {slot}: {icon} {s}")
+    md_lines += [
+        "",
+        f"## 3. Current Issues",
+        _list_md(issues),
+        f"## 4. Next Priority",
+        _list_md(prio),
+        f"## 5. Risk / Bottlenecks",
+        _list_md(risks),
+        f"## 6. Operational Knowledge",
+        _list_md(know),
+        f"## 7. Behavioral Notes",
+        f"  - CEO: {notes.get('ceo', '')}",
+        f"  - CAP: {notes.get('cap', '')}",
+        f"  - cyber: {notes.get('cyber', '')}",
+        "",
+        f"## 8. Decision Required",
+        _list_md(decs),
+    ]
+    _atomic_write_text(GPT_MOUSIOKURI_DIR / "gpt_handoff_latest.md",
+                       "\n".join(md_lines))
+
+    # ---- ③ gpt_bootstrap.txt ----
+    bt_issues = "\n".join(
+        f"  - [{i.get('task','?')}] {i.get('error','')[:80]}" for i in issues[:3]
+    ) if issues else "  (なし)"
+    bt_prio = "\n".join(f"  {n+1}. {p}" for n, p in enumerate(prio[:5]) if p)
+    bt_decs = "\n".join(f"  - {d[:100]}" for d in decs[:3]) if decs else "  (なし)"
+    slots_str = "  " + " / ".join(
+        f"{sl}={'done' if ss=='done' else 'not_fired'}" for sl, ss in slots.items()
+    )
+
+    bootstrap = f"""あなたは前回のセッションから継続しているCTO（GPT）です。
+
+これは新しいセッションですが、以下の情報が現在の正しい状態です。
+会話履歴は存在しないため、この情報のみを基準に判断してください。
+
+# CURRENT STATE
+- system_status: {snap.get('system_status', '?')}
+- state-audit: {"CLEAN" if snap.get('current_tasks', 0) == 0 and snap.get('recent_errors', 0) == 0 else "要確認"}
+- current_tasks: {snap.get('current_tasks', 0)}件
+- 本日エラー: {snap.get('recent_errors', 0)}件
+
+# DAILY HANDOFF（要約）
+- Company Direction: {co_dir}
+- 楽天ROOM: {prog.get('rakuten', '不明')}
+- コイン: {prog.get('coin', '不明')}
+- eBay: {prog.get('ebay', '不明')}
+- 定時チェック(07:30/12:30/18:30):
+{slots_str}
+
+## Current Issues
+{bt_issues}
+
+## Next Priority
+{bt_prio}
+
+## Decision Required
+{bt_decs}
+
+# IMPORTANT FILES
+- state/system_state.json          ← 唯一の真実
+- {files_d.get('daily_check_latest', '~/.slack_bridge/daily_check_latest.json')}
+- {files_d.get('rakuten_status_latest', '~/.slack_bridge/rakuten_status_latest.json')}
+- {files_d.get('coin_status_latest', '~/.slack_bridge/coin_status_latest.json')}
+- {files_d.get('handoff', '~/.slack_bridge/daily_handoff.json')}
+- {str(GPT_MOUSIOKURI_DIR / 'gpt_handoff_latest.md')}
+
+# RULES
+- 会話履歴に依存しない
+- state を唯一の真実とする
+- Slack は要約のみ（長文禁止・2500字制限）
+- 自動化は「止まらない設計」を優先
+- 実装は slack_bridge.py のみ変更（新ファイル原則不可）
+
+# SYSTEM STRUCTURE
+- CEO → CAP（代表COO）のみ指示
+- CAP → cyber / 各ツール実行
+- cyber → 実処理（楽天ROOM BOT / coin ebay-search）
+- CAP → CEO へ #ceo-room 集約報告
+
+# KEY COMMANDS
+- python slack_bridge.py watch           ← 常時監視（cap/cyber両方）
+- python slack_bridge.py daily-check     ← 全事業チェック（手動トリガー）
+- python slack_bridge.py rakuten-status  ← 楽天ROOM状態確認
+- python slack_bridge.py coin-status     ← コイン状態確認
+- python slack_bridge.py daily-handoff   ← 申し送り生成・更新
+- python slack_bridge.py state-audit     ← 整合性確認
+- python slack_bridge.py approve --task ebay-review --by cap  ← eBay承認
+
+# NEXT ACTION
+以下の優先順位で状況を確認・対応してください：
+{bt_prio}
+
+---
+生成日時: {gen_at}
+"""
+    _atomic_write_text(GPT_MOUSIOKURI_DIR / "gpt_bootstrap.txt", bootstrap)
+
+    logger.info(f"GPT申し送りファイル生成完了: {GPT_MOUSIOKURI_DIR}")
+    return True
+
+
+def _atomic_write_json(path: Path, data: dict):
+    """JSON をatomic write"""
+    tmp = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+    except OSError as e:
+        logger.warning(f"atomic_write_json 失敗 {path}: {e}")
+
+
+def _atomic_write_text(path: Path, text: str):
+    """テキストをatomic write"""
+    tmp = path.with_suffix(".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        tmp.replace(path)
+    except OSError as e:
+        logger.warning(f"atomic_write_text 失敗 {path}: {e}")
+
+
 def cmd_daily_handoff():
     """
     日次申し送り生成・保存・#ceo-room投稿。
@@ -2449,17 +2641,14 @@ def cmd_daily_handoff():
     handoff = _generate_daily_handoff()
 
     # JSON保存 (atomic write)
-    tmp = HANDOFF_FILE.with_suffix(".tmp")
+    _atomic_write_json(HANDOFF_FILE, handoff)
+    logger.info(f"daily_handoff.json 保存完了: {HANDOFF_FILE}")
+
+    # GPT申し送りファイル生成 (gpt_mousiokuri/)
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(handoff, f, ensure_ascii=False, indent=2)
-        tmp.replace(HANDOFF_FILE)
-        logger.info(f"daily_handoff.json 保存完了: {HANDOFF_FILE}")
-    except OSError as e:
-        logger.error(f"daily_handoff.json 保存失敗: {e}")
-        print(f"[ERROR] 保存失敗: {e}")
-        return
+        _write_gpt_handoff_files(handoff)
+    except Exception as e:
+        logger.warning(f"GPT申し送りファイル生成失敗 (継続): {e}")
 
     # Slack投稿
     summary = _format_handoff_summary(handoff)
