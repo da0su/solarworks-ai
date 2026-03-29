@@ -276,6 +276,28 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
     if not pcgs_coins:
         return 0
 
+    # 取得済み management_no を pcgs_auction_reference から取得（P1以降の重複API呼び出し防止）
+    client_pre = get_client()
+    fetched_set: set[str] = set()
+    try:
+        _offset = 0
+        _page   = 1000
+        while True:
+            _r = (client_pre.table("pcgs_auction_reference")
+                  .select("management_no")
+                  .range(_offset, _offset + _page - 1)
+                  .execute())
+            for row in _r.data:
+                if row.get("management_no"):
+                    fetched_set.add(row["management_no"])
+            if len(_r.data) < _page:
+                break
+            _offset += _page
+        if fetched_set:
+            logger.info(f"  [PCGS] 取得済みスキップ対象: {len(fetched_set)}件のmanagement_no")
+    except Exception as e:
+        logger.warning(f"  [PCGS] 取得済み確認エラー（スキップなし）: {e}")
+
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0 (compatible; SolarWorksBot/1.0)"})
 
@@ -289,6 +311,11 @@ def fetch_pcgs(coins: list[dict], dry_run: bool = False) -> int:
             break
 
         mgmt_no   = coin.get("management_no", "")
+
+        # 取得済みコインはAPIコールをスキップ
+        if mgmt_no and mgmt_no in fetched_set:
+            skip_count += 1
+            continue
         raw_cert  = str(coin.get("cert_number") or "").strip()
         grade_str = str(coin.get("grade") or "")
 
