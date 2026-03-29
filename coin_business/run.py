@@ -160,6 +160,48 @@ def cmd_calc_ref():
     calc_main()
 
 
+def cmd_ebay_integrate():
+    """eBay候補 (ebay_review_candidates.json) を daily_candidates へ統合。
+    使い方:
+        python run.py ebay-integrate           # 全候補を統合
+        python run.py ebay-integrate --dry-run  # 確認のみ
+        python run.py ebay-integrate --show     # 候補一覧表示
+        python run.py ebay-integrate --approved-only  # 承認済みのみ
+    """
+    from scripts.ebay_lot_integrator import integrate_ebay_candidates, load_ebay_candidates
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="run.py ebay-integrate", add_help=False)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--fx",      type=float, default=150.0)
+    parser.add_argument("--approved-only", action="store_true")
+    parser.add_argument("--show",    action="store_true")
+    args, _ = parser.parse_known_args(sys.argv[2:])
+
+    if args.show:
+        candidates = load_ebay_candidates()
+        print(f"\n=== eBay候補一覧 ({len(candidates)}件) ===\n")
+        for c in candidates:
+            mgmt  = c.get("mgmt_no", "?")
+            title = (c.get("ebay_title") or "")[:55]
+            price = c.get("api_price_usd")
+            limit = c.get("ebay_limit_jpy", 0) or 0
+            appr  = c.get("approved")
+            appr_str = "APPROVED" if appr else ("PENDING" if appr is None else "REJECTED")
+            price_str = f"USD {price:,.0f}" if price else "BIN/N.A."
+            print(f"  [{mgmt}] {appr_str:8} | {price_str:>10} | limit=JPY{limit:,.0f} | {title}")
+        return
+
+    result = integrate_ebay_candidates(
+        fx_rate=args.fx,
+        dry_run=args.dry_run,
+        only_approved=args.approved_only,
+    )
+    print(f"\n=== eBay統合結果 ===")
+    for k, v in result.items():
+        print(f"  {k}: {v}")
+
+
 def cmd_overseas_watch():
     """
     全世界オークション常時監視 (Layer 1〜4 統合実行)
@@ -360,6 +402,7 @@ COMMANDS = {
     "stats": cmd_stats,
     "count": cmd_count,
     "ebay-search":     cmd_ebay_search,    # eBay仕入候補探索・判定
+    "ebay-integrate":  cmd_ebay_integrate, # eBay候補を daily_candidates へ統合
     "overseas-fetch":  cmd_overseas_fetch,  # 海外オークション落札済みデータ取得
     "overseas-watch":  cmd_overseas_watch,  # 全世界オークション常時監視 (Layer 1-4)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算

@@ -5,19 +5,26 @@ Noble Numismatics / Noonans Mayfair / Spink / SINCONA など、
 NumisBids プラットフォームを利用する複数オークションハウスに対応。
 
 取得フロー:
-  1. auction_schedule.json から対象オークション(source_key=noble/noonans/spink/sincona)を選択
-  2. NumisBids のオークション結果ページからロット一覧を取得
-  3. overseas_lot スキーマに変換 → auction_cost_calculator でコスト付与
+  1. auction_schedule.json から対象オークションを選択 (source_key=noble/noonans/spink)
+  2. numisbids_sale_id が設定されていれば直接取得
+     設定がなければ NumisBids home から sale_id を自動発見
+  3. https://www.numisbids.com/sale/{SALE_ID}/?pg={PAGE} からロット一覧を取得
+  4. overseas_lot スキーマに変換 → auction_cost_calculator でコスト付与
 
-NumisBids URL パターン:
-  ファーム一覧: https://www.numisbids.com/n.php?p=firmprofile&sid=XXXX
-  ロット一覧:   https://www.numisbids.com/n.php?p=results&sid=SALE_ID&cid=0&lot=0&ord=1
+NumisBids URL パターン（実測済み）:
+  ロット一覧: https://www.numisbids.com/sale/{SALE_ID}/?pg={PAGE}
+              100件/ページ、ページネーションは data-next_page 属性で確認
+  ロット詳細: https://www.numisbids.com/sale/{SALE_ID}/lot/{LOT_NO}
+
+NumisBids ホームからの sale_id 発見:
+  https://www.numisbids.com/n.php?p=home に全社の最新 sale_id が埋め込まれている
+  /sale/{SALE_ID}/lot/{LOT_NO} パターンと社名画像 URL から対応関係を特定
 
 使い方:
   from scripts.numisbids_fetcher import fetch_numisbids_lots
 
   lots = fetch_numisbids_lots(dry_run=False)
-  lots = fetch_numisbids_lots(sources=["noble"], dry_run=True)
+  lots = fetch_numisbids_lots(sources=['noble'], dry_run=True)
 """
 
 from __future__ import annotations
@@ -50,19 +57,22 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-REQUEST_DELAY    = 2.5    # サーバー負荷軽減のための待機秒数
-MAX_PAGES        = 10     # 1オークション最大ページ数
-LOTS_PER_PAGE    = 100    # NumisBids 1ページ最大件数
+REQUEST_DELAY    = 2.0    # サーバー負荷軽減のための待機秒数
+MAX_PAGES        = 15     # 1オークション最大ページ数 (Nobel等は700+ロット)
+LOTS_PER_PAGE    = 100    # NumisBids 固定 100件/ページ
 
-# NumisBids ソース → auction_schedule.json の source_key マッピング
-# 同一 source_key でも auction_id (sale番号) が異なる
-NUMISBIDS_SOURCES = ("noble", "noonans", "spink", "sincona")
-
-# NumisBids ロット検索エンドポイント
 NUMISBIDS_BASE   = "https://www.numisbids.com"
-NUMISBIDS_RESULTS = f"{NUMISBIDS_BASE}/n.php"
+NUMISBIDS_HOME   = f"{NUMISBIDS_BASE}/n.php?p=home"
 
-# source_key → 通貨マッピング (auction_fee_rules.json と一致させること)
+# source_key → NumisBids 社名識別子 (media URL に含まれる)
+SOURCE_TO_FIRM: dict[str, str] = {
+    "noble":    "noble",
+    "noonans":  "dnw",     # Dix Noonan Webb = Noonans の旧社名 (NumisBids URL)
+    "spink":    "spink",
+    "sincona":  "sincona",
+}
+
+# source_key → 通貨 (auction_fee_rules.json と一致させること)
 SOURCE_CURRENCY: dict[str, str] = {
     "noble":    "AUD",
     "noonans":  "GBP",
@@ -72,10 +82,20 @@ SOURCE_CURRENCY: dict[str, str] = {
 
 # source_key → デフォルト為替レート (暫定値 / fetch_daily_rates.py で更新予定)
 DEFAULT_FX_RATES: dict[str, float] = {
-    "noble":    95.0,   # AUD/JPY
-    "noonans":  190.0,  # GBP/JPY
-    "spink":    190.0,  # GBP/JPY
-    "sincona":  170.0,  # CHF/JPY
+    "noble":    95.0,    # AUD/JPY
+    "noonans":  190.0,   # GBP/JPY
+    "spink":    190.0,   # GBP/JPY
+    "sincona":  170.0,   # CHF/JPY
+}
+
+NUMISBIDS_SOURCES = tuple(SOURCE_CURRENCY.keys())
+
+# auction_house 表示名
+AUCTION_HOUSE_NAME: dict[str, str] = {
+    "noble":    "Noble Numismatics",
+    "noonans":  "Noonans Mayfair",
+    "spink":    "Spink",
+    "sincona":  "SINCONA",
 }
 
 
@@ -93,26 +113,74 @@ def _session() -> requests.Session:
     return s
 
 
-# ── sale_id 抽出 ──────────────────────────────────────────────────
+# ── sale_id 発見 ─────────────────────────────────────────────────
 
-def _extract_sale_id(auction: dict) -> Optional[str]:
+def discover_sale_ids(session: requests.Session) -> dict[str, str]:
     """
-    auction エントリから NumisBids sale ID を抽出。
+    NumisBids home から {source_key: sale_id} のマッピングを返す。
 
-    search_url 例:
-      https://www.numisbids.com/n.php?p=results&sid=4095  → "4095"
-      https://www.numisbids.com/n.php?p=firmprofile&sid=3 → "3" (firm ID)
+    home ページには現在開催中・直前の各社 sale が埋め込まれている。
+    メディア URL パターン:
+      //media.numisbids.com/sales/hosted/{FIRM_CODE}/{SALE_CODE}/thumb...
 
-    sale番号が search_url にない場合は None。
+    href パターン:
+      /sale/{SALE_ID}/lot/{LOT_NO}
+
+    対応関係:
+      ページ内の sale_id と firm コードが近接している箇所から抽出。
     """
-    url = auction.get("search_url") or auction.get("url") or ""
+    result: dict[str, str] = {}
+    try:
+        resp = session.get(NUMISBIDS_HOME, timeout=15)
+        if resp.status_code != 200:
+            logger.warning(f"  [NumisBids discover] home {resp.status_code}")
+            return result
 
-    # p=results&sid=XXXX パターン
-    m = re.search(r"[?&]sid=(\d+)", url)
+        html = resp.text
+
+        # /sale/SALE_ID/lot/XXX と //media.numisbids.com/sales/hosted/FIRM/SALE_CODE を対応付ける
+        # HTML の近接位置から推定
+        for source, firm in SOURCE_TO_FIRM.items():
+            # firm コードの画像 URL を検索
+            firm_img_pattern = rf'media\.numisbids\.com/sales/hosted/{re.escape(firm)}/([^/]+)/thumb'
+            firm_matches = re.finditer(firm_img_pattern, html, re.IGNORECASE)
+
+            for m in firm_matches:
+                # 画像から前後 500 文字以内に /sale/{SALE_ID}/lot/ リンクがあるはず
+                search_area = html[max(0, m.start() - 500): m.end() + 500]
+                sale_m = re.search(r'/sale/(\d+)/lot/', search_area)
+                if sale_m:
+                    sale_id = sale_m.group(1)
+                    if source not in result:
+                        result[source] = sale_id
+                        logger.debug(f"  [NumisBids discover] {source} → sale_id={sale_id}")
+                    break
+
+    except Exception as e:
+        logger.warning(f"  [NumisBids discover] エラー: {e}")
+
+    return result
+
+
+def _get_sale_id(auction: dict, discovered: dict[str, str]) -> Optional[str]:
+    """
+    オークションエントリから sale_id を取得。
+    優先順: auction 設定 > discovery > None
+    """
+    # auction_schedule.json に numisbids_sale_id が設定されている場合
+    explicit = auction.get("numisbids_sale_id")
+    if explicit:
+        return str(explicit)
+
+    # search_url に /sale/XXXXX/ パターンがある場合
+    url = auction.get("search_url") or ""
+    m = re.search(r"/sale/(\d+)", url)
     if m:
         return m.group(1)
 
-    return None
+    # 自動発見結果を使用
+    source = auction.get("source_key") or auction.get("company") or ""
+    return discovered.get(source)
 
 
 # ── ページ取得 ────────────────────────────────────────────────────
@@ -122,228 +190,113 @@ def _fetch_page(
     sale_id: str,
     page: int = 1,
 ) -> Optional[str]:
-    """NumisBids の1ページ分の HTML を取得。失敗時は None。"""
-    params: dict = {
-        "p":   "results",
-        "sid": sale_id,
-        "cid": "0",
-        "lot": "0",
-        "ord": "1",
-    }
+    """
+    NumisBids の1ページ分の HTML を取得。
+    URL: https://www.numisbids.com/sale/{sale_id}/?pg={page}
+    失敗時は None。
+    """
+    url = f"{NUMISBIDS_BASE}/sale/{sale_id}/"
+    params = {}
     if page > 1:
         params["pg"] = str(page)
 
     try:
-        resp = session.get(NUMISBIDS_RESULTS, params=params, timeout=20)
+        resp = session.get(url, params=params, timeout=20)
         if resp.status_code == 200:
             return resp.text
-        logger.warning(f"  [NumisBids] sid={sale_id} page={page}: HTTP {resp.status_code}")
+        logger.warning(f"  [NumisBids] sale={sale_id} pg={page}: HTTP {resp.status_code}")
         return None
     except Exception as e:
-        logger.warning(f"  [NumisBids] sid={sale_id} page={page}: {e}")
+        logger.warning(f"  [NumisBids] sale={sale_id} pg={page}: {e}")
         return None
 
 
 # ── HTML パース ───────────────────────────────────────────────────
 
+def _has_next_page(html: str) -> Optional[int]:
+    """
+    HTML の data-next_page 属性から次ページ番号を取得。
+    なければ None。
+
+    NumisBids は以下の形式でページ情報を埋め込む:
+      <div id="nb_nav_nextpage" ... data-next_page="2" ...></div>
+    """
+    m = re.search(r'id="nb_nav_nextpage"[^>]*data-next_page="(\d+)"', html)
+    if m:
+        return int(m.group(1))
+    return None
+
+
 def _parse_numisbids_lots(html: str, sale_id: str) -> list[dict]:
     """
-    NumisBids の HTML からロット情報を抽出。
+    NumisBids /sale/SALE_ID/?pg=N ページからロット情報を抽出。
 
-    NumisBids の典型的なロット構造:
-      <tr class="lot-row"> または <div class="lot-item">
-      ロット番号: <td class="lot-number"> or data-lot 属性
-      タイトル:   <td class="lot-description"> or <a class="lot-title">
-      価格:       <td class="lot-price"> or <span class="current-bid">
-      URL:        <a href="/n.php?p=lot&sid=XXXX&lot=YY">
+    HTML 構造（実測済み）:
+      <span class="lot"><a href="/sale/SSSSS/lot/NNNNN">Lot NNNNN</a></span>
+      <span class="estimate">Estimate: <span class="rateclick" ...>120 AUD</span></span>
+      <span class="summary"><a href="/sale/SSSSS/lot/NNNNN">TITLE</a></span>
+
+    Returns: 100件以下のロットリスト
     """
     lots: list[dict] = []
 
-    # ── JSON-LD を試みる (NumisBids 一部ページ)
-    json_ld_blocks = re.findall(
-        r'<script[^>]+type="application/ld\+json"[^>]*>(.*?)</script>',
-        html, re.DOTALL | re.IGNORECASE,
-    )
-    for block in json_ld_blocks:
-        try:
-            data = json.loads(block.strip())
-            if isinstance(data, dict) and data.get("@type") in ("ItemList", "AuctionEvent"):
-                items = data.get("itemListElement") or data.get("items") or []
-                for item in items:
-                    lot = _normalize_json_lot(item, sale_id)
-                    if lot:
-                        lots.append(lot)
-        except (json.JSONDecodeError, KeyError):
-            pass
-
-    if lots:
-        logger.debug(f"  [NumisBids HTML JSON-LD] sid={sale_id}: {len(lots)}件")
-        return lots
-
-    # ── HTML テーブル行パース
-    # NumisBids は典型的に <tr> ベースのテーブルでロットを列挙する
-    row_pattern = re.compile(
-        r'<tr[^>]*class="[^"]*(?:lot-row|result-row|auction-lot)[^"]*"[^>]*>(.*?)</tr>',
-        re.DOTALL | re.IGNORECASE,
-    )
-
-    for row_m in row_pattern.finditer(html):
-        row = row_m.group(1)
-        lot = _parse_lot_row(row, sale_id)
-        if lot:
-            lots.append(lot)
-
-    if lots:
-        logger.debug(f"  [NumisBids HTML table] sid={sale_id}: {len(lots)}件")
-        return lots
-
-    # ── fallback: ロットリンクとタイトルを抽出
-    lot_links = re.findall(
-        r'href="(/n\.php\?p=lot&(?:amp;)?sid=\d+&(?:amp;)?lot=(\d+)[^"]*)"[^>]*>'
-        r'([^<]{5,120})<',
+    # ロット番号
+    lot_nos = re.findall(
+        rf'<span class="lot"><a href="/sale/{re.escape(sale_id)}/lot/(\d+)">Lot',
         html,
     )
-    seen: set[str] = set()
-    for href, lot_no, title in lot_links:
-        title = title.strip()
-        if not title or lot_no in seen:
-            continue
-        seen.add(lot_no)
 
-        # コイン関連キーワードチェック（ノイズ除去）
-        title_upper = title.upper()
-        is_coin = any(
-            kw in title_upper
-            for kw in ["NGC", "PCGS", "MS", "PF", "GOLD", "SILVER", "SOVEREIGN",
-                        "COIN", "PENNY", "FRANC", "POUND", "DOLLAR", "THALER",
-                        "FLORIN", "DUCAT", "CROWN"]
-        )
-        if not is_coin:
-            continue
+    # タイトル
+    titles = re.findall(
+        rf'<span class="summary"><a href="/sale/{re.escape(sale_id)}/lot/\d+">([^<]+)</a>',
+        html,
+    )
 
-        href_clean = href.replace("&amp;", "&")
+    # 見積価格 (例: "120 AUD", "500 GBP")
+    # data-message 属性内に HTML が含まれるため [^>]* では失敗する
+    # → <span class="estimate">Estimate: ... の後の最初の "数字 通貨" を取得
+    estimates = re.findall(
+        r'class="estimate">Estimate:.*?>(\d[\d,]*)\s+([A-Z]{3})</span>',
+        html,
+        re.DOTALL,
+    )
+    # タプル (value, currency) → "value CURRENCY" 形式に統一
+    estimates_str = [f"{v} {c}" for v, c in estimates]
+
+    # 結合
+    count = min(len(lot_nos), len(titles))
+    for i in range(count):
+        lot_no = lot_nos[i]
+        title  = titles[i].strip()
+
+        # 価格パース: "120 AUD" → price=120.0, detected_currency="AUD"
+        price  = 0.0
+        detected_currency: Optional[str] = None
+        if i < len(estimates_str):
+            est_raw = estimates_str[i].strip()
+            est_m = re.match(r"([0-9,\.]+)\s*([A-Z]{3})", est_raw)
+            if est_m:
+                try:
+                    price = float(est_m.group(1).replace(",", ""))
+                    detected_currency = est_m.group(2)
+                except ValueError:
+                    pass
+
         lots.append({
-            "lot_number":    lot_no,
-            "lot_title":     title,
-            "lot_url":       f"{NUMISBIDS_BASE}{href_clean}",
-            "current_price": 0.0,
+            "lot_number":          lot_no,
+            "lot_title":           title,
+            "lot_url":             f"{NUMISBIDS_BASE}/sale/{sale_id}/lot/{lot_no}",
+            "current_price":       price,
+            "detected_currency":   detected_currency,
         })
 
-    logger.debug(f"  [NumisBids HTML fallback] sid={sale_id}: {len(lots)}件")
+    if len(lot_nos) != len(titles):
+        logger.debug(
+            f"  [NumisBids parse] sale={sale_id}: "
+            f"lot_nos={len(lot_nos)} titles={len(titles)} → {count}件使用"
+        )
+
     return lots
-
-
-def _parse_lot_row(row_html: str, sale_id: str) -> Optional[dict]:
-    """テーブル行 HTML から1ロット分の情報を抽出。"""
-    # タイトル
-    title_m = re.search(
-        r'<(?:td|div|a)[^>]+class="[^"]*(?:lot-description|lot-title|description)[^"]*"[^>]*>'
-        r'(?:<[^>]+>)*\s*(.*?)\s*(?:</[^>]+>)*\s*</(?:td|div|a)>',
-        row_html, re.DOTALL | re.IGNORECASE,
-    )
-    if not title_m:
-        # <a href> のテキストからタイトルを試みる
-        a_m = re.search(r'href="[^"]*p=lot[^"]*"[^>]*>([^<]{5,120})<', row_html)
-        if not a_m:
-            return None
-        title = a_m.group(1).strip()
-    else:
-        title = re.sub(r"<[^>]+>", "", title_m.group(1)).strip()
-
-    if not title or len(title) < 5:
-        return None
-
-    # ロット番号
-    lot_no_m = re.search(
-        r'<(?:td|div|span)[^>]+class="[^"]*lot-(?:number|no|num)[^"]*"[^>]*>'
-        r'(?:<[^>]+>)*\s*(\d+)\s*',
-        row_html, re.IGNORECASE,
-    )
-    if not lot_no_m:
-        lot_no_m = re.search(r'&lot=(\d+)', row_html)
-    lot_no = lot_no_m.group(1) if lot_no_m else ""
-
-    # 現在入札額 / 推定価格
-    price_m = re.search(
-        r'<(?:td|div|span)[^>]+class="[^"]*(?:lot-price|current-bid|estimate|hammer)[^"]*"[^>]*>'
-        r'[^0-9]*([0-9][0-9,\.]+)',
-        row_html, re.IGNORECASE,
-    )
-    price = 0.0
-    if price_m:
-        try:
-            price = float(price_m.group(1).replace(",", "").replace(".", "", price_m.group(1).count(".") - 1))
-        except (ValueError, AttributeError):
-            pass
-
-    # URL
-    url_m = re.search(r'href="(/n\.php\?p=lot[^"]+)"', row_html, re.IGNORECASE)
-    url = ""
-    if url_m:
-        url = f"{NUMISBIDS_BASE}{url_m.group(1).replace('&amp;', '&')}"
-
-    return {
-        "lot_number":    lot_no,
-        "lot_title":     title,
-        "lot_url":       url,
-        "current_price": price,
-    }
-
-
-def _normalize_json_lot(item: dict, sale_id: str) -> Optional[dict]:
-    """JSON-LD オブジェクトから overseas_lot 用の基本フィールドを抽出。"""
-    if not isinstance(item, dict):
-        return None
-
-    title = (
-        item.get("name") or item.get("title") or
-        item.get("item", {}).get("name") or ""
-    )
-    title = re.sub(r"<[^>]+>", "", str(title)).strip()
-    if not title:
-        return None
-
-    url = item.get("url") or item.get("lotUrl") or ""
-    lot_no = str(item.get("lotNumber") or item.get("lot") or item.get("position") or "")
-
-    price_raw = (
-        item.get("currentBid") or item.get("lowEstimate") or
-        item.get("offers", {}).get("lowPrice") or
-        item.get("price", {}).get("value") or 0
-    )
-    try:
-        price = float(str(price_raw).replace(",", "").replace(" ", "")) if price_raw else 0.0
-    except (ValueError, TypeError):
-        price = 0.0
-
-    return {
-        "lot_number":    lot_no,
-        "lot_title":     title,
-        "lot_url":       url,
-        "current_price": price,
-    }
-
-
-# ── ページ数カウント ─────────────────────────────────────────────
-
-def _get_total_pages(html: str) -> Optional[int]:
-    """
-    NumisBids の HTML からトータルページ数を取得。
-    "Page 1 of 3" / "1/3" などのパターンに対応。
-    """
-    m = re.search(
-        r'[Pp]age\s+\d+\s+of\s+(\d+)|(\d+)\s*/\s*(\d+)\s*[Pp]age',
-        html,
-    )
-    if m:
-        return int(m.group(1) or m.group(3))
-
-    # ページナビゲーションから推定
-    page_links = re.findall(r'[?&]pg=(\d+)', html)
-    if page_links:
-        return max(int(p) for p in page_links)
-
-    return None
 
 
 # ── lots → overseas_lot スキーマ変換 ─────────────────────────────
@@ -358,22 +311,16 @@ def _to_overseas_lot(
     NumisBids から取得した生ロットデータを overseas_lot 標準スキーマに変換。
     コスト計算は auction_cost_calculator.enrich_lot_with_cost() に委譲。
     """
-    price_raw  = float(raw.get("current_price") or 0)
-    price_jpy  = int(price_raw * fx_rate) if price_raw > 0 else 0
-    currency   = SOURCE_CURRENCY.get(source, "USD")
+    price_raw = float(raw.get("current_price") or 0)
 
-    # auction_schedule.json の display_name を使う
-    auction_house_map: dict[str, str] = {
-        "noble":    "Noble Numismatics",
-        "noonans":  "Noonans Mayfair",
-        "spink":    "Spink",
-        "sincona":  "SINCONA",
-    }
+    # 通貨: detected_currency (ページから) > SOURCE_CURRENCY デフォルト
+    currency = raw.get("detected_currency") or SOURCE_CURRENCY.get(source, "USD")
+    price_jpy = int(price_raw * fx_rate) if price_raw > 0 else 0
 
     lot: dict = {
         # ── 出所情報
         "source":         source,
-        "auction_house":  auction_house_map.get(source, source.title()),
+        "auction_house":  AUCTION_HOUSE_NAME.get(source, source.title()),
         "auction_id":     auction.get("id", ""),
         "auction_name":   auction.get("name", ""),
 
@@ -455,8 +402,8 @@ def fetch_numisbids_lots(
     all_auctions = get_all_auctions_with_status()
     target_auctions = []
     for a in all_auctions:
-        source = a.get("source_key") or a.get("company") or ""
-        if source not in target_sources:
+        src = a.get("source_key") or a.get("company") or ""
+        if src not in target_sources:
             continue
         status = a.get("_status")
         if status not in (STATUS_ACTIVE, STATUS_IMMINENT):
@@ -471,53 +418,51 @@ def fetch_numisbids_lots(
 
     logger.info(f"  [NumisBids] 取得対象: {len(target_auctions)}件")
 
+    # NumisBids home から sale_id を自動発見
+    discovered = discover_sale_ids(session)
+    if discovered:
+        logger.info(f"  [NumisBids] 自動発見: {discovered}")
+    time.sleep(REQUEST_DELAY)
+
     all_lots: list[dict] = []
 
     for auction in target_auctions:
         source    = auction.get("source_key") or auction.get("company") or "unknown"
-        sale_id   = _extract_sale_id(auction)
+        sale_id   = _get_sale_id(auction, discovered)
         fx_rate   = fx_rates.get(source) or DEFAULT_FX_RATES.get(source, 150.0)
 
         auction_name = auction.get("name", auction.get("id", ""))
 
         if not sale_id:
             logger.warning(
-                f"  [NumisBids] sale_id 取得失敗: {auction.get('id')} "
-                f"(search_url に ?sid=XXXX が必要)"
+                f"  [NumisBids] sale_id 未取得: {auction.get('id')} — "
+                f"auction_schedule.json に numisbids_sale_id を追加してください"
             )
             continue
 
         logger.info(
             f"  [NumisBids] {auction_name} "
-            f"(source={source}, sid={sale_id}, fx={fx_rate}) 取得開始"
+            f"(source={source}, sale={sale_id}, fx={fx_rate}) 取得開始"
         )
 
         raw_lots: list[dict] = []
-        total_pages: Optional[int] = None
+        page = 1
 
-        for page in range(1, max_pages + 1):
+        while page <= max_pages:
             html = _fetch_page(session, sale_id, page)
             if not html:
                 break
 
-            # 初回ページでトータルページ数を取得
-            if page == 1:
-                total_pages = _get_total_pages(html)
-                if total_pages:
-                    logger.debug(f"    総ページ数: {total_pages}")
-
             page_lots = _parse_numisbids_lots(html, sale_id)
             raw_lots.extend(page_lots)
-            logger.debug(f"    page {page}: {len(page_lots)}件")
+            logger.debug(f"    pg={page}: {len(page_lots)}件")
 
-            # 最終ページ判定
-            if page_lots and len(page_lots) < LOTS_PER_PAGE:
-                break
-            if total_pages and page >= total_pages:
-                break
-            if not page_lots:
+            # 次ページ確認
+            next_pg = _has_next_page(html)
+            if not next_pg or not page_lots:
                 break
 
+            page = next_pg
             time.sleep(REQUEST_DELAY)
 
         # overseas_lot スキーマに変換
@@ -556,8 +501,24 @@ if __name__ == "__main__":
     )
     parser.add_argument("--auction", nargs="+", help="取得するオークションID")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--pages", type=int, default=MAX_PAGES)
+    parser.add_argument("--pages",   type=int, default=MAX_PAGES)
+    parser.add_argument(
+        "--discover", action="store_true",
+        help="sale_id 自動発見のみ実行（取得なし）",
+    )
     args = parser.parse_args()
+
+    if args.discover:
+        session = _session()
+        found = discover_sale_ids(session)
+        print("\n=== NumisBids sale_id 自動発見結果 ===")
+        for src, sid in found.items():
+            print(f"  {src:<12}: sale_id={sid}")
+            print(f"             URL: https://www.numisbids.com/sale/{sid}/")
+        if not found:
+            print("  発見なし (開催中オークションがない可能性)")
+        print("\n→ auction_schedule.json の numisbids_sale_id に追記してください")
+        raise SystemExit(0)
 
     sources = None if "all" in args.source else args.source
 
@@ -572,10 +533,10 @@ if __name__ == "__main__":
     for lot in lots[:5]:
         print(f"  [{lot.get('auction_id', '')[:35]}]")
         print(f"  Lot {lot.get('lot_number', '?'):>6}: {lot.get('lot_title', '')[:60]}")
-        price_raw = lot.get('current_price', 0)
-        currency  = lot.get('currency', 'USD')
-        price_jpy = lot.get('price_jpy', 0)
-        cost_jpy  = lot.get('estimated_cost_jpy')
+        price_raw = lot.get("current_price", 0)
+        currency  = lot.get("currency", "USD")
+        price_jpy = lot.get("price_jpy", 0)
+        cost_jpy  = lot.get("estimated_cost_jpy")
         print(
             f"  価格: {currency} {price_raw:,.0f} → ¥{price_jpy:,.0f}"
             + (f"  [仕入コスト: ¥{cost_jpy:,.0f}]" if cost_jpy else "  [仕入コスト: CEO未承認]")

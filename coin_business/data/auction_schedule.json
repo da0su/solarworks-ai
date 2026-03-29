@@ -29,8 +29,10 @@
       "priority": 2,
       "type": ["world_coins", "asian_coins"],
       "url": "https://www.spink.com/auctions/",
-      "search_url": "https://www.spink.com/auctions/prices",
-      "notes": "香港コイン・アジア中心",
+      "search_url": "https://www.numisbids.com/sale/10494/",
+      "numisbids_sale_id": "10494",
+      "numisbids_sale_id_a": "10493",
+      "notes": "香港コイン・アジア中心。CSS123B(sale=10494)とCSS123A(sale=10493)の2部構成。通貨はHKD（fee_rulesのGBP設定と異なる点を要CEO確認）",
       "april_focus": true
     },
     {
@@ -57,7 +59,8 @@
       "priority": 2,
       "type": ["world_coins", "australian_coins"],
       "url": "https://www.noble.com.au/",
-      "search_url": "https://www.numisbids.com/firmprofile/noble",
+      "search_url": "https://www.numisbids.com/sale/10505/",
+      "numisbids_sale_id": "10505",
       "notes": "DB在庫 000398 (AUSTRALIA SOVEREIGN MS63) と直接対応",
       "april_focus": true
     },
@@ -113,8 +116,9 @@
       "priority": 2,
       "type": ["world_coins", "british_coins", "medals"],
       "url": "https://www.noonans.co.uk/auctions/",
-      "search_url": "https://www.numisbids.com/firmprofile/29",
-      "notes": "英国・英連邦コイン・勲章。DB在庫の英国系参考価格",
+      "search_url": "https://www.numisbids.com/sale/10536/",
+      "numisbids_sale_id": "10536",
+      "notes": "英国・英連邦コイン・勲章。DB在庫の英国系参考価格。現在Auction 355が開催中(sale=10536)、356は次回予定(sale_id未決定)",
       "april_focus": true
     },
     {

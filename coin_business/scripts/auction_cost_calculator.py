@@ -205,11 +205,15 @@ def enrich_lot_with_cost(
         require_confirmed=require_confirmed,
     )
 
-    lot["estimated_cost_jpy"]  = cost
+    # price=0 は "価格未定" として None 扱い（0円として計算しない）
+    lot["estimated_cost_jpy"]  = cost if cost else None
     lot["fx_rate"]             = fx_rate
-    lot["buy_limit_jpy"]       = buy_limit_jpy
 
-    if cost is not None and buy_limit_jpy:
+    # buy_limit_jpy は呼び出し元から渡された値を優先
+    if buy_limit_jpy is not None:
+        lot["buy_limit_jpy"] = buy_limit_jpy
+
+    if cost and buy_limit_jpy:
         lot["estimated_margin_pct"] = calc_margin_pct(cost, buy_limit_jpy)
     else:
         lot["estimated_margin_pct"] = None
