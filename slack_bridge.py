@@ -71,6 +71,7 @@ SENDER_FILE = DATA_DIR / "sender.txt"
 LOG_FILE = DATA_DIR / "bridge.log"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
 LATEST_MSG_FILE = DATA_DIR / "latest_msg.txt"
+WATCH_PID_FILE = DATA_DIR / "watch.pid"  # watch多重起動防止用PIDファイル
 
 # 旧ファイルパス（マイグレーション用）
 OLD_SENDER_FILE = Path.home() / ".slack_bridge_sender"
@@ -3202,9 +3203,52 @@ def check_pending_tasks():
 # ============================================================
 # 監視ループ（watch）
 # ============================================================
+def _write_watch_pid():
+    """自プロセスのPIDをWATCH_PID_FILEに書き込む（多重起動防止）"""
+    try:
+        WATCH_PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"[watch] PIDファイル書き込み失敗: {e}")
+
+
+def _kill_existing_watch() -> bool:
+    """WATCH_PID_FILEに記録された既存watchプロセスを終了させる。
+    成功またはプロセス不存在なら True を返す。"""
+    if not WATCH_PID_FILE.exists():
+        return True
+    try:
+        old_pid = int(WATCH_PID_FILE.read_text(encoding="utf-8").strip())
+        if old_pid == os.getpid():
+            return True  # 自分自身は終了しない
+        if sys.platform == "win32":
+            import ctypes
+            PROCESS_TERMINATE = 1
+            handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, old_pid)
+            if handle:
+                ctypes.windll.kernel32.TerminateProcess(handle, 0)
+                ctypes.windll.kernel32.CloseHandle(handle)
+                logger.info(f"[watch] 既存watchプロセス(pid={old_pid})を終了しました")
+        else:
+            import signal as _signal
+            try:
+                os.kill(old_pid, _signal.SIGTERM)
+                logger.info(f"[watch] 既存watchプロセス(pid={old_pid})にSIGTERMを送信")
+            except ProcessLookupError:
+                pass  # 既に終了済み
+        WATCH_PID_FILE.unlink(missing_ok=True)
+        return True
+    except (ValueError, PermissionError, OSError) as e:
+        logger.warning(f"[watch] 既存watchプロセス終了失敗: {e}")
+        return False
+
+
 def watch_channel(interval: int = 5):
     """ai-bridgeチャンネルを定期ポーリングで監視"""
     logger.info(f"Slack監視開始 (間隔: {interval}秒, sender: {get_sender()})")
+
+    # --- 多重起動防止: 既存watchをkillしてから自PIDを登録 ---
+    _kill_existing_watch()
+    _write_watch_pid()
 
     # --- 起動時 state 復元 ---
     state = state_mgr.load()
@@ -3375,12 +3419,17 @@ def _try_restart_watch() -> bool:
     """
     watch プロセスを再起動する（第1段階: watch, 第2段階: startup_all.bat）。
     成功すれば True、失敗すれば False を返す。
+    既存watchはPIDファイル経由でkillしてから新プロセスを起動する（多重起動防止）。
     """
     python_exe = sys.executable
     script = str(Path(__file__).resolve())
 
     # Windows で黒ウィンドウを出さないフラグ
     _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+
+    # 既存watchをkill（多重起動防止）
+    _kill_existing_watch()
+    time.sleep(1)  # kill後の安定待機
 
     # 第1段階: python slack_bridge.py watch
     try:
@@ -3839,6 +3888,11 @@ def _handle_bridge_msg(bridge_data: dict, my_sender: str):
         log_event("ack_received", {"task_id": task_id})
 
     elif msg_type == "DONE":
+        # 重複チェック: 既にDONE_RECEIVED済みならスキップ（多重watch並走対策）
+        _existing = load_task_registry().get(task_id, {})
+        if _existing.get("status") in ("DONE_RECEIVED", "ERROR_RECEIVED"):
+            logger.debug(f"重複DONE受信。スキップ: {task_id[:8]}")
+            return
         logger.info(f"DONE受信: {task_name} (id={task_id[:8]})")
         remove_pending_task(task_id)
         save_task_registry_entry(task_id, "DONE_RECEIVED", {"task": task_name})
@@ -3846,6 +3900,11 @@ def _handle_bridge_msg(bridge_data: dict, my_sender: str):
         log_event("done_received", {"task_id": task_id, "payload": bridge_data.get("payload", {})})
 
     elif msg_type == "ERROR":
+        # 重複チェック: 既にERROR_RECEIVED済みならスキップ
+        _existing = load_task_registry().get(task_id, {})
+        if _existing.get("status") in ("DONE_RECEIVED", "ERROR_RECEIVED"):
+            logger.debug(f"重複ERROR受信。スキップ: {task_id[:8]}")
+            return
         logger.warning(f"ERROR受信: {task_name} (id={task_id[:8]})")
         remove_pending_task(task_id)
         save_task_registry_entry(task_id, "ERROR_RECEIVED", {"task": task_name})
