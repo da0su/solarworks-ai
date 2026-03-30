@@ -1,23 +1,23 @@
 {
-  "generated_at": "2026-03-29 17:27 JST",
-  "date": "2026-03-29",
+  "generated_at": "2026-03-30 01:08 JST",
+  "date": "2026-03-30",
   "company_direction": "CEO→CAP（代表COO）→cyber 3層自動運用。楽天ROOM自動投稿+コイン仕入れリサーチ。",
   "progress": {
     "daily_check": "07:30/12:30/18:30 定時チェック稼働中",
     "schedule_slots": {
-      "07:30": "running",
-      "12:30": "running",
+      "07:30": "not_fired",
+      "12:30": "not_fired",
       "18:30": "not_fired"
     },
     "rakuten": "health=CRITICAL / pool=0件",
     "coin": "DB=0件",
-    "ebay": "候補21件 (未承認0件) / 最終検索=2026-03-28 17:24"
+    "ebay": "候補19件 (未承認19件) / 最終検索=2026-03-28 17:24"
   },
   "current_issues": [],
   "next_priority": [
     "cap/cyber watch 常時起動維持",
     "daily-check 定時発火 監視 (schedule_state.json 確認)",
-    "ebay-search 次回実行予定"
+    "ebay-review 承認待ち (19件)"
   ],
   "risks": [
     "楽天ROOM health=CRITICAL ⚠️",
@@ -35,11 +35,12 @@
     "cyber": "実処理担当。watch常時起動。git pullで最新コード維持。ebay-search実行役。"
   },
   "decision_required": [
+    "ebay-review 承認待ち (19件): python slack_bridge.py approve --task ebay-review --by cap",
     "楽天ROOM health=CRITICAL: python run.py health で詳細確認"
   ],
   "state_snapshot": {
-    "system_status": "idle",
-    "current_tasks": 0,
+    "system_status": "busy",
+    "current_tasks": 1,
     "recent_errors": 0
   },
   "data_files": {

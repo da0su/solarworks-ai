@@ -4,16 +4,16 @@
 会話履歴は存在しないため、この情報のみを基準に判断してください。
 
 # CURRENT STATE
-- system_status: idle
-- state-audit: CLEAN
-- current_tasks: 0件
+- system_status: busy
+- state-audit: 要確認
+- current_tasks: 1件
 - 本日エラー: 0件
 
 # DAILY HANDOFF（要約）
 - Company Direction: CEO→CAP（代表COO）→cyber 3層自動運用。楽天ROOM自動投稿+コイン仕入れリサーチ。
 - 楽天ROOM: health=CRITICAL / pool=0件
 - コイン: DB=0件
-- eBay: 候補21件 (未承認0件) / 最終検索=2026-03-28 17:24
+- eBay: 候補19件 (未承認19件) / 最終検索=2026-03-28 17:24
 - 定時チェック(07:30/12:30/18:30):
   07:30=not_fired / 12:30=not_fired / 18:30=not_fired
 
@@ -23,9 +23,10 @@
 ## Next Priority
   1. cap/cyber watch 常時起動維持
   2. daily-check 定時発火 監視 (schedule_state.json 確認)
-  3. ebay-search 次回実行予定
+  3. ebay-review 承認待ち (19件)
 
 ## Decision Required
+  - ebay-review 承認待ち (19件): python slack_bridge.py approve --task ebay-review --by cap
   - 楽天ROOM health=CRITICAL: python run.py health で詳細確認
 
 # IMPORTANT FILES
@@ -62,7 +63,7 @@
 以下の優先順位で状況を確認・対応してください：
   1. cap/cyber watch 常時起動維持
   2. daily-check 定時発火 監視 (schedule_state.json 確認)
-  3. ebay-search 次回実行予定
+  3. ebay-review 承認待ち (19件)
 
 ---
-生成日時: 2026-03-29 17:27 JST
+生成日時: 2026-03-30 01:08 JST
