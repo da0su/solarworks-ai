@@ -7,6 +7,7 @@
     python run.py import-yahoo <excel_path> [--dry-run]  # ヤフオクExcel投入
     python run.py search [--country XX] [--grade XX] [--grader XX] [--year XXXX] [--limit N]
     python run.py stats [--clean] [--country XX] [--grader NGC|PCGS]  # 簡易集計レポート
+    python run.py explore            # eBay vs Yahoo 価格差自動探索
     python run.py count              # 全テーブル件数表示
     python run.py collect            # 価格データ取得
     python run.py analyze            # 分析実行
@@ -122,6 +123,43 @@ def cmd_ebay_watch():
     monitor_main()
 
 
+def cmd_explore():
+    """eBay vs Yahoo 価格差自動探索"""
+    from scripts.auto_explorer import main as explore_main
+    explore_main()
+
+
+def cmd_ebay_search():
+    """eBay仕入候補をAPIで探索し judge_opportunity で判定。
+    使い方:
+        python run.py ebay-search
+    """
+    from scripts.ebay_auction_search import main as ebay_search_main
+    ebay_search_main()
+
+
+def cmd_overseas_fetch():
+    """海外オークション落札データ取得（Heritage / Stack's Bowers 等）。
+    使い方:
+        python run.py overseas-fetch                    # 全ソース
+        python run.py overseas-fetch --source heritage  # Heritage のみ
+        python run.py overseas-fetch --coin 001001      # 特定管理番号
+        python run.py overseas-fetch --dry-run          # テスト実行
+    """
+    from scripts.fetch_overseas_sold import main as overseas_main
+    overseas_main()
+
+
+def cmd_calc_ref():
+    """仕入上限(ref1/ref2)を全件再計算。NULLレコードも補完。
+    使い方:
+        python run.py calc-ref           # 全件
+        python run.py calc-ref --null    # ref1_buy_limit_jpy=NULLのみ
+    """
+    from scripts.calc_ref_values import main as calc_main
+    calc_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -185,9 +223,13 @@ COMMANDS = {
     "update-yahoo": cmd_update_yahoo,
     "update-ebay": cmd_update_ebay,
     "ebay-watch": cmd_ebay_watch,
+    "explore": cmd_explore,
     "search": cmd_search,
     "stats": cmd_stats,
     "count": cmd_count,
+    "ebay-search":     cmd_ebay_search,    # eBay仕入候補探索・判定
+    "overseas-fetch":  cmd_overseas_fetch, # 海外オークション落札データ取得（P0-1）
+    "calc-ref":        cmd_calc_ref,       # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,
     "report": cmd_report,

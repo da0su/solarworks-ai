@@ -619,7 +619,10 @@ def judge_opportunity(match, yahoo_active, yahoo_closed, usd_jpy):
 
     # ヤフオクに出品中のライバルがいるか
     if yahoo_active:
-        cheapest_active = min(r['price_jpy'] for r in yahoo_active)
+        # NG-3修正: 仕入上限の5%以下は開始入札価格とみなして除外
+        _floor = buy_limit_jpy * 0.05
+        _filtered_active = [r for r in yahoo_active if r['price_jpy'] >= _floor] or yahoo_active
+        cheapest_active = min(r['price_jpy'] for r in _filtered_active)
         # ライバルが仕入上限より安い → 利益出ない
         if cheapest_active < buy_limit_jpy:
             return 'NG', f'ライバルが{cheapest_active:,}円で出品中。仕入上限{buy_limit_jpy:,}円を下回り利益出ない'
@@ -636,7 +639,10 @@ def judge_opportunity(match, yahoo_active, yahoo_closed, usd_jpy):
         return 'REVIEW', f'ライバル{cheapest_active:,}円。入札状況を要確認'
     elif yahoo_closed:
         # 落札済みのみある場合
-        avg_closed = sum(r['price_jpy'] for r in yahoo_closed) / len(yahoo_closed)
+        # NG-2修正: ref2_yahoo_price_jpy の1/10以下は誤認識落札として除外
+        ref_price = match.get('ref2_yahoo_price_jpy') or 0
+        _closed_valid = [r for r in yahoo_closed if ref_price <= 0 or r['price_jpy'] >= ref_price * 0.1] or yahoo_closed
+        avg_closed = sum(r['price_jpy'] for r in _closed_valid) / len(_closed_valid)
         if avg_closed >= buy_limit_jpy * 1.2:
             return 'OK', f'直近落札平均{avg_closed:,.0f}円。仕入上限{buy_limit_jpy:,}円の1.2倍超で市場良好'
         elif avg_closed >= buy_limit_jpy:
@@ -855,10 +861,12 @@ def main():
     ceo_count = 0
 
     for m in all_matches:
-        # 判定
+        # 判定 ── 結果を match dict に書き戻す（Slack連携・daily_candidates挿入に使う）
         judgment, reason = judge_opportunity(
             m, m.get('yahoo_active', []), m.get('yahoo_closed', []), usd_jpy
         )
+        m['judgment'] = judgment
+        m['judgment_reason'] = reason
 
         if judgment == 'OK':
             ok_count += 1
@@ -982,6 +990,8 @@ def _save_matches_json(all_matches, total_searched):
             'bid_count': m.get('bid_count', 0),
             'ebay_url': m.get('ebay_url', ''),
             'is_new': is_new,
+            'judgment': m.get('judgment', ''),          # OK/NG/REVIEW/CEO判断
+            'judgment_reason': m.get('judgment_reason', ''),  # 判定根拠
         })
 
     result = {
