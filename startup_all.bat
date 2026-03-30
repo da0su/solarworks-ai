@@ -12,6 +12,18 @@ echo.
 if not exist "logs" mkdir logs
 
 :: -----------------------------------------------
+:: STEP 0: git pull（GitHub正本から最新取得）
+:: -----------------------------------------------
+echo [0/5] git pull 実行中...
+git pull >> logs\cyber_startup.log 2>&1
+if %ERRORLEVEL% == 0 (
+    echo       git pull OK
+) else (
+    echo       git pull 失敗 - ローカルで続行します（要確認）
+    echo [%date% %time%] git pull FAILED >> logs\cyber_startup.log
+)
+
+:: -----------------------------------------------
 :: STEP 1: sender を cyber に設定
 :: -----------------------------------------------
 echo [1/5] sender設定 (cyber)...
