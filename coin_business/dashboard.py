@@ -243,6 +243,47 @@ def load_bid_history_cached() -> tuple[list[dict], str]:
         return [], str(e)
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def load_scheduled_bids() -> tuple[list[dict], str]:
+    """P2: 入札予定（result=scheduled）をキャッシュ付きで取得。"""
+    db = get_client()
+    try:
+        r = (db.table('bid_history')
+             .select('*')
+             .eq('result', 'scheduled')
+             .order('auction_end_at', desc=False)
+             .order('created_at', desc=True)
+             .limit(100)
+             .execute())
+        return r.data or [], ""
+    except Exception as e:
+        return [], str(e)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_ng_summary() -> dict:
+    """CEO確認NGのカテゴリ別集計。"""
+    db = get_client()
+    try:
+        r = (db.table('daily_candidates')
+             .select('ceo_ng_reason')
+             .eq('ceo_decision', 'rejected')
+             .not_.is_('ceo_ng_reason', 'null')
+             .limit(500)
+             .execute())
+        from collections import Counter
+        cats = Counter()
+        for row in (r.data or []):
+            reason = row.get('ceo_ng_reason','')
+            # "[カテゴリ] ..." 形式から抽出
+            import re
+            m = re.match(r'\[(.+?)\]', reason)
+            cats[m.group(1) if m else reason[:20]] += 1
+        return dict(cats.most_common(10))
+    except Exception:
+        return {}
+
+
 # ════════════════════════════════════════════
 # ユーティリティ
 # ════════════════════════════════════════════
@@ -275,6 +316,33 @@ def fmt_jpy_plain(v) -> str:
         return '—'
 
 
+def _ebay_item_no(url: str) -> str:
+    """eBay URLからitem番号を抽出する。追加提案: URL貼り付け自動解析。"""
+    import re
+    m = re.search(r'/itm/(\d{10,13})', url or '')
+    return m.group(1) if m else ''
+
+
+def _hours_left_str(end_raw: str) -> tuple[str, str]:
+    """締切日時 → (表示文字列, 色コード)。追加提案: 締切カウントダウン。"""
+    if not end_raw:
+        return '—', '#94a3b8'
+    try:
+        from datetime import timezone as _tz
+        now_u = datetime.now(_tz.utc)
+        end_dt = datetime.fromisoformat(str(end_raw).replace('Z', '+00:00'))
+        diff_h = (end_dt - now_u).total_seconds() / 3600
+        if diff_h < 0:
+            return '締切済', '#64748b'
+        if diff_h < 24:
+            return f'残り{diff_h:.1f}h 🚨', '#ef4444'
+        if diff_h < 48:
+            return f'残り{diff_h:.0f}h ⚠️', '#f97316'
+        return end_dt.strftime('%m/%d %H:%M'), '#94a3b8'
+    except Exception:
+        return str(end_raw)[:16], '#94a3b8'
+
+
 JUDGMENT_CONFIG = {
     'OK':      ('✅ OK',      'ok'),
     'NG':      ('❌ NG',      'ng'),
@@ -288,6 +356,8 @@ RESULT_LABELS = {
     'lose':      ('❌ 落選', 'result-lose'),
     'cancelled': ('🚫 取消', 'result-cancelled'),
 }
+
+RESULT_OPTIONS = {'scheduled': '⏳ 予定', 'win': '🏆 落札', 'lose': '❌ 落選', 'cancelled': '🚫 取消'}
 
 AUCTION_HOUSES = ['eBay', 'Heritage', 'Spink', 'Noble', 'Noonans', 'NumisBids', 'Stack\'s Bowers', 'その他']
 
@@ -485,7 +555,7 @@ def render_tab_db(rates: dict):
 # ════════════════════════════════════════════
 def render_tab_ceo():
     try:
-        from scripts.candidates_writer import update_ceo_decision
+        from scripts.candidates_writer import update_ceo_decision, save_bid_entry
     except Exception as import_err:
         st.error(f"import error: {import_err}")
         return
@@ -614,7 +684,30 @@ def render_tab_ceo():
             if st.button("✅ 承認", key=f"approve_{key_prefix}", use_container_width=True):
                 ok = update_ceo_decision(dedup_key, "approved")
                 if ok:
-                    st.success("承認しました")
+                    # P1: 入札予定リストへ自動追加（重複チェック）
+                    _sched, _ = load_scheduled_bids()
+                    _titles = {h.get('lot_title','')[:40] for h in _sched}
+                    if lot_title[:40] not in _titles:
+                        _note = (f"CEO承認 {datetime.now().strftime('%m/%d %H:%M')}"
+                                 f" | Score:{p_score}"
+                                 + (f" | 上限{fmt_jpy(buy_limit)}" if buy_limit else ""))
+                        _entry = {
+                            "lot_title":      lot_title,
+                            "auction_house":  auction_h,
+                            "lot_url":        lot_url or None,
+                            "result":         "scheduled",
+                            "auction_end_at": end_time_raw or None,
+                            "management_no":  c.get('management_no'),
+                            "our_bid_jpy":    int(buy_limit) if buy_limit else None,
+                            "recommended_by": "auto_approved",
+                            "notes":          _note,
+                            "usd_jpy_rate":   float(c.get('fx_rate') or 161),
+                        }
+                        _bid_id = save_bid_entry(_entry)
+                        msg = "✅ 承認 + 🎯 入札予定に自動追加しました" if _bid_id else "✅ 承認（入札予定追加失敗）"
+                    else:
+                        msg = "✅ 承認（既に入札予定あり）"
+                    st.success(msg)
                     st.cache_data.clear()
                     st.rerun()
                 else:
@@ -664,6 +757,17 @@ def render_tab_ceo():
                     + (f"<br><span style='color:#ef4444;font-size:.8rem'>NG理由: {ng_r}</span>" if ng_r else ""),
                     unsafe_allow_html=True)
 
+    # ─── 追加提案①: NG理由分析サマリー ───
+    ng_summary = load_ng_summary()
+    if ng_summary:
+        with st.expander("📊 NG理由分析（累計）"):
+            st.caption("NGとして保存された案件の分類別件数")
+            for cat, cnt in ng_summary.items():
+                bar = "█" * min(cnt, 20)
+                st.markdown(
+                    f"`{cat[:12]:12}` {bar} **{cnt}件**",
+                    unsafe_allow_html=False)
+
 
 # ════════════════════════════════════════════
 # Tab 3: 入札実績 (P1)
@@ -707,8 +811,12 @@ def render_tab_bid_history(usd_rate: float):
             f_url = st.text_input("URL", key="bh_url",
                                   placeholder="https://www.ebay.com/itm/...")
         with fc4:
+            # 追加提案②: eBay URL自動解析 — URLからitem#を自動抽出
+            _auto_item = _ebay_item_no(f_url) if f_url else ''
             f_lot_no = st.text_input("Lot# / Item#", key="bh_lotno",
-                                     placeholder="例: 236710306271")
+                                     value=_auto_item,
+                                     placeholder="例: 236710306271",
+                                     help="eBay URLを入力すると自動抽出")
 
         fc5, fc6 = st.columns(2)
         with fc5:
@@ -748,7 +856,7 @@ def render_tab_bid_history(usd_rate: float):
                       help=f"入札額+手数料+送料概算(¥{_shipping_default:,})")
 
         st.markdown("##### 結果")
-        result_options = {'scheduled': '⏳ 予定', 'win': '🏆 落札', 'lose': '❌ 落選', 'cancelled': '🚫 取消'}
+        result_options = RESULT_OPTIONS
         f_result = st.radio("結果", options=list(result_options.keys()),
                             format_func=lambda x: result_options[x],
                             horizontal=True, key="bh_result")
@@ -913,6 +1021,30 @@ def render_tab_bid_history(usd_rate: float):
                                               value=int(final_jpy or 0),
                                               key=f"u_fjpy_{bid_id[:8]}")
 
+            # P4: 負けログ — 落選時に差額・上限との差を自動計算
+            if u_result == 'lose' and u_final_usd:
+                _our  = float(our_bid_usd or 0)
+                _diff = u_final_usd - _our
+                _diff_jpy = int(_diff * usd_jpy_rate)
+                _diff_color = '#ef4444' if _diff > 0 else '#22c55e'
+                _notes_from_db = h.get('notes') or ''
+                import re as _re2
+                _limit_m = _re2.search(r'上限¥([\d,]+)', _notes_from_db)
+                _limit_jpy = int(_limit_m.group(1).replace(',','')) if _limit_m else None
+                _cols = st.columns(3)
+                _cols[0].metric("最終価格",  f"${u_final_usd:,.0f}")
+                _cols[1].metric("差額(最終-入札)",
+                                f"+${_diff:,.0f}" if _diff >= 0 else f"${_diff:,.0f}",
+                                delta=fmt_jpy(_diff_jpy), delta_color="inverse")
+                if _limit_jpy:
+                    _limit_usd = _limit_jpy / usd_jpy_rate
+                    _gap = _limit_usd - u_final_usd
+                    _gap_color = '#22c55e' if _gap >= 0 else '#ef4444'
+                    _cols[2].metric("上限との差",
+                                    f"${_gap:+,.0f}",
+                                    delta="入札可能" if _gap >= 0 else "上限超過",
+                                    delta_color="normal" if _gap >= 0 else "inverse")
+
             u_actual_cost = st.number_input("実際の仕入コスト(円・送料込)",
                                             min_value=0,
                                             value=int(h.get('actual_cost_jpy') or 0),
@@ -955,6 +1087,193 @@ def render_tab_bid_history(usd_rate: float):
 
 
 # ════════════════════════════════════════════
+# Tab 3: 入札予定 (P2/P3/P5/P6)
+# ════════════════════════════════════════════
+def render_tab_bid_schedule(usd_rate: float):
+    """P2: 入札予定タブ。P3ワンクリック入札登録 / P5スコア順 / P6日次サマリー統合。"""
+    from scripts.candidates_writer import update_bid_entry
+
+    st.markdown("#### 🎯 入札予定 — 今日の行動リスト")
+    st.caption("CEO承認 → 自動追加。入札後は入札額を登録するだけ。")
+
+    scheduled, _err = load_scheduled_bids()
+    if _err:
+        st.error(f"取得エラー: {_err}")
+    all_history, _ = load_bid_history_cached()
+    candidates, _  = load_ceo_pending()
+
+    # ── P6: 日次アクションサマリー ────────────────────────────
+    today_str  = date.today().isoformat()
+    now_utc    = datetime.now(timezone.utc)
+    today_bids = [h for h in all_history if str(h.get('bid_date',''))[:10] == today_str]
+    today_ceo  = [c for c in candidates
+                  if str(c.get('ceo_decided_at',''))[:10] == today_str]
+    urgent     = []
+    for h in scheduled:
+        t_str, t_col = _hours_left_str(h.get('auction_end_at',''))
+        if '🚨' in t_str or '⚠️' in t_str:
+            h['_time_str'] = t_str
+            h['_time_col'] = t_col
+            urgent.append(h)
+
+    sc1, sc2, sc3, sc4 = st.columns(4)
+    sc1.metric("🎯 入札予定", f"{len(scheduled)}件")
+    sc2.metric("✅ 本日CEO確認", f"{len(today_ceo)}件")
+    sc3.metric("📅 本日入札", f"{len(today_bids)}件")
+    sc4.metric("🚨 緊急（48h以内）", f"{len(urgent)}件",
+               delta="要確認" if urgent else None,
+               delta_color="inverse" if urgent else "off")
+
+    if urgent:
+        st.warning(f"⚠️ 締切48時間以内の案件: {len(urgent)}件")
+        for h in urgent[:3]:
+            t_str = h.get('_time_str','')
+            t_col = h.get('_time_col','#ef4444')
+            st.markdown(
+                f"🚨 **{h.get('lot_title','')[:55]}** — "
+                f"<span style='color:{t_col}'>{t_str}</span> | "
+                f"{h.get('auction_house','')}",
+                unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── 再読込 ────────────────────────────────────────────────
+    rc1, rc2 = st.columns([5, 1])
+    with rc2:
+        if st.button("🔄 再読込", key="sched_reload"):
+            st.cache_data.clear()
+            st.rerun()
+
+    if not scheduled:
+        st.info("入札予定がありません。CEO確認タブで承認すると自動追加されます。")
+        return
+
+    # ── P5: priority_score順ソート（notesから抽出） ─────────────
+    import re as _re
+    def _score_from_notes(h):
+        m = _re.search(r'Score:(\d+)', h.get('notes','') or '')
+        return int(m.group(1)) if m else 0
+
+    scheduled_sorted = sorted(
+        scheduled,
+        key=lambda h: (-_score_from_notes(h), str(h.get('auction_end_at') or '9999'))
+    )
+
+    # ── P2/P3: 入札予定カード一覧 ─────────────────────────────
+    for h in scheduled_sorted:
+        bid_id       = h.get('id') or ''
+        lot_title    = h.get('lot_title') or '—'
+        auction_h    = h.get('auction_house') or '—'
+        lot_url      = h.get('lot_url') or ''
+        our_bid_usd  = h.get('our_bid_usd')
+        our_bid_jpy  = h.get('our_bid_jpy')
+        buy_limit_n  = h.get('our_bid_jpy')   # 承認時に上限を記録
+        notes        = h.get('notes') or ''
+        management   = h.get('management_no') or ''
+        score        = _score_from_notes(h)
+        end_raw      = h.get('auction_end_at') or ''
+        t_str, t_col = _hours_left_str(end_raw)
+
+        bid_str = (f"${our_bid_usd:,.0f}" if our_bid_usd
+                   else (fmt_jpy(our_bid_jpy) if our_bid_jpy else '📝 未登録'))
+        score_color = ('#22c55e' if score >= 80 else
+                       '#f5c518' if score >= 60 else
+                       '#f97316' if score >= 40 else '#64748b')
+
+        key_pfx = bid_id[:8] if bid_id else str(abs(hash(lot_title)))[:8]
+
+        st.markdown('<div class="ceo-card">', unsafe_allow_html=True)
+
+        hc1, hc2 = st.columns([4, 1])
+        with hc1:
+            st.markdown(
+                f'<b style="color:#f0f4ff">{lot_title[:65]}</b>',
+                unsafe_allow_html=True)
+            score_part = (f'&nbsp;|&nbsp; <span style="color:{score_color}">Score {score}</span>'
+                          if score else '')
+            st.markdown(
+                f'<span style="color:#94a3b8;font-size:.82rem">'
+                f'🏛 {auction_h}'
+                f'&nbsp;|&nbsp; <span style="color:{t_col}">{t_str}</span>'
+                f'&nbsp;|&nbsp; 入札: {bid_str}'
+                f'{score_part}</span>',
+                unsafe_allow_html=True)
+            if notes:
+                st.markdown(
+                    f'<span style="color:#64748b;font-size:.76rem">{notes[:80]}</span>',
+                    unsafe_allow_html=True)
+        with hc2:
+            if lot_url:
+                st.link_button("🔗", lot_url, use_container_width=True)
+
+        # P3: ワンクリック入札額登録
+        with st.expander("💰 入札額を登録 / 結果更新"):
+            qc1, qc2, qc3 = st.columns(3)
+            with qc1:
+                q_usd = st.number_input(
+                    "入札額(USD)", min_value=0.0, step=1.0,
+                    value=float(our_bid_usd or 0),
+                    key=f"q_usd_{key_pfx}")
+            with qc2:
+                q_calc = int(q_usd * usd_rate) if q_usd else 0
+                st.metric("円換算", f"¥{q_calc:,}" if q_calc else "—")
+            with qc3:
+                q_jpy = st.number_input(
+                    "入札額(円)", min_value=0, step=1000,
+                    value=int(our_bid_jpy or q_calc or 0),
+                    key=f"q_jpy_{key_pfx}")
+
+            q_result = st.radio(
+                "結果",
+                options=list(RESULT_OPTIONS.keys()),
+                format_func=lambda x: RESULT_OPTIONS[x],
+                horizontal=True,
+                index=0,
+                key=f"q_res_{key_pfx}")
+
+            # P4: 落選時の差額表示
+            if q_result == 'lose':
+                lc1, lc2 = st.columns(2)
+                with lc1:
+                    q_final_usd = st.number_input(
+                        "最終価格(USD)", min_value=0.0, step=1.0,
+                        key=f"q_final_{key_pfx}")
+                with lc2:
+                    if q_final_usd and q_usd:
+                        diff_usd   = q_final_usd - q_usd
+                        diff_jpy   = int(diff_usd * usd_rate)
+                        diff_color = '#ef4444' if diff_usd > 0 else '#22c55e'
+                        st.markdown(
+                            f"<div style='margin-top:1.5rem'>"
+                            f"差額: <span style='color:{diff_color};font-weight:700'>"
+                            f"+${diff_usd:,.0f} (≈{fmt_jpy(diff_jpy)})</span></div>",
+                            unsafe_allow_html=True)
+
+            if st.button("💾 保存", key=f"q_save_{key_pfx}", use_container_width=True):
+                upd: dict = {
+                    "our_bid_usd": q_usd or None,
+                    "our_bid_jpy": q_jpy or None,
+                    "result":      q_result,
+                    "usd_jpy_rate": usd_rate,
+                }
+                if q_result == 'lose' and 'q_final_usd' in dir():
+                    upd["final_price_usd"] = q_final_usd or None
+                    if q_final_usd:
+                        upd["final_price_jpy"] = int(q_final_usd * usd_rate)
+                ok = update_bid_entry(bid_id, upd)
+                if ok:
+                    msg = "✅ 入札額を登録しました" if q_result == 'scheduled' else f"✅ 結果を保存しました（{RESULT_OPTIONS[q_result]}）"
+                    st.success(msg)
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error("保存失敗")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.write("")
+
+
+# ════════════════════════════════════════════
 # メイン
 # ════════════════════════════════════════════
 def main():
@@ -975,7 +1294,7 @@ def main():
         f'USD: {usd_rate:.0f} &nbsp;|&nbsp; GBP: {gbp_rate:.0f}</div>',
         unsafe_allow_html=True)
 
-    tab1, tab2, tab3 = st.tabs(["📊 相場DB", "🔍 CEO確認", "📋 入札実績"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 相場DB", "🔍 CEO確認", "🎯 入札予定", "📋 入札実績"])
 
     with tab1:
         render_tab_db(rates)
@@ -989,6 +1308,14 @@ def main():
             st.code(traceback.format_exc())
 
     with tab3:
+        try:
+            render_tab_bid_schedule(usd_rate)
+        except Exception as e:
+            st.error(f"入札予定タブエラー: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+
+    with tab4:
         render_tab_bid_history(usd_rate)
 
 
