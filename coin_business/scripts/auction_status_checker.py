@@ -48,7 +48,7 @@ _INTERVAL_MAP: dict[tuple[str, int], int] = {
     (STATUS_ENDED,    2): 0,
     (STATUS_ENDED,    1): 0,
 }
-_IMMINENT_DAYS = 7  # 開催何日前から imminent とするか
+_IMMINENT_DAYS = 14  # 開催何日前から imminent とするか（CEO指示: 7→14日に拡張）
 
 
 # ── コア関数 ──────────────────────────────────────────────────────
