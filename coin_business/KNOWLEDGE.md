@@ -1,5 +1,5 @@
 # coin_business 実装ナレッジ完全版
-**最終更新: 2026-03-29** （過去全セッション履歴 + 旧セッション引き継ぎPDF を精査・統合）
+**最終更新: 2026-03-30** （正式UI決定 + 4カラム追加完了）
 
 ---
 
@@ -7,6 +7,47 @@
 
 過去セッションで決まった仕様・設計判断・実装状況を永続保存する。
 セッションが変わっても「決まったこと」が消えないよう、ここを Source of Truth とする。
+
+---
+
+## 0-A. 正式UI決定（2026-03-30 CEO確定）
+
+### 正式UI
+| 項目 | 内容 |
+|---|---|
+| **正式ファイル** | `coin_business/web/index.html` |
+| **正式URL** | `http://localhost:8502/index.html` |
+| **起動コマンド** | `cd coin_business/web && python -m http.server 8502` |
+| **Streamlit版** | **正式採用しない**（`dashboard.py` は非採用） |
+
+### 絶対ルール
+- **UIテイストを勝手に変えない**
+- 変更前に「既存UI維持が前提」を確認する
+- 新機能追加より既存UI維持を最優先
+- 元UIの見た目・導線・操作感を崩さない
+
+### 維持必須項目
+- 管理番号検索 / スラブテキスト検索
+- 素材フィルタ（Gold / Silver / Platinum）
+- 表裏画像（カード内）
+- 既存カラー（濃紺 #1a1a2e / 黄 #ffd700 / 緑 #4ade80）
+- 既存カード構成
+- 軽い動作
+
+### 表示ルール
+| 優先度 | 項目 | DBカラム |
+|---|---|---|
+| **主表示** | 基準1（2万円）| `ref1_buy_limit_20k_jpy` |
+| 補助 | 基準1（15%）| `ref1_buy_limit_15pct_jpy` |
+| 補助 | 基準2（2万円）| `ref2_buy_limit_20k_jpy` |
+| 補助 | 基準2（15%）| `ref2_buy_limit_15pct_jpy` |
+
+### data.json 更新手順
+```bash
+cd coin_business
+python scripts/update_web_data.py
+```
+Supabase の `coin_slab_data` から4カラムを取得して `web/data.json` を更新。
 
 ---
 
