@@ -205,7 +205,7 @@ def load_candidates() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def load_ceo_pending() -> list[dict]:
+def load_ceo_pending() -> tuple[list[dict], str]:
     """CEO確認待ち候補を取得（OK/CEO判断/REVIEW）。"""
     db = get_client()
     try:
@@ -221,14 +221,13 @@ def load_ceo_pending() -> list[dict]:
              .order('lot_end_time', desc=False)
              .limit(200)
              .execute())
-        return r.data or []
+        return r.data or [], ""
     except Exception as e:
-        st.error(f"CEO確認データ取得エラー: {e}")
-        return []
+        return [], str(e)
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def load_bid_history_cached() -> list[dict]:
+def load_bid_history_cached() -> tuple[list[dict], str]:
     """入札実績をキャッシュ付きで取得。"""
     db = get_client()
     try:
@@ -238,10 +237,9 @@ def load_bid_history_cached() -> list[dict]:
              .order('created_at', desc=True)
              .limit(200)
              .execute())
-        return r.data or []
+        return r.data or [], ""
     except Exception as e:
-        st.error(f"入札実績取得エラー: {e}")
-        return []
+        return [], str(e)
 
 
 # ════════════════════════════════════════════
@@ -340,13 +338,30 @@ def render_tab_db(rates: dict):
         df = df[mask]
 
     df = df.sort_values('ref1_buy_limit_20k_jpy', ascending=False, na_position='last')
+    df = df.reset_index(drop=True)
 
-    st.markdown(f"<p style='color:#94a3b8;font-size:.85rem;margin:4px 0 8px'>{len(df):,}件</p>",
-                unsafe_allow_html=True)
+    PAGE_SIZE = 50
+    total = len(df)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
 
-    if st.button("🔄 再読込", key="reload_btn"):
-        st.cache_data.clear()
-        st.rerun()
+    pcol1, pcol2, pcol3 = st.columns([3, 2, 2])
+    with pcol1:
+        st.markdown(f"<p style='color:#94a3b8;font-size:.85rem;margin:4px 0 8px'>{total:,}件</p>",
+                    unsafe_allow_html=True)
+    with pcol2:
+        page = st.number_input("ページ", min_value=1, max_value=total_pages,
+                               value=1, step=1, key="db_page",
+                               label_visibility="collapsed")
+    with pcol3:
+        if st.button("🔄 再読込", key="reload_btn"):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.caption(f"ページ {page}/{total_pages}（{PAGE_SIZE}件/ページ）")
+
+    start = (page - 1) * PAGE_SIZE
+    end   = min(start + PAGE_SIZE, total)
+    df = df.iloc[start:end]
 
     st.write("")
 
@@ -455,12 +470,22 @@ def render_tab_db(rates: dict):
 # Tab 2: CEO確認 (P0)
 # ════════════════════════════════════════════
 def render_tab_ceo():
-    from scripts.candidates_writer import update_ceo_decision
+    try:
+        from scripts.candidates_writer import update_ceo_decision
+    except Exception as import_err:
+        st.error(f"import error: {import_err}")
+        return
 
     st.markdown("#### 🔍 CEO確認 — 承認/NG判断")
     st.caption("status=pending の OK / CEO判断 / REVIEW 案件を表示しています。")
 
-    candidates = load_ceo_pending()
+    try:
+        candidates, _err = load_ceo_pending()
+    except Exception as fetch_err:
+        st.error(f"fetch error: {fetch_err}")
+        return
+    if _err:
+        st.error(f"CEO確認データ取得エラー: {_err}")
     if not candidates:
         st.info("現在、確認待ちの案件はありません。")
         return
@@ -611,7 +636,9 @@ def render_tab_bid_history(usd_rate: float):
     st.caption("入札した案件の結果を記録・蓄積します。CEOはスクリーンショットを送るだけでOK。")
 
     # ─── サマリー ───
-    history = load_bid_history_cached()
+    history, _bh_err = load_bid_history_cached()
+    if _bh_err:
+        st.error(f"入札実績取得エラー: {_bh_err}")
     if history:
         total  = len(history)
         wins   = sum(1 for h in history if h.get('result') == 'win')
@@ -878,7 +905,12 @@ def main():
         render_tab_db(rates)
 
     with tab2:
-        render_tab_ceo()
+        try:
+            render_tab_ceo()
+        except Exception as e:
+            st.error(f"CEO確認タブエラー: {e}")
+            import traceback
+            st.code(traceback.format_exc())
 
     with tab3:
         render_tab_bid_history(usd_rate)
