@@ -116,6 +116,12 @@ GUARDIAN_CHECK_INTERVAL       = 60
 SELF_HEAL_MAX_RETRIES_WINDOW  = 3
 SELF_HEAL_WINDOW_SEC          = 1800  # 30分
 
+# guardian 独立 git pull 設定（cap 非依存）
+GUARDIAN_GIT_PULL_INTERVAL_SEC      = 3600   # 通常: 1時間ごと
+GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC = 1800   # 高優先時: 30分ごと
+GUARDIAN_GIT_PULL_STATE_FILE        = Path(__file__).parent / "state" / "guardian_git_pull_state.json"
+GUARDIAN_GIT_PULL_LOG               = Path(__file__).parent / "logs" / "guardian_git_pull.log"
+
 
 # ============================================================
 # 初期化
@@ -3389,6 +3395,103 @@ def _send_self_heal_notification(sender: str, reason: str, restarted: bool, succ
         _self_heal_log(f"通知送信失敗: {e}")
 
 
+def _guardian_git_pull() -> bool:
+    """
+    guardian が cap 非依存で定期実行する git pull。
+    - 通常: 1時間ごと (GUARDIAN_GIT_PULL_INTERVAL_SEC)
+    - 高優先時: 30分ごと (GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC)
+    戻り値: pull を実行した場合 True、スキップした場合 False
+    """
+    # ----- 実行間隔チェック -----
+    interval_sec = GUARDIAN_GIT_PULL_INTERVAL_SEC
+    try:
+        coin_dir = Path(__file__).parent / "coin_business"
+        import sys as _sys; _sys.path.insert(0, str(coin_dir))
+        from scripts.fetch_overseas_sold import is_high_priority_active
+        if is_high_priority_active():
+            interval_sec = GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC
+    except Exception:
+        pass
+
+    # state ファイルで前回実行時刻を確認
+    state: dict = {}
+    if GUARDIAN_GIT_PULL_STATE_FILE.exists():
+        try:
+            state = json.loads(GUARDIAN_GIT_PULL_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+
+    last_str = state.get("last_pulled_at", "")
+    if last_str:
+        try:
+            from datetime import datetime as _dt
+            elapsed = (datetime.now() - _dt.fromisoformat(last_str)).total_seconds()
+            if elapsed < interval_sec:
+                return False  # まだ間隔内
+        except Exception:
+            pass
+
+    # ----- git pull 実行 -----
+    repo_dir = Path(__file__).parent
+    ts_start = datetime.now()
+    try:
+        result = subprocess.run(
+            ["git", "pull"],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(repo_dir), encoding="utf-8",
+        )
+        success = result.returncode == 0
+        output  = (result.stdout or result.stderr or "").strip()[:200]
+    except subprocess.TimeoutExpired:
+        success = False
+        output  = "timeout after 60s"
+    except Exception as e:
+        success = False
+        output  = str(e)[:200]
+
+    elapsed_ms = int((datetime.now() - ts_start).total_seconds() * 1000)
+    status = "ok" if success else "failed"
+    log_line = f"{ts_start.strftime('%Y-%m-%d %H:%M:%S')} [{status}] interval={interval_sec}s elapsed={elapsed_ms}ms | {output}\n"
+
+    # ----- ログ保存 -----
+    try:
+        GUARDIAN_GIT_PULL_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with open(GUARDIAN_GIT_PULL_LOG, "a", encoding="utf-8") as f:
+            f.write(log_line)
+    except Exception:
+        pass
+
+    logger.info(f"[guardian-git-pull] {status} elapsed={elapsed_ms}ms | {output}")
+
+    # ----- state 更新 -----
+    state["last_pulled_at"]  = ts_start.isoformat()
+    state["last_status"]     = status
+    state["last_output"]     = output
+    state["interval_sec"]    = interval_sec
+    try:
+        GUARDIAN_GIT_PULL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(GUARDIAN_GIT_PULL_STATE_FILE) + ".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(GUARDIAN_GIT_PULL_STATE_FILE)
+    except Exception:
+        pass
+
+    # 失敗時は Slack 通知
+    if not success:
+        try:
+            sender = get_sender()
+            _send_self_heal_notification(
+                sender,
+                reason=f"guardian git pull 失敗: {output}",
+                restarted=False,
+                success=False,
+            )
+        except Exception:
+            pass
+
+    return True
+
+
 def watch_guardian(interval: int = GUARDIAN_CHECK_INTERVAL):
     """
     watch プロセスを外部から監視し、異常時に自動再起動する guardian。
@@ -3402,6 +3505,14 @@ def watch_guardian(interval: int = GUARDIAN_CHECK_INTERVAL):
     while True:
         time.sleep(interval)
         try:
+            # --- cap 非依存 git pull（1時間 or 30分ごと）---
+            try:
+                pulled = _guardian_git_pull()
+                if pulled:
+                    logger.info("[guardian] git pull 実行済み")
+            except Exception as gpe:
+                logger.warning(f"[guardian] git pull スキップ: {gpe}")
+
             age        = _get_heartbeat_age_sec()
             ack_errors = _count_recent_ack_timeouts()
             history    = _load_self_heal_history()
