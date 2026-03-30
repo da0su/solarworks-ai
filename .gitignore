@@ -1,17 +1,35 @@
-# Secrets
+# ==============================================================
+# SolarWorks AI — .gitignore
+# 更新日: 2026-03-30
+# ルール: .env / DBバックアップ本体 / 大容量ファイル は除外
+# ==============================================================
+
+# --------------------------------------------------------------
+# Secrets（絶対にcommit禁止）
+# --------------------------------------------------------------
 .env
 *.env
+.env.local
+.secure_env
+# .env.example は除外しない（テンプレートはGit管理対象）
+!.env.example
 
+# --------------------------------------------------------------
 # Python
+# --------------------------------------------------------------
 __pycache__/
 *.pyc
 *.pyo
 
-# Runtime data
+# --------------------------------------------------------------
+# Runtime data（ローカルのみ）
+# --------------------------------------------------------------
 *.db
 *.log
 
-# Large data files
+# --------------------------------------------------------------
+# 楽天ROOM BOT — 大容量・機密
+# --------------------------------------------------------------
 rakuten-room/bot/data/chrome_profile/
 rakuten-room/bot/data/logs/
 rakuten-room/bot/data/screenshots/
@@ -21,32 +39,45 @@ rakuten-room/bot/data/post_history.json
 rakuten-room/bot/data/room_bot.db
 rakuten-room/bot/data/operation_mode.json
 
+# --------------------------------------------------------------
+# コイン仕入れリサーチ — 生データ・DBバックアップ本体
+# （手順・スキーマのみGit管理、実データは除外）
+# --------------------------------------------------------------
 coin_business/data/yahoo_import/
 coin_business/data/yahoo_closedsearch/
 coin_business/data/yahoo_auction/
 coin_business/data/ebay/
 coin_business/data/world_auctions/
+coin_business/data/backups/
 coin_business/logs/
+coin_business/data/*_debug*
+coin_business/data/*.html
+coin_business/data/*.png
+coin_business/data/*.jpg
+coin_business/ebay_profile/
 
-# OS
+# --------------------------------------------------------------
+# OS・IDE
+# --------------------------------------------------------------
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# IDE
 .vscode/
 .idea/
 
-# Migrated (retired)
+# --------------------------------------------------------------
+# 移行済み・旧版（アーカイブ済み）
+# --------------------------------------------------------------
 08_AUTOMATION/room_bot_v2_migrated/
 archive/room_bot_v1_migrated/
 
-# VOICEVOX binaries (too large for git)
+# --------------------------------------------------------------
+# VOICEVOX バイナリ（大容量）
+# --------------------------------------------------------------
 ops/notifications/voicevox/
 
-# Debug files
-coin_business/data/*/_debug*
-
-# Secure store
-.secure_env
-.env.local
+# --------------------------------------------------------------
+# gpt_mousiokuri は除外しない（Git正式管理対象）
+# 5ファイルすべてGitで追跡する
+# --------------------------------------------------------------
+# !gpt_mousiokuri/  ← 除外ルールなし = 全ファイルがGit管理対象
