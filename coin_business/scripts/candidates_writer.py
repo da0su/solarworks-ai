@@ -38,6 +38,47 @@ def make_lot_dedup_key(source: str, auction_id: str, lot_number: str,
     return hashlib.md5(raw.encode("utf-8")).hexdigest()[:32]
 
 
+# ── coin_slab_data から 4カラム取得 ──────────────────────────────
+
+def _fetch_ref_columns(management_nos: list[str]) -> dict:
+    """
+    coin_slab_data から ref1/ref2 の仕入上限4カラムを取得し、
+    management_no → {ref1_buy_limit_20k_jpy, ...} のルックアップを返す。
+    """
+    if not management_nos:
+        return {}
+    try:
+        from scripts.supabase_client import get_client
+    except ModuleNotFoundError:
+        from supabase_client import get_client
+    client = get_client()
+    mgmt_list = [m for m in management_nos if m]
+    if not mgmt_list:
+        return {}
+    try:
+        resp = (client.table("coin_slab_data")
+                .select("management_no,"
+                        "ref1_buy_limit_20k_jpy,ref1_buy_limit_15pct_jpy,"
+                        "ref2_buy_limit_20k_jpy,ref2_buy_limit_15pct_jpy")
+                .in_("management_no", mgmt_list)
+                .execute())
+        lookup: dict = {}
+        for row in (resp.data or []):
+            mgmt = row.get("management_no")
+            if mgmt:
+                lookup[mgmt] = {
+                    "ref1_buy_limit_20k_jpy":   row.get("ref1_buy_limit_20k_jpy"),
+                    "ref1_buy_limit_15pct_jpy": row.get("ref1_buy_limit_15pct_jpy"),
+                    "ref2_buy_limit_20k_jpy":   row.get("ref2_buy_limit_20k_jpy"),
+                    "ref2_buy_limit_15pct_jpy": row.get("ref2_buy_limit_15pct_jpy"),
+                }
+        logger.info(f"  [candidates_writer] ref_columns取得: {len(lookup)}件")
+        return lookup
+    except Exception as e:
+        logger.warning(f"  [candidates_writer] ref_columns取得エラー: {e}")
+        return {}
+
+
 # ── overseas_lot → daily_candidates 変換 ─────────────────────────
 
 def _to_daily_candidate(lot: dict) -> dict:
@@ -122,6 +163,11 @@ def _to_daily_candidate(lot: dict) -> dict:
         "dedup_key":            dedup_key,
         "notified":             False,
         "status":               lot.get("status") or "pending",
+        # ── 4カラム追加 (coin_slab_data から引用) ─────────────────
+        "ref1_buy_limit_20k_jpy":   lot.get("ref1_buy_limit_20k_jpy"),
+        "ref1_buy_limit_15pct_jpy": lot.get("ref1_buy_limit_15pct_jpy"),
+        "ref2_buy_limit_20k_jpy":   lot.get("ref2_buy_limit_20k_jpy"),
+        "ref2_buy_limit_15pct_jpy": lot.get("ref2_buy_limit_15pct_jpy"),
     }
 
 
@@ -152,6 +198,15 @@ def write_candidates(
     if not lots:
         logger.info("  [candidates_writer] 候補なし — スキップ")
         return counts
+
+    # ── Step 0: coin_slab_data から 4カラムをエンリッチ ──────────────
+    mgmt_nos = [lot.get("management_no") for lot in lots]
+    ref_lookup = _fetch_ref_columns([m for m in mgmt_nos if m])
+    if ref_lookup:
+        for lot in lots:
+            mgmt = lot.get("management_no")
+            if mgmt and mgmt in ref_lookup:
+                lot.update(ref_lookup[mgmt])
 
     # ── Step 1: 判定 ─────────────────────────────────────────────
     ok_list    = []
@@ -253,6 +308,140 @@ def get_pending_candidates(judgment: Optional[str] = None, limit: int = 20) -> l
 def get_ceo_list(limit: int = 50) -> list[dict]:
     """CEO判断リストを取得（終了時刻順）。"""
     return get_pending_candidates(judgment="CEO判断", limit=limit)
+
+
+def update_ceo_decision(
+    dedup_key: str,
+    decision: str,
+    ng_reason: str = None,
+    comment: str = None,
+) -> bool:
+    """
+    CEOの承認/NG判断を daily_candidates に保存する。
+
+    Args:
+        dedup_key : daily_candidates の dedup_key（一意識別子）
+        decision  : 'approved' または 'rejected'
+        ng_reason : NG理由テキスト（decision='rejected' 時）
+        comment   : コメント（任意）
+
+    Returns:
+        bool: 成功時 True
+    """
+    if decision not in ("approved", "rejected"):
+        logger.warning(f"update_ceo_decision: 無効な decision={decision!r}")
+        return False
+    try:
+        from scripts.supabase_client import get_client
+    except ModuleNotFoundError:
+        from supabase_client import get_client
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    payload: dict = {
+        "ceo_decision":    decision,
+        "ceo_decided_at":  now_iso,
+    }
+    if ng_reason is not None:
+        payload["ceo_ng_reason"] = ng_reason
+    if comment is not None:
+        payload["ceo_comment"] = comment
+
+    try:
+        client = get_client()
+        resp = (client.table("daily_candidates")
+                .update(payload)
+                .eq("dedup_key", dedup_key)
+                .execute())
+        updated = len(resp.data or [])
+        if updated == 0:
+            logger.warning(f"update_ceo_decision: 対象レコードなし dedup_key={dedup_key[:8]}")
+            return False
+        logger.info(f"update_ceo_decision: {decision} → dedup_key={dedup_key[:8]}")
+        return True
+    except Exception as e:
+        logger.error(f"update_ceo_decision error: {e}")
+        return False
+
+
+# ── bid_history CRUD ─────────────────────────────────────────
+
+def load_bid_history(limit: int = 100) -> list[dict]:
+    """bid_history テーブルから入札実績を取得（新しい順）。"""
+    try:
+        from scripts.supabase_client import get_client
+    except ModuleNotFoundError:
+        from supabase_client import get_client
+    try:
+        client = get_client()
+        r = (client.table("bid_history")
+             .select("*")
+             .order("bid_date", desc=True)
+             .order("created_at", desc=True)
+             .limit(limit)
+             .execute())
+        return r.data or []
+    except Exception as e:
+        logger.warning(f"load_bid_history error: {e}")
+        return []
+
+
+def save_bid_entry(data: dict) -> Optional[str]:
+    """
+    入札実績を bid_history へ保存する。
+
+    Args:
+        data: bid_history カラムに対応する dict
+              必須: lot_title
+              任意: auction_house, lot_url, lot_number, management_no,
+                    bid_date, auction_end_at, our_bid_usd, our_bid_jpy,
+                    result, final_price_usd, final_price_jpy,
+                    actual_cost_jpy, resell_price_jpy, actual_profit_jpy,
+                    screenshot_path, notes, recommended_by
+
+    Returns:
+        str: 生成された UUID (id) または None（失敗時）
+    """
+    try:
+        from scripts.supabase_client import get_client
+    except ModuleNotFoundError:
+        from supabase_client import get_client
+
+    payload = {k: v for k, v in data.items() if v is not None and v != ""}
+    payload.setdefault("result", "scheduled")
+    payload.setdefault("recommended_by", "cap")
+
+    try:
+        client = get_client()
+        r = client.table("bid_history").insert(payload).execute()
+        if r.data:
+            new_id = r.data[0].get("id")
+            logger.info(f"save_bid_entry: 保存完了 id={new_id} title={data.get('lot_title','')[:30]}")
+            return new_id
+        return None
+    except Exception as e:
+        logger.error(f"save_bid_entry error: {e}")
+        return None
+
+
+def update_bid_entry(bid_id: str, data: dict) -> bool:
+    """bid_history の既存レコードを更新する（結果入力・価格更新等）。"""
+    try:
+        from scripts.supabase_client import get_client
+    except ModuleNotFoundError:
+        from supabase_client import get_client
+
+    payload = {k: v for k, v in data.items() if v is not None}
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    try:
+        client = get_client()
+        r = client.table("bid_history").update(payload).eq("id", bid_id).execute()
+        updated = len(r.data or [])
+        logger.info(f"update_bid_entry: {updated}件更新 id={bid_id[:8]}")
+        return updated > 0
+    except Exception as e:
+        logger.error(f"update_bid_entry error: {e}")
+        return False
 
 
 def print_candidate_summary() -> None:
