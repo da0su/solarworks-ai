@@ -164,6 +164,23 @@ class ErrorType:
 
 # タスク依存関係マップ（タスク名 → 前提タスク名 / 次タスク名）
 # format: task_name -> {"requires": prev_task, "next": next_task, "to": default_receiver}
+# タスク別完了予定時間（即応メッセージ用）
+TASK_ETA_MAP: dict[str, str] = {
+    "test-ping":      "約5秒",
+    "git-pull":       "約30秒",
+    "ebay-search":    "約10分",
+    "ebay-review":    "約2分",
+    "ceo-report":     "約1分",
+    "report":         "約2分",
+    "set-env":        "約10秒",
+    "rakuten-status": "約3分",
+    "rakuten-report": "約1分",
+    "daily-check":    "約5分",
+    "daily-report":   "約1分",
+    "coin-status":    "約3分",
+    "coin-report":    "約1分",
+}
+
 TASK_FLOW: dict[str, dict] = {
     "git-pull":    {"requires": None,           "next": "ebay-search", "to": "cyber"},
     "ebay-search": {"requires": "git-pull",     "next": "ebay-review", "to": "cyber"},
@@ -3033,6 +3050,24 @@ def dispatch_task(msg_data: dict):
             logger.info(f"タスク完了: {task_name} (id={task_id[:8]})")
             log_event("done", {"task_id": task_id, "task": task_name})
 
+            # 完了通知（人間可読）— 処理完了を即時報告
+            try:
+                _result_summary = ""
+                if isinstance(result, dict):
+                    # 代表的なキーから要約を組み立てる（エラー情報優先）
+                    errs = result.get("errors", [])
+                    if errs:
+                        _result_summary = f" ⚠️ 警告: {len(errs)}件"
+                    else:
+                        _result_summary = " ✓"
+                send_message(
+                    f"✅ 処理完了しました。*{task_name}* の結果: 成功{_result_summary}"
+                    f" (id={task_id[:8]})",
+                    sender=get_sender(),
+                )
+            except Exception as _ce:
+                logger.warning(f"[完了通知] メッセージ送信スキップ: {_ce}")
+
             # DONE送信後に後続メッセージ送信（依存チェックが正しく動くよう順序保証）
             if post_send_msg:
                 send_bridge_msg(post_send_msg)
@@ -3072,6 +3107,15 @@ def dispatch_task(msg_data: dict):
             send_bridge_msg(err_msg)
             save_task_registry_entry(task_id, "ERROR", {"task": task_name, "error": str(e)})
             state_mgr.task_error(task_id, str(e))
+            # エラー通知（人間可読）
+            try:
+                send_message(
+                    f"❌ 処理失敗しました。*{task_name}* エラー: {str(e)[:100]}"
+                    f" (id={task_id[:8]})",
+                    sender=get_sender(),
+                )
+            except Exception:
+                pass
             log_event("error", {"task_id": task_id, "task": task_name, "error": str(e)})
 
     thread = threading.Thread(target=_run, daemon=True)
@@ -3769,6 +3813,17 @@ def _handle_bridge_msg(bridge_data: dict, my_sender: str):
 
         # state: acknowledged
         state_mgr.task_acknowledged(task_id)
+
+        # 即応メッセージ（人間可読）— タスク受信から5秒以内に返信
+        _eta = TASK_ETA_MAP.get(task_name, "約1〜5分")
+        try:
+            send_message(
+                f"✅ 受信しました。*{task_name}* を処理中です。{_eta}で完了予定です。"
+                f" (id={task_id[:8]})",
+                sender=my_sender,
+            )
+        except Exception as _e:
+            logger.warning(f"[即応] メッセージ送信スキップ: {_e}")
 
         # ハンドラディスパッチ（スレッドで非同期実行）
         dispatch_task(bridge_data)
