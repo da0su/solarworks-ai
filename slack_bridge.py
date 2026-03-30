@@ -3335,13 +3335,18 @@ def _try_restart_watch() -> bool:
     python_exe = sys.executable
     script = str(Path(__file__).resolve())
 
+    # Windows で黒ウィンドウを出さないフラグ
+    _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0  # CREATE_NO_WINDOW
+
     # 第1段階: python slack_bridge.py watch
     try:
         logger.info("[self-heal] 第1段階: python slack_bridge.py watch を起動")
         _self_heal_log("第1段階: python slack_bridge.py watch 実行")
         subprocess.Popen(
             [python_exe, script, "watch"],
-            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            creationflags=_NO_WINDOW,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         # 15秒待ってheartbeatが更新されたか確認
         time.sleep(15)
@@ -3366,7 +3371,9 @@ def _try_restart_watch() -> bool:
             _self_heal_log(f"第2段階: {bat_path} 実行")
             subprocess.Popen(
                 ["cmd", "/c", str(bat_path)],
-                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+                creationflags=_NO_WINDOW,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
             time.sleep(20)
             age = _get_heartbeat_age_sec()
