@@ -705,6 +705,7 @@ def main():
 
     all_matches = []
     seen_urls = set()
+    seen_mgmt_nos = set()  # mgmt_no重複防止: 同一コインが複数URLにマッチしても先着1件のみ
 
     for qi, aq in enumerate(queries):
         query_match = 0
@@ -743,20 +744,25 @@ def main():
                         continue
 
                     # API価格取得
+                    # AUCTIONアイテムは price=None、currentBidPrice に現在入札額が入る
                     api_price_usd = None
-                    price_info = item.get('price', {})
-                    if price_info:
+                    price_raw = item.get('price') or item.get('currentBidPrice') or {}
+                    if price_raw:
                         try:
-                            api_price_usd = float(price_info.get('value', 0))
+                            api_price_usd = float(price_raw.get('value', 0)) or None
                         except (ValueError, TypeError):
                             pass
 
                     candidates = coin_index.get((ebay_grader, ebay_year), [])
                     for db_coin in candidates:
+                        mgmt_no = db_coin['management_no']
+                        if mgmt_no in seen_mgmt_nos:
+                            continue  # 同一コインが別URLにも出品されている場合は先着1件のみ
                         if strict_match(title, db_coin):
                             seen_urls.add(base_url)
+                            seen_mgmt_nos.add(mgmt_no)
                             all_matches.append({
-                                'mgmt_no': db_coin['management_no'],
+                                'mgmt_no': mgmt_no,
                                 'db_grader': db_coin['grader'],
                                 'db_line1': db_coin['slab_line1'],
                                 'db_line2': db_coin.get('slab_line2', ''),
