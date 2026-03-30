@@ -214,7 +214,8 @@ def load_ceo_pending() -> tuple[list[dict], str]:
                      'buy_limit_jpy,estimated_cost_jpy,estimated_margin_pct,'
                      'auction_house,lot_url,lot_end_time,priority,status,'
                      'ceo_decision,ceo_ng_reason,ceo_comment,ceo_decided_at,'
-                     'ref1_buy_limit_20k_jpy,current_price,currency,fx_rate')
+                     'ref1_buy_limit_20k_jpy,current_price,currency,fx_rate,'
+                     'priority_score,match_score')
              .in_('judgment', ['OK', 'CEO判断', 'REVIEW'])
              .eq('status', 'pending')
              .order('priority', desc=True)
@@ -288,7 +289,20 @@ RESULT_LABELS = {
     'cancelled': ('🚫 取消', 'result-cancelled'),
 }
 
-AUCTION_HOUSES = ['eBay', 'Heritage', 'Spink', 'NumisBids', 'Stack\'s Bowers', 'その他']
+AUCTION_HOUSES = ['eBay', 'Heritage', 'Spink', 'Noble', 'Noonans', 'NumisBids', 'Stack\'s Bowers', 'その他']
+
+# NG理由カテゴリ（TASK3: 構造化NG理由）
+NG_REASON_CATEGORIES = [
+    '価格オーバー',
+    'グレード不足',
+    '相場データ不足',
+    'マッチ不一致',
+    '発送元リスク',
+    '競合激化予測',
+    'スペック不明',
+    'タイミング不適',
+    'その他（自由入力）',
+]
 
 
 # ════════════════════════════════════════════
@@ -533,6 +547,22 @@ def render_tab_ceo():
         currency     = c.get('currency') or 'USD'
         fx_rate      = c.get('fx_rate') or 150
 
+        # TASK6: 優先度スコア（DBカラム未設定時は簡易計算）
+        j_base    = {'OK': 60, 'CEO判断': 50, 'REVIEW': 35}.get(judgment, 10)
+        m_bonus   = min(20, int(float(c.get('match_score') or 0) * 20))
+        mg_bonus  = min(20, int(float(margin_pct or 0) / 2))
+        _score_calc = min(100, j_base + m_bonus + mg_bonus)
+        p_score  = int(c.get('priority_score') or 0) or _score_calc
+        # スコア色分け
+        if p_score >= 80:
+            score_color = '#22c55e'   # 緑
+        elif p_score >= 60:
+            score_color = '#f5c518'   # 黄
+        elif p_score >= 40:
+            score_color = '#f97316'   # 橙
+        else:
+            score_color = '#64748b'   # 灰
+
         # 締切日時フォーマット
         end_str = ''
         if end_time_raw:
@@ -555,6 +585,8 @@ def render_tab_ceo():
             st.markdown(
                 f'<span style="color:#94a3b8;font-size:.82rem">'
                 f'🏛 {auction_h} &nbsp;|&nbsp; P{priority} &nbsp;|&nbsp; 締切: {end_str or "—"}'
+                f'&nbsp;|&nbsp; '
+                f'<span style="color:{score_color};font-weight:700">Score {p_score}</span>'
                 f'</span>',
                 unsafe_allow_html=True)
         with hcol2:
@@ -592,17 +624,24 @@ def render_tab_ceo():
             if st.button("❌ NG", key=f"ng_btn_{key_prefix}", use_container_width=True):
                 st.session_state[ng_key] = not st.session_state.get(ng_key, False)
 
-        # NG理由入力（トグル）
+        # NG理由入力（トグル）— TASK3: 構造化NG理由
         if st.session_state.get(f"ng_toggle_{key_prefix}", False):
-            ng_reason = st.text_area("NG理由を入力", key=f"ng_reason_{key_prefix}",
-                                     placeholder="例: 価格が予算オーバー / グレード不足 / 発送元リスク等")
-            ng_comment = st.text_input("コメント（任意）", key=f"ng_comment_{key_prefix}")
+            ng_cat = st.selectbox(
+                "NG理由（分類）", NG_REASON_CATEGORIES,
+                key=f"ng_cat_{key_prefix}",
+                help="最も近い分類を選択してください")
+            ng_text = st.text_input(
+                "補足テキスト（任意）", key=f"ng_txt_{key_prefix}",
+                placeholder="例: $950まで競り上がり → 予算の$800を超過")
+            # 保存フォーマット: "[カテゴリ] 補足テキスト"
+            ng_reason = f"[{ng_cat}] {ng_text}".rstrip() if ng_text else ng_cat
+            ng_comment = st.text_input("追加コメント（任意）", key=f"ng_comment_{key_prefix}")
             if st.button("💾 NGを保存", key=f"ng_save_{key_prefix}"):
                 ok = update_ceo_decision(dedup_key, "rejected",
                                          ng_reason=ng_reason or None,
                                          comment=ng_comment or None)
                 if ok:
-                    st.warning("NGとして保存しました")
+                    st.warning(f"❌ NGとして保存しました（{ng_cat}）")
                     st.cache_data.clear()
                     st.rerun()
                 else:
@@ -689,6 +728,25 @@ def render_tab_bid_history(usd_rate: float):
                                         min_value=0, step=1000,
                                         value=calc_jpy, key="bh_bid_jpy")
 
+        # TASK5: 落札手数料（Buyer's Premium）
+        st.markdown("##### 落札手数料 (Buyer's Premium)")
+        tp1, tp2, tp3 = st.columns(3)
+        with tp1:
+            f_premium_pct = st.number_input(
+                "手数料率 (%)", min_value=0.0, max_value=50.0,
+                value=20.0, step=0.5, key="bh_premium_pct",
+                help="eBay=0%, Heritage=20%, Spink=24%, Noble=22%, Noonans=24%")
+        with tp2:
+            base_jpy = f_bid_jpy or calc_jpy
+            calc_premium_jpy = int(base_jpy * f_premium_pct / 100) if base_jpy else 0
+            st.metric("手数料額（円）", f"¥{calc_premium_jpy:,}" if calc_premium_jpy else "—")
+        with tp3:
+            # 送料・関税の概算（既定値）
+            _shipping_default = 2000 + 750  # 海外転送¥2000 + 国内¥750
+            calc_total_jpy = base_jpy + calc_premium_jpy + _shipping_default if base_jpy else 0
+            st.metric("総コスト概算（円）", f"¥{calc_total_jpy:,}" if calc_total_jpy else "—",
+                      help=f"入札額+手数料+送料概算(¥{_shipping_default:,})")
+
         st.markdown("##### 結果")
         result_options = {'scheduled': '⏳ 予定', 'win': '🏆 落札', 'lose': '❌ 落選', 'cancelled': '🚫 取消'}
         f_result = st.radio("結果", options=list(result_options.keys()),
@@ -727,21 +785,31 @@ def render_tab_bid_history(usd_rate: float):
                     save_path.write_bytes(uploaded.read())
                     screenshot_path = str(save_path)
 
+                # TASK5: 手数料・総コスト計算
+                _base_jpy = f_bid_jpy or int(f_bid_usd * usd_rate) if f_bid_usd else 0
+                _prem_jpy = int(_base_jpy * f_premium_pct / 100) if _base_jpy and f_premium_pct else 0
+                _total_jpy= _base_jpy + _prem_jpy + 2750 if _base_jpy else None  # 送料概算¥2750
+
                 entry = {
-                    "lot_title":       f_title,
-                    "auction_house":   f_house,
-                    "lot_url":         f_url or None,
-                    "lot_number":      f_lot_no or None,
-                    "bid_date":        f_bid_date.isoformat(),
-                    "auction_end_at":  f_end_date.isoformat() if f_end_date else None,
-                    "our_bid_usd":     f_bid_usd or None,
-                    "our_bid_jpy":     f_bid_jpy or None,
-                    "result":          f_result,
-                    "final_price_usd": f_final_usd if f_result == 'win' else None,
-                    "final_price_jpy": f_final_jpy if f_result == 'win' else None,
-                    "screenshot_path": screenshot_path,
-                    "notes":           f_notes or None,
-                    "recommended_by":  "cap",
+                    "lot_title":          f_title,
+                    "auction_house":      f_house,
+                    "lot_url":            f_url or None,
+                    "lot_number":         f_lot_no or None,
+                    "bid_date":           f_bid_date.isoformat(),
+                    "auction_end_at":     f_end_date.isoformat() if f_end_date else None,
+                    "our_bid_usd":        f_bid_usd or None,
+                    "our_bid_jpy":        f_bid_jpy or None,
+                    "result":             f_result,
+                    "final_price_usd":    f_final_usd if f_result == 'win' else None,
+                    "final_price_jpy":    f_final_jpy if f_result == 'win' else None,
+                    "screenshot_path":    screenshot_path,
+                    "notes":              f_notes or None,
+                    "recommended_by":     "cap",
+                    # TASK5追加フィールド
+                    "buyer_premium_pct":  f_premium_pct or None,
+                    "buyer_premium_jpy":  _prem_jpy or None,
+                    "total_cost_jpy":     _total_jpy,
+                    "usd_jpy_rate":       usd_rate,
                 }
                 new_id = save_bid_entry(entry)
                 if new_id:
@@ -779,7 +847,11 @@ def render_tab_bid_history(usd_rate: float):
         lot_url       = h.get('lot_url') or ''
         bid_id        = h.get('id') or ''
 
-        bid_usd_str = f"${our_bid_usd:,.0f}" if our_bid_usd else (fmt_jpy(our_bid_jpy) if our_bid_jpy else '—')
+        bid_usd_str   = f"${our_bid_usd:,.0f}" if our_bid_usd else (fmt_jpy(our_bid_jpy) if our_bid_jpy else '—')
+        premium_pct   = h.get('buyer_premium_pct')
+        premium_jpy   = h.get('buyer_premium_jpy')
+        total_cost    = h.get('total_cost_jpy')
+        usd_jpy_rate  = h.get('usd_jpy_rate') or usd_rate
 
         st.markdown('<div class="bid-card">', unsafe_allow_html=True)
 
@@ -798,15 +870,19 @@ def render_tab_bid_history(usd_rate: float):
             if lot_url:
                 st.link_button("🔗", lot_url, use_container_width=True)
 
-        # 落札時の詳細
+        # 落札時の詳細 (TASK5: 手数料・総コスト表示)
         if result_val == 'win' and (final_usd or final_jpy):
             final_str = f"${final_usd:,.0f}" if final_usd else fmt_jpy(final_jpy)
             profit_str = (f"{'+'if actual_profit >= 0 else ''}¥{actual_profit:,}"
                           if actual_profit else '—')
             profit_color = '#22c55e' if (actual_profit or 0) >= 0 else '#ef4444'
+            prem_str = (f"(BP {premium_pct:.0f}% ≈ {fmt_jpy(premium_jpy)})"
+                        if premium_pct else "")
+            total_str = fmt_jpy(total_cost) if total_cost else ""
             st.markdown(
-                f"落札: **{final_str}** &nbsp;|&nbsp; "
-                f"実利益: <span style='color:{profit_color}'>{profit_str}</span>",
+                f"落札: **{final_str}** {prem_str}"
+                + (f" &nbsp;|&nbsp; 総コスト: **{total_str}**" if total_str else "")
+                + f" &nbsp;|&nbsp; 実利益: <span style='color:{profit_color}'>{profit_str}</span>",
                 unsafe_allow_html=True)
 
         # 詳細展開
