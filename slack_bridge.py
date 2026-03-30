@@ -117,10 +117,16 @@ SELF_HEAL_MAX_RETRIES_WINDOW  = 3
 SELF_HEAL_WINDOW_SEC          = 1800  # 30分
 
 # guardian 独立 git pull 設定（cap 非依存）
-GUARDIAN_GIT_PULL_INTERVAL_SEC      = 3600   # 通常: 1時間ごと
-GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC = 1800   # 高優先時: 30分ごと
+GUARDIAN_GIT_PULL_INTERVAL_SEC      = 300    # 通常: 5分ごと
+GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC = 60     # 高優先時: 1分ごと
 GUARDIAN_GIT_PULL_STATE_FILE        = Path(__file__).parent / "state" / "guardian_git_pull_state.json"
 GUARDIAN_GIT_PULL_LOG               = Path(__file__).parent / "logs" / "guardian_git_pull.log"
+
+# guardian 独立 status / handoff 定時更新
+GUARDIAN_STATUS_INTERVAL_SEC   = 3600   # 毎時00分に近いサイクルで coin/rakuten-status 送信
+GUARDIAN_STATUS_STATE_FILE     = Path(__file__).parent / "state" / "guardian_status_state.json"
+GUARDIAN_HANDOFF_SLOT          = "07:35"  # 毎朝 07:35 に daily-handoff 自動実行
+GUARDIAN_HANDOFF_STATE_FILE    = Path(__file__).parent / "state" / "guardian_handoff_state.json"
 
 
 # ============================================================
@@ -3395,6 +3401,155 @@ def _send_self_heal_notification(sender: str, reason: str, restarted: bool, succ
         _self_heal_log(f"通知送信失敗: {e}")
 
 
+def _is_high_priority_mode() -> bool:
+    """
+    高優先モード判定（git pull 間隔を1分に短縮する条件）
+    以下いずれか1つでも該当すれば True:
+      1. オークション active (is_high_priority_active)
+      2. ebay-search が current_tasks で running
+      3. daily_candidates に OK 案件あり
+      4. CEO判断待ち (ebay-review / ceo-report が pending/running)
+    """
+    # 条件1: オークション active
+    try:
+        coin_dir = Path(__file__).parent / "coin_business"
+        import sys as _sys; _sys.path.insert(0, str(coin_dir))
+        from scripts.fetch_overseas_sold import is_high_priority_active
+        if is_high_priority_active():
+            return True
+    except Exception:
+        pass
+
+    # 条件2〜4: state から判定
+    try:
+        s = state_mgr.load()
+        tasks = s.get("current_tasks", [])
+        # 条件2: ebay-search running
+        for t in tasks:
+            if t.get("task_name") == "ebay-search" and t.get("status") not in ("done", "error"):
+                return True
+        # 条件4: CEO判断待ち
+        for t in tasks:
+            if t.get("task_name") in ("ebay-review", "ceo-report") and t.get("status") not in ("done", "error"):
+                return True
+        # 条件3: daily_candidates に OK あり
+        try:
+            import importlib, sys as _sys2
+            coin_dir = str(Path(__file__).parent / "coin_business")
+            if coin_dir not in _sys2.path:
+                _sys2.path.insert(0, coin_dir)
+            from scripts.candidates_writer import load_candidates
+            cands = load_candidates()
+            if any(c.get("judgment") == "OK" for c in cands):
+                return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    return False
+
+
+def _guardian_status_check() -> bool:
+    """
+    guardian が cap 非依存で毎時 coin-status / rakuten-status を送信。
+    戻り値: 送信した場合 True
+    """
+    state: dict = {}
+    if GUARDIAN_STATUS_STATE_FILE.exists():
+        try:
+            state = json.loads(GUARDIAN_STATUS_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+
+    last_str = state.get("last_sent_at", "")
+    if last_str:
+        try:
+            from datetime import datetime as _dt
+            elapsed = (_dt.now() - _dt.fromisoformat(last_str)).total_seconds()
+            if elapsed < GUARDIAN_STATUS_INTERVAL_SEC:
+                return False
+        except Exception:
+            pass
+
+    sender = get_sender()
+    if sender != "cyber":
+        return False  # cyber guardian のみ自律送信（cap は watch_channel の定時チェックが担当）
+
+    now_str = datetime.now().isoformat()
+    try:
+        cmd_send_task("coin-status", to="cyber", source=SOURCE_AUTO)
+        cmd_send_task("rakuten-status", to="cyber", source=SOURCE_AUTO)
+        logger.info("[guardian-status] coin-status / rakuten-status 送信")
+    except Exception as e:
+        logger.warning(f"[guardian-status] 送信失敗: {e}")
+        return False
+
+    state["last_sent_at"] = now_str
+    try:
+        GUARDIAN_STATUS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(GUARDIAN_STATUS_STATE_FILE) + ".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(GUARDIAN_STATUS_STATE_FILE)
+    except Exception:
+        pass
+    return True
+
+
+def _guardian_handoff_check() -> bool:
+    """
+    guardian が毎朝 07:35 に daily-handoff を自動実行（cap 非依存）。
+    戻り値: 実行した場合 True
+    """
+    sender = get_sender()
+    if sender != "cyber":
+        return False
+
+    now = datetime.now()
+    now_hm = now.strftime("%H:%M")
+    today = now.strftime("%Y-%m-%d")
+
+    # 07:35〜07:36 の間のみ発火（1分ウィンドウ）
+    if now_hm not in (GUARDIAN_HANDOFF_SLOT, ):
+        # 07:35 ちょうどでなくても ±30秒以内なら発火
+        try:
+            from datetime import datetime as _dt
+            target = _dt.strptime(f"{today} {GUARDIAN_HANDOFF_SLOT}", "%Y-%m-%d %H:%M")
+            diff = abs((now - target).total_seconds())
+            if diff > 60:
+                return False
+        except Exception:
+            return False
+
+    # 本日すでに実行済みなら skip
+    state: dict = {}
+    if GUARDIAN_HANDOFF_STATE_FILE.exists():
+        try:
+            state = json.loads(GUARDIAN_HANDOFF_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            state = {}
+    if state.get("last_date") == today:
+        return False
+
+    try:
+        cmd_daily_handoff()
+        logger.info("[guardian-handoff] daily-handoff 実行 (07:35 自動)")
+    except Exception as e:
+        logger.warning(f"[guardian-handoff] 失敗: {e}")
+        return False
+
+    state["last_date"] = today
+    state["fired_at"] = now.isoformat()
+    try:
+        GUARDIAN_HANDOFF_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(GUARDIAN_HANDOFF_STATE_FILE) + ".tmp")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(GUARDIAN_HANDOFF_STATE_FILE)
+    except Exception:
+        pass
+    return True
+
+
 def _guardian_git_pull() -> bool:
     """
     guardian が cap 非依存で定期実行する git pull。
@@ -3403,15 +3558,9 @@ def _guardian_git_pull() -> bool:
     戻り値: pull を実行した場合 True、スキップした場合 False
     """
     # ----- 実行間隔チェック -----
-    interval_sec = GUARDIAN_GIT_PULL_INTERVAL_SEC
-    try:
-        coin_dir = Path(__file__).parent / "coin_business"
-        import sys as _sys; _sys.path.insert(0, str(coin_dir))
-        from scripts.fetch_overseas_sold import is_high_priority_active
-        if is_high_priority_active():
-            interval_sec = GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC
-    except Exception:
-        pass
+    interval_sec = (GUARDIAN_GIT_PULL_INTERVAL_HIGH_SEC
+                    if _is_high_priority_mode()
+                    else GUARDIAN_GIT_PULL_INTERVAL_SEC)
 
     # state ファイルで前回実行時刻を確認
     state: dict = {}
@@ -3505,13 +3654,25 @@ def watch_guardian(interval: int = GUARDIAN_CHECK_INTERVAL):
     while True:
         time.sleep(interval)
         try:
-            # --- cap 非依存 git pull（1時間 or 30分ごと）---
+            # --- cap 非依存 git pull（通常5分 / 高優先1分ごと）---
             try:
                 pulled = _guardian_git_pull()
                 if pulled:
                     logger.info("[guardian] git pull 実行済み")
             except Exception as gpe:
                 logger.warning(f"[guardian] git pull スキップ: {gpe}")
+
+            # --- cap 非依存 status 毎時送信（cyber のみ）---
+            try:
+                _guardian_status_check()
+            except Exception as se:
+                logger.warning(f"[guardian] status check スキップ: {se}")
+
+            # --- cap 非依存 handoff 毎朝 07:35（cyber のみ）---
+            try:
+                _guardian_handoff_check()
+            except Exception as he:
+                logger.warning(f"[guardian] handoff check スキップ: {he}")
 
             age        = _get_heartbeat_age_sec()
             ack_errors = _count_recent_ack_timeouts()
