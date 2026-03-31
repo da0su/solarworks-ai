@@ -65,49 +65,112 @@ def decide_judgment(candidate: dict) -> tuple[str, str]:
     """
     overseasロット候補レコードを受け取り、judgment と judgment_reason を返す。
 
+    【判定ロジック v2 (2026-04-01改訂)】
+    ref1/ref2がある場合: current_price_jpy を基準値と直接比較
+      - current_price_jpy > max(ref1,ref2) → NG
+      - current_price_jpy > min(ref1,ref2) → WARNING / CEO判断
+      - current_price_jpy ≤ min(ref1,ref2) → OK / CEO判断
+    NGC補正: NGC鑑定品はヤフオク売値×0.92 → ref1/ref2も×0.92で実効計算
+    ref1/ref2なし: 従来の buy_limit_jpy / estimated_cost_jpy ロジックにフォールバック
+
     Returns:
         (judgment, reason)
-        judgment: "OK" | "REVIEW" | "NG" | "CEO判断"
+        judgment: "OK" | "WARNING" | "NG" | "CEO判断"
     """
-    cost_jpy     = float(candidate.get("estimated_cost_jpy") or 0)
-    buy_limit    = float(candidate.get("buy_limit_jpy") or 0)
-    match_score  = float(candidate.get("match_score") or 0)
-    margin_pct   = float(candidate.get("estimated_margin_pct") or 0)
-    yahoo_3m     = int(candidate.get("yahoo_3m_count") or 0)
-    priority     = int(candidate.get("priority") or 1)
+    import re as _re
 
-    reasons = []
+    cur_price_jpy = float(candidate.get("current_price") or 0)   # eBay現在入札価格（円換算）
+    cost_jpy      = float(candidate.get("estimated_cost_jpy") or 0)
+    buy_limit     = float(candidate.get("buy_limit_jpy") or 0)
+    ref1_raw      = candidate.get("ref1_buy_limit_20k_jpy")
+    ref2_raw      = candidate.get("ref2_buy_limit_20k_jpy")
+    match_score   = float(candidate.get("match_score") or 0)
+    margin_pct    = float(candidate.get("estimated_margin_pct") or 0)
+    yahoo_3m      = int(candidate.get("yahoo_3m_count") or 0)
+    priority      = int(candidate.get("priority") or 1)
+    lot_title     = candidate.get("lot_title") or ""
 
-    # ── NG 判定（採算割れ） ───────────────────────────────────────
-    if buy_limit > 0 and cost_jpy > buy_limit:
-        return "NG", f"採算割れ (推定仕入: ¥{cost_jpy:,.0f} > 上限: ¥{buy_limit:,.0f})"
+    # NGC補正: NGC鑑定品はヤフオク売値×0.92 → ref1/ref2も×0.92で実効上限を算出
+    is_ngc     = bool(_re.search(r'\bNGC\b', lot_title, _re.IGNORECASE))
+    ngc_factor = 0.92 if is_ngc else 1.0
+    ngc_tag    = " [NGC×0.92補正]" if is_ngc else ""
 
+    # ── v2 判定: ref1/ref2 が揃っている場合 ───────────────────────
+    if ref1_raw is not None and ref2_raw is not None:
+        eff_ref1    = float(ref1_raw) * ngc_factor
+        eff_ref2    = float(ref2_raw) * ngc_factor
+        loose_bound = max(eff_ref1, eff_ref2)   # 超えたらNG
+        tight_bound = min(eff_ref1, eff_ref2)   # 超えたらWARNING
+
+        # NG: 現在価格が最大基準を超過
+        if cur_price_jpy > loose_bound:
+            return "NG", (
+                f"現在価格超過NG (¥{cur_price_jpy:,.0f} > "
+                f"上限¥{loose_bound:,.0f}{ngc_tag})"
+            )
+
+        # WARNING域: tight〜looseの間
+        if cur_price_jpy > tight_bound:
+            ceo_flags = []
+            if cost_jpy > CEO_THRESHOLD_COST_JPY:
+                ceo_flags.append(f"高額仕入れ (¥{cost_jpy:,.0f})")
+            if 0 < match_score < CEO_THRESHOLD_MATCH_SCORE:
+                ceo_flags.append(f"照合スコア不確実 ({match_score:.2f})")
+            if 0 < yahoo_3m < CEO_THRESHOLD_3M_COUNT:
+                ceo_flags.append(f"直近3か月データ不足 ({yahoo_3m}件)")
+            if priority == 3 and cost_jpy > CEO_THRESHOLD_P3_COST_JPY:
+                ceo_flags.append("最重要P3×中高額")
+            if ceo_flags:
+                return "CEO判断", (
+                    f"WARNING域+要確認 (¥{cur_price_jpy:,.0f} > 基準¥{tight_bound:,.0f}{ngc_tag})"
+                    f" / " + " / ".join(ceo_flags)
+                )
+            return "WARNING", (
+                f"要注意: 現在価格¥{cur_price_jpy:,.0f} が基準¥{tight_bound:,.0f}{ngc_tag}"
+                f" 超過 (上限¥{loose_bound:,.0f}以内)"
+            )
+
+        # OK域: tight以下 → CEO判断条件チェック
+        ceo_flags = []
+        if cost_jpy > CEO_THRESHOLD_COST_JPY:
+            ceo_flags.append(f"高額仕入れ (¥{cost_jpy:,.0f} > ¥{CEO_THRESHOLD_COST_JPY:,.0f})")
+        if 0 < match_score < CEO_THRESHOLD_MATCH_SCORE:
+            ceo_flags.append(f"照合スコア不確実 ({match_score:.2f} < {CEO_THRESHOLD_MATCH_SCORE})")
+        if 0 < yahoo_3m < CEO_THRESHOLD_3M_COUNT:
+            ceo_flags.append(f"直近3か月データ不足 ({yahoo_3m}件 < {CEO_THRESHOLD_3M_COUNT}件)")
+        if margin_pct > CEO_THRESHOLD_MARGIN:
+            ceo_flags.append(f"余裕率異常 ({margin_pct:.1%} > {CEO_THRESHOLD_MARGIN:.0%})")
+        if priority == 3 and cost_jpy > CEO_THRESHOLD_P3_COST_JPY:
+            ceo_flags.append(f"最重要P3オークション×中高額 (¥{cost_jpy:,.0f})")
+        if ceo_flags:
+            return "CEO判断", " / ".join(ceo_flags)
+
+        return "OK", (
+            f"仕入条件充足: ¥{cur_price_jpy:,.0f} ≤ 基準¥{tight_bound:,.0f}{ngc_tag}"
+            f" (上限¥{loose_bound:,.0f})"
+        )
+
+    # ── フォールバック: ref1/ref2なし → 従来の buy_limit ロジック ──
     if match_score > 0 and match_score < 0.50:
         return "NG", f"コイン照合スコア低すぎ ({match_score:.2f})"
 
-    # ── CEO判断 条件チェック ─────────────────────────────────────
-    ceo_flags = []
+    if buy_limit > 0 and cost_jpy > buy_limit:
+        return "NG", f"採算割れ (推定仕入: ¥{cost_jpy:,.0f} > 上限: ¥{buy_limit:,.0f})"
 
+    ceo_flags = []
     if cost_jpy > CEO_THRESHOLD_COST_JPY:
         ceo_flags.append(f"高額仕入れ (¥{cost_jpy:,.0f} > ¥{CEO_THRESHOLD_COST_JPY:,.0f})")
-
     if 0 < match_score < CEO_THRESHOLD_MATCH_SCORE:
         ceo_flags.append(f"照合スコア不確実 ({match_score:.2f} < {CEO_THRESHOLD_MATCH_SCORE})")
-
     if 0 < yahoo_3m < CEO_THRESHOLD_3M_COUNT:
         ceo_flags.append(f"直近3か月データ不足 ({yahoo_3m}件 < {CEO_THRESHOLD_3M_COUNT}件)")
-
     if margin_pct > CEO_THRESHOLD_MARGIN:
         ceo_flags.append(f"余裕率異常 ({margin_pct:.1%} > {CEO_THRESHOLD_MARGIN:.0%} = データ誤り疑い)")
-
     if priority == 3 and cost_jpy > CEO_THRESHOLD_P3_COST_JPY:
         ceo_flags.append(f"最重要P3オークション×中高額 (¥{cost_jpy:,.0f})")
-
     if ceo_flags:
         return "CEO判断", " / ".join(ceo_flags)
 
-    # ── OK / REVIEW 判定 ─────────────────────────────────────────
-    # OK: 全条件を満たす
     ok_conditions = [
         match_score >= CEO_THRESHOLD_MATCH_SCORE or match_score == 0,
         yahoo_3m >= CEO_THRESHOLD_3M_COUNT or yahoo_3m == 0,
@@ -119,7 +182,6 @@ def decide_judgment(candidate: dict) -> tuple[str, str]:
         margin_str = f"利益率 {margin_pct:.1%}" if margin_pct > 0 else ""
         return "OK", f"仕入条件充足 ({margin_str} / 上限まで ¥{buy_limit - cost_jpy:,.0f} 余裕)"
 
-    # REVIEW: NG・CEO判断・OKいずれにも該当しない
     review_reasons = []
     if 0 < match_score < CEO_THRESHOLD_MATCH_SCORE:
         review_reasons.append(f"照合スコア要確認 ({match_score:.2f})")

@@ -759,25 +759,47 @@ function renderCandCard(item) {
   const hl = house.toLowerCase();
   const tagClass = hl.includes('ebay') ? 'tag-ebay' : hl.includes('heritage') ? 'tag-heritage' : hl.includes('spink') ? 'tag-spink' : 'tag-other';
 
-  const limitText = item.buy_limit_jpy ? '¥' + Number(item.buy_limit_jpy).toLocaleString('ja-JP') : '未算出';
-
-  /* 種別判定: lot_titleに"medal"があれば記念メダル、それ以外は硬貨 */
+  /* 種別判定 */
   const isMedal = /\bmedal\b/i.test(item.lot_title || '');
   const typeLabel = isMedal ? '🏅 記念メダル' : '🪙 硬貨';
-  const typeBadgeStyle = isMedal
-    ? 'background:#7c3aed;color:#e9d5ff;'
-    : 'background:#065f46;color:#6ee7b7;';
+  const typeBadgeStyle = isMedal ? 'background:#7c3aed;color:#e9d5ff;' : 'background:#065f46;color:#6ee7b7;';
 
   /* 管理番号 */
   const mgmtDisplay = item.management_no
     ? `<span style="font-size:11px;color:#60a5fa;font-weight:bold;">#${item.management_no}</span>`
     : '<span style="font-size:11px;color:#f87171;">管理番号なし</span>';
 
-  /* 選定理由（強調表示） */
+  /* ── USD/JPY価格計算 ── */
+  const fxRate  = parseFloat(item.fx_rate) || 150;
+  const curJpy  = item.current_price || 0;
+  const curUsd  = item.currency === 'USD' ? Math.round(curJpy / fxRate) : null;
+
+  /* ── NGC補正: NGC鑑定品はヤフオク売値×0.92で実効計算 ── */
+  const isNgc     = /\bNGC\b/i.test(item.lot_title || '');
+  const ngcFactor = isNgc ? 0.92 : 1.0;
+  const ngcBadge  = isNgc
+    ? '<span style="font-size:9px;background:#1c3d6e;color:#93c5fd;border-radius:4px;padding:1px 5px;margin-left:4px;">NGC×0.92</span>'
+    : '';
+
+  /* ── 新判定ロジック: current_price_jpy vs ref1/ref2 を直接比較 ── */
+  const ref1 = item.ref1_buy_limit_20k_jpy;
+  const ref2 = item.ref2_buy_limit_20k_jpy;
+  const looseBound = (ref1 != null && ref2 != null) ? Math.max(ref1, ref2) : null;
+  const tightBound = (ref1 != null && ref2 != null) ? Math.min(ref1, ref2) : null;
+  let jdgLabel, jdgColor, jdgBg;
+  if (looseBound != null) {
+    if (curJpy > looseBound)       { jdgLabel = 'NG';      jdgColor = '#f87171'; jdgBg = '#450a0a'; }
+    else if (curJpy > tightBound)  { jdgLabel = 'WARNING'; jdgColor = '#fbbf24'; jdgBg = '#422006'; }
+    else                           { jdgLabel = 'OK';      jdgColor = '#4ade80'; jdgBg = '#052e16'; }
+  } else {
+    jdgLabel = item.judgment || '?'; jdgColor = '#9ca3af'; jdgBg = '#1f2937';
+  }
+  const jdgBadge = `<span style="background:${jdgBg};color:${jdgColor};border:1px solid ${jdgColor};border-radius:6px;padding:2px 8px;font-size:12px;font-weight:bold;">${jdgLabel}</span>`;
+
+  /* 選定理由 */
   const selectionReason = item.ai_comment || item.judgment_reason || '';
-  const judgmentColor = item.judgment === 'OK' ? '#4ade80' : item.judgment === 'NG' ? '#f87171' : '#fbbf24';
   const selectionHtml = selectionReason
-    ? `<div style="background:#0a1e10;border-left:3px solid ${judgmentColor};border-radius:0 6px 6px 0;padding:6px 10px;margin:6px 0;font-size:12px;color:${judgmentColor};font-weight:bold;">
+    ? `<div style="background:#0a1e10;border-left:3px solid ${jdgColor};border-radius:0 6px 6px 0;padding:6px 10px;margin:6px 0;font-size:12px;color:${jdgColor};font-weight:bold;">
         📌 ${escH(selectionReason)}
        </div>`
     : '';
@@ -797,18 +819,22 @@ function renderCandCard(item) {
     ? `<div class="reason-text">${escH(reason)}</div>`
     : '<div class="reason-text" style="color:#555;">（判断理由の記録なし）</div>';
 
-  const key = escH(item.dedup_key || '');
-  const title = escH(item.lot_title || '（タイトルなし）');
-  const urlHtml = item.lot_url ? `<a class="lot-link" href="${escH(item.lot_url)}" target="_blank" onclick="event.stopPropagation()">🔗 オークションで見る</a><br>` : '';
+  const key     = escH(item.dedup_key || '');
+  const title   = escH(item.lot_title || '（タイトルなし）');
+  const urlHtml = item.lot_url
+    ? `<a class="lot-link" href="${escH(item.lot_url)}" target="_blank" onclick="event.stopPropagation()">🔗 オークションで見る</a><br>`
+    : '';
 
-  /* ---- 追加情報: data.jsonからコイン照合 ---- */
+  /* 仕入限界テキスト (ヘッダー用) */
+  const limitText = item.buy_limit_jpy ? '¥' + Number(item.buy_limit_jpy).toLocaleString('ja-JP') : '未算出';
+
+  /* data.json照合 */
   let coinData = null;
   if (DATA && item.management_no) {
     const padded = String(item.management_no).padStart(6, '0');
     coinData = DATA.coins.find(c => c.management_no === padded) || null;
   }
 
-  /* coin の price_history を取得 */
   let ph = null;
   if (coinData) {
     ph = coinData.price_history;
@@ -816,34 +842,51 @@ function renderCandCard(item) {
     if (!Array.isArray(ph)) ph = null;
   }
 
-  /* Yahoo想定売値 & 落札日 (最新エントリ) */
-  let yahooSell = '--', yahooDate = '--';
+  /* Yahoo最新売値（NGC補正後） */
+  let latestYahooRaw = null, yahooDate = '--';
   if (ph && ph.length) {
     const latest = ph[ph.length - 1];
-    yahooSell = latest.price ? Number(latest.price).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--';
-    yahooDate = latest.date || '--';
+    latestYahooRaw = latest.price ? Number(latest.price) : null;
+    yahooDate      = latest.date || '--';
   }
+  const latestYahooNgc = latestYahooRaw != null ? Math.round(latestYahooRaw * ngcFactor) : null;
+  const yahooSell = latestYahooNgc != null
+    ? `${latestYahooNgc.toLocaleString('ja-JP')}円${isNgc ? '<span style="font-size:9px;color:#93c5fd;margin-left:2px;">(NGC×0.92)</span>' : ''}`
+    : '--';
+
+  /* 利益計算: profit = (yahoo × ngcFactor × 0.9) - estimated_cost */
+  let corrProfit = null;
+  if (latestYahooNgc != null && item.estimated_cost_jpy) {
+    corrProfit = Math.round(latestYahooNgc * 0.9 - item.estimated_cost_jpy);
+  } else if (item.expected_profit != null) {
+    corrProfit = item.expected_profit;
+  }
+  const profCls = corrProfit > 0 ? 'vg' : corrProfit < 0 ? 'vr' : 'vw';
 
   /* フォーマット用ヘルパ */
   const fJ = (n, cls) => n != null
     ? `<span class="${cls||'vw'}">${Number(n).toLocaleString('ja-JP',{maximumFractionDigits:0})}<span style="font-size:9px;">円</span></span>`
     : '<span style="color:#444;">--</span>';
 
-  /* [A] 価格4ボックス横並び */
-  const profCls = item.expected_profit > 0 ? 'vg' : item.expected_profit < 0 ? 'vr' : 'vw';
+  /* [A] 価格4ボックス — 現在価格はUSD+JPY二段表示 */
+  const curPriceHtml = curUsd != null
+    ? `<div style="font-size:14px;font-weight:bold;color:#e2e8f0;">$${curUsd.toLocaleString('en-US')}</div><div style="font-size:10px;color:#9ca3af;margin-top:1px;">≈¥${curJpy.toLocaleString('ja-JP')}</div>`
+    : fJ(curJpy);
   const priceGridHtml = `
 <div class="ceo-price-grid">
-  <div class="ceo-pc"><div class="c-lbl">現在価格</div><div class="c-val vw">${fJ(item.current_price)}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">現在価格(USD)</div>${curPriceHtml}</div>
   <div class="ceo-pc"><div class="c-lbl">推定総コスト</div><div class="c-val vr">${fJ(item.estimated_cost_jpy)}</div></div>
   <div class="ceo-pc"><div class="c-lbl">仕入限界</div><div class="c-val vy">${fJ(item.buy_limit_jpy)}</div></div>
-  <div class="ceo-pc"><div class="c-lbl">想定利益</div><div class="c-val ${profCls}">${fJ(item.expected_profit)}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">実質利益${ngcBadge}</div><div class="c-val ${profCls}">${fJ(corrProfit)}</div></div>
 </div>`;
 
-  /* [B] 基準1 / 基準2 / Yahoo売値 / 落札日 */
+  /* [B] 基準1/2 — 現在価格超過なら赤、安全なら緑で色付け */
+  const ref1Color = (ref1 != null && curJpy > ref1) ? '#f87171' : '#4ade80';
+  const ref2Color = (ref2 != null && curJpy > ref2) ? '#f87171' : '#4ade80';
   const refGridHtml = `
 <div class="ceo-ref-grid">
-  <div class="ceo-rc"><div class="c-lbl">基準1</div><div class="c-val">${item.ref1_buy_limit_20k_jpy != null ? Number(item.ref1_buy_limit_20k_jpy).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--'}</div></div>
-  <div class="ceo-rc"><div class="c-lbl">基準2</div><div class="c-val">${item.ref2_buy_limit_20k_jpy != null ? Number(item.ref2_buy_limit_20k_jpy).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--'}</div></div>
+  <div class="ceo-rc"><div class="c-lbl">基準1(上限)</div><div class="c-val" style="color:${ref1Color};">${ref1 != null ? Number(ref1).toLocaleString('ja-JP')+'円' : '--'}</div></div>
+  <div class="ceo-rc"><div class="c-lbl">基準2(上限)</div><div class="c-val" style="color:${ref2Color};">${ref2 != null ? Number(ref2).toLocaleString('ja-JP')+'円' : '--'}</div></div>
   <div class="ceo-rc"><div class="c-lbl">Yahoo売値</div><div class="c-val">${yahooSell}</div></div>
   <div class="ceo-rc"><div class="c-lbl">落札日</div><div class="c-val" style="font-size:10px;color:#9ca3af;">${escH(yahooDate)}</div></div>
 </div>`;
@@ -858,19 +901,24 @@ function renderCandCard(item) {
 </div>`;
   }
 
-  /* [D] 過去履歴（最新3件） */
+  /* [D] ヤフオク履歴: データあり→表示+Yahoo検索リンク / データなし→非表示 */
   let histHtml = '';
   if (ph && ph.length) {
-    const slice = [...ph].reverse().slice(0, 3);
-    const rows = slice.map(p => `<div class="ceo-hr">
-      <span class="h-d">${escH(p.date||'--')}</span>
-      <span class="h-p">${p.price ? Number(p.price).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--'}</span>
-      <span class="h-g">入札:${p.bids != null ? p.bids : '?'}</span>
-    </div>`).join('');
-    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク履歴（${ph.length}件中 最新3件）</div>${rows}</div>`;
-  } else {
-    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク履歴</div><div style="font-size:11px;color:#444;padding:2px 0;">${coinData ? 'データなし' : '管理番号未登録 — 未照合'}</div></div>`;
+    const slice    = [...ph].reverse().slice(0, 3);
+    const histRows = slice.map(p => {
+      const rawP   = p.price ? Number(p.price) : null;
+      const ngcAdj = (isNgc && rawP) ? ` <span style="font-size:9px;color:#93c5fd;">(×0.92=¥${Math.round(rawP*0.92).toLocaleString('ja-JP')})</span>` : '';
+      return `<div class="ceo-hr">
+        <span class="h-d">${escH(p.date||'--')}</span>
+        <span class="h-p">${rawP ? rawP.toLocaleString('ja-JP',{maximumFractionDigits:0})+'円'+ngcAdj : '--'}</span>
+        <span class="h-g">入札:${p.bids != null ? p.bids : '?'}</span>
+      </div>`;
+    }).join('');
+    const searchQ   = encodeURIComponent((item.lot_title || '').substring(0, 30));
+    const yahooLink = `<a href="https://auctions.yahoo.co.jp/search/search?p=${searchQ}" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#60a5fa;margin-left:6px;text-decoration:none;">🔍 Yahoo検索</a>`;
+    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク履歴（${ph.length}件中 最新3件）${yahooLink}</div>${histRows}</div>`;
   }
+  /* データなし = 非表示 (histHtml 空のまま) */
 
   return `<div class="cand-card" id="cand-${key}">
   <div class="cand-top" onclick="this.closest('.cand-card').classList.toggle('open')">
@@ -879,11 +927,13 @@ function renderCandCard(item) {
       ${mgmtDisplay}
       <span class="c-tag ${tagClass}">${escH(house) || 'Unknown'}</span>
       <span class="c-score ${scoreClass}">Score: ${scoreText}</span>
+      ${jdgBadge}
       ${deadlineHtml}
     </div>
     <div class="cand-title">${title}</div>
-    <div class="cand-row">
+    <div class="cand-row" style="flex-wrap:wrap;gap:6px;">
       <span class="c-limit">仕入限界: ${limitText}</span>
+      ${curUsd != null ? `<span style="font-size:13px;color:#e2e8f0;font-weight:bold;">$${curUsd.toLocaleString('en-US')}（約¥${curJpy.toLocaleString('ja-JP')}）</span>` : ''}
     </div>
     ${selectionHtml}
     <button class="reason-toggle" onclick="event.stopPropagation(); this.closest('.cand-card').classList.toggle('open')">▶ 詳細・価格・履歴を見る</button>
