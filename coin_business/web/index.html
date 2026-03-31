@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>コイン仕入れDB</title>
 <style>
+/* ===== 既存スタイル (変更不可) ===== */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1a1a2e; color: #e0e0e0; padding: 8px; }
 .header { text-align: center; padding: 12px 0; border-bottom: 1px solid #333; margin-bottom: 12px; }
@@ -71,6 +72,97 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .numista-link { display: inline-block; margin-top: 6px; padding: 4px 8px; background: #2563eb; border-radius: 4px; color: #fff; text-decoration: none; font-size: 11px; }
 .alert { margin-top: 6px; padding: 6px; background: #7f1d1d; border-radius: 6px; font-size: 11px; color: #fca5a5; text-align: center; }
 .history-item { font-size: 11px; padding: 2px 0; border-bottom: 1px solid #1a1a2e; }
+
+/* ===== 追加スタイル: タブナビ ===== */
+.tab-nav { display: flex; margin-bottom: 12px; border-bottom: 2px solid #2a2a4a; }
+.tab-btn { flex: 1; padding: 10px 4px; border: none; background: transparent; color: #888; font-size: 13px; font-weight: bold; cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; transition: color 0.15s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab-btn.active { color: #ffd700; border-bottom-color: #ffd700; }
+.tab-btn:hover:not(.active) { color: #ccc; }
+.tab-badge { display: inline-block; background: #dc2626; color: #fff; font-size: 10px; padding: 1px 5px; border-radius: 10px; margin-left: 4px; vertical-align: middle; }
+
+/* ===== 追加スタイル: 共通パネル ===== */
+.panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.panel-title { font-size: 15px; font-weight: bold; color: #ffd700; }
+.kpi-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.kpi-box { flex: 1; background: #16213e; border-radius: 8px; padding: 10px 8px; text-align: center; border: 1px solid #2a2a4a; }
+.kpi-num { font-size: 24px; font-weight: bold; color: #ffd700; line-height: 1.1; }
+.kpi-lbl { font-size: 10px; color: #888; margin-top: 3px; }
+.empty-state { text-align: center; color: #666; padding: 36px 20px; font-size: 14px; }
+.loading-state { text-align: center; color: #888; padding: 24px; font-size: 13px; }
+.section-lbl { font-size: 12px; color: #ffd700; font-weight: bold; margin: 10px 0 6px; }
+.load-more-btn { width: 100%; padding: 12px; border: 1px solid #444; border-radius: 8px; background: transparent; color: #888; font-size: 13px; cursor: pointer; margin-top: 4px; }
+.load-more-btn:hover { border-color: #ffd700; color: #ffd700; }
+.lot-link { display: inline-block; padding: 5px 12px; background: #1e40af; border-radius: 6px; color: #93c5fd; text-decoration: none; font-size: 12px; margin-bottom: 8px; }
+
+/* ===== 追加スタイル: CEO確認カード ===== */
+.cand-card { background: #16213e; border-radius: 10px; margin-bottom: 10px; border: 1px solid #2a2a4a; overflow: hidden; }
+.cand-top { padding: 12px; }
+.cand-title { font-size: 14px; font-weight: bold; color: #fff; margin-bottom: 6px; line-height: 1.4; }
+.cand-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.c-tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: bold; }
+.tag-ebay { background: #1d4ed8; color: #93c5fd; }
+.tag-heritage { background: #6d28d9; color: #c4b5fd; }
+.tag-spink { background: #065f46; color: #6ee7b7; }
+.tag-other { background: #374151; color: #9ca3af; }
+.c-score { font-size: 15px; font-weight: bold; }
+.score-hi { color: #4ade80; }
+.score-md { color: #fbbf24; }
+.score-lo { color: #f87171; }
+.c-limit { font-size: 13px; color: #60a5fa; font-weight: bold; }
+.c-deadline { font-size: 11px; }
+.deadline-urgent { color: #f87171; font-weight: bold; }
+.deadline-near { color: #fbbf24; }
+.deadline-normal { color: #888; }
+.reason-toggle { background: none; border: 1px solid #333; border-radius: 6px; color: #888; font-size: 12px; padding: 5px 10px; cursor: pointer; width: 100%; text-align: left; }
+.reason-toggle:hover { border-color: #888; color: #ccc; }
+.cand-detail { display: none; padding: 12px; border-top: 1px solid #2a2a4a; background: #0d1525; }
+.cand-card.open .cand-detail { display: block; }
+.reason-text { background: #1e293b; border-radius: 6px; padding: 10px; font-size: 12px; color: #cbd5e1; line-height: 1.7; margin-bottom: 10px; white-space: pre-wrap; word-break: break-all; }
+.action-row { display: flex; gap: 8px; margin-bottom: 6px; }
+.btn-approve { flex: 1; padding: 12px; border: none; border-radius: 8px; background: #ffd700; color: #000; font-size: 14px; font-weight: bold; cursor: pointer; }
+.btn-approve:hover { background: #f59e0b; }
+.btn-approve:disabled { background: #555; color: #888; cursor: default; }
+.btn-ng { flex: 1; padding: 12px; border: 1px solid #7f1d1d; border-radius: 8px; background: #1e1010; color: #fca5a5; font-size: 14px; font-weight: bold; cursor: pointer; }
+.btn-ng:hover { background: #7f1d1d; }
+.ng-area { display: none; margin-top: 6px; }
+.ng-area textarea { width: 100%; padding: 8px; border: 1px solid #444; border-radius: 6px; background: #1e293b; color: #fff; font-size: 12px; resize: vertical; min-height: 56px; }
+.ng-submit { margin-top: 6px; width: 100%; padding: 10px; border: none; border-radius: 6px; background: #7f1d1d; color: #fca5a5; font-weight: bold; cursor: pointer; font-size: 13px; }
+.ng-submit:hover { background: #991b1b; }
+.ng-submit:disabled { background: #333; color: #666; cursor: default; }
+
+/* ===== 追加スタイル: 入札予定カード ===== */
+.urgent-counter { background: #dc2626; color: #fff; font-size: 12px; padding: 4px 12px; border-radius: 10px; font-weight: bold; }
+.bid-card { background: #16213e; border-radius: 10px; margin-bottom: 10px; border: 1px solid #2a2a4a; overflow: hidden; }
+.bid-card-top { padding: 12px; cursor: pointer; display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.bid-card-left { flex: 1; min-width: 0; }
+.bid-card-title { font-size: 13px; font-weight: bold; color: #fff; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bid-card-meta { font-size: 11px; color: #888; }
+.bid-card-right { text-align: right; flex-shrink: 0; }
+.bid-amount-disp { font-size: 15px; font-weight: bold; color: #4ade80; }
+.bid-amount-null { font-size: 12px; color: #555; }
+.result-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-top: 3px; }
+.r-scheduled { background: #1d4ed8; color: #93c5fd; }
+.r-win { background: #166534; color: #86efac; }
+.r-lose { background: #7f1d1d; color: #fca5a5; }
+.r-cancelled { background: #374151; color: #9ca3af; }
+.urgent-dot { color: #f87171; }
+.bid-detail { display: none; padding: 12px; border-top: 1px solid #2a2a4a; background: #0d1525; }
+.bid-card.open .bid-detail { display: block; }
+.form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.form-lbl { font-size: 12px; color: #aaa; width: 110px; flex-shrink: 0; }
+.form-input { flex: 1; padding: 8px 10px; border: 1px solid #444; border-radius: 6px; background: #1e293b; color: #fff; font-size: 14px; min-width: 0; }
+.form-input:focus { outline: none; border-color: #ffd700; }
+.form-select { flex: 1; padding: 8px 10px; border: 1px solid #444; border-radius: 6px; background: #1e293b; color: #fff; font-size: 14px; }
+.jpy-hint { font-size: 12px; color: #60a5fa; flex-shrink: 0; }
+.drop-zone { border: 2px dashed #333; border-radius: 8px; padding: 16px; text-align: center; color: #555; font-size: 12px; cursor: pointer; transition: border-color 0.2s, color 0.2s; margin-bottom: 4px; }
+.drop-zone.dragover { border-color: #ffd700; color: #ffd700; }
+.drop-zone .preview-img { max-width: 100%; border-radius: 6px; margin-top: 8px; display: block; margin-left: auto; margin-right: auto; }
+.btn-save-bid { width: 100%; padding: 13px; border: none; border-radius: 8px; background: #ffd700; color: #000; font-size: 15px; font-weight: bold; cursor: pointer; margin-top: 8px; }
+.btn-save-bid:hover { background: #f59e0b; }
+.btn-save-bid:disabled { background: #555; color: #888; cursor: default; }
+.new-bid-toggle-btn { width: 100%; padding: 10px; border: 1px dashed #444; border-radius: 8px; background: transparent; color: #888; font-size: 13px; cursor: pointer; margin-bottom: 12px; }
+.new-bid-toggle-btn:hover { border-color: #ffd700; color: #ffd700; }
+.new-bid-form { background: #16213e; border-radius: 10px; padding: 12px; margin-bottom: 14px; border: 1px solid #2a2a4a; display: none; }
 </style>
 </head>
 <body>
@@ -79,6 +171,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   <h1>コイン仕入れDB</h1>
   <div class="meta" id="meta"></div>
 </div>
+
+<!-- タブナビ (追加) -->
+<div class="tab-nav">
+  <button class="tab-btn" id="tab-btn-db" onclick="switchTab('db')">📊 相場DB</button>
+  <button class="tab-btn active" id="tab-btn-ceo" onclick="switchTab('ceo')">🔍 CEO確認<span class="tab-badge" id="ceo-count-badge" style="display:none">0</span></button>
+  <button class="tab-btn" id="tab-btn-bid" onclick="switchTab('bid')">🎯 入札予定<span class="tab-badge" id="bid-urgent-badge" style="display:none">0</span></button>
+</div>
+
+<!-- ① 相場DBパネル (既存コンテンツをラップ、デフォルト非表示) -->
+<div id="db-panel" style="display:none">
 
 <div class="search-box" style="margin-bottom:6px;">
   <input type="text" id="mgmtNo" placeholder="管理番号(6桁)" style="width:120px;text-align:center;flex:none;" maxlength="6" inputmode="numeric">
@@ -148,7 +250,108 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <div class="count" id="count"></div>
 <div id="results"></div>
 
+</div><!-- /#db-panel -->
+
+
+<!-- ② CEO確認パネル (デフォルト表示) -->
+<div id="ceo-panel">
+
+  <div class="panel-header">
+    <div class="panel-title">🔍 CEO確認</div>
+    <button onclick="loadCeoPanel(0, true)" style="background:none;border:1px solid #444;border-radius:6px;color:#888;padding:4px 10px;font-size:12px;cursor:pointer;">↺ 更新</button>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi-box">
+      <div class="kpi-num" id="ceo-kpi-pending">-</div>
+      <div class="kpi-lbl">未判断</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-num" id="ceo-kpi-approved" style="color:#4ade80;">-</div>
+      <div class="kpi-lbl">承認済み</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-num" id="ceo-kpi-rejected" style="color:#f87171;">-</div>
+      <div class="kpi-lbl">NG済み</div>
+    </div>
+  </div>
+
+  <div id="ceo-list">
+    <div class="loading-state">読み込み中...</div>
+  </div>
+
+</div><!-- /#ceo-panel -->
+
+
+<!-- ③ 入札予定パネル -->
+<div id="bid-panel" style="display:none">
+
+  <div class="panel-header">
+    <div class="panel-title">🎯 入札予定</div>
+    <div id="bid-urgent-header" style="display:none">
+      <span class="urgent-counter">🚨 緊急 <span id="bid-urgent-count">0</span>件</span>
+    </div>
+  </div>
+
+  <!-- 新規入力ボタン＆フォーム -->
+  <button class="new-bid-toggle-btn" onclick="toggleNewBidForm()">＋ 新規入札を手動登録</button>
+
+  <div class="new-bid-form" id="newBidForm">
+    <div class="section-lbl" style="margin-top:0">新規入力フォーム</div>
+    <div class="form-row">
+      <span class="form-lbl">コイン名 *</span>
+      <input class="form-input" type="text" id="nb-title" placeholder="例: 1914 Prussia Gold 20 Mark">
+    </div>
+    <div class="form-row">
+      <span class="form-lbl">オークション</span>
+      <select class="form-select" id="nb-house">
+        <option value="eBay">eBay</option>
+        <option value="Heritage">Heritage</option>
+        <option value="Spink">Spink</option>
+        <option value="Stack's">Stack's</option>
+        <option value="その他">その他</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <span class="form-lbl">URL</span>
+      <input class="form-input" type="url" id="nb-url" placeholder="https://...">
+    </div>
+    <div class="form-row">
+      <span class="form-lbl">締切日時</span>
+      <input class="form-input" type="datetime-local" id="nb-end">
+    </div>
+    <div class="form-row">
+      <span class="form-lbl">入札額 (USD)</span>
+      <input class="form-input" type="number" id="nb-usd" placeholder="例: 650" step="0.01" oninput="autoCalcJpy('nb-usd','nb-jpy')">
+      <span class="jpy-hint" id="nb-jpy">¥ -</span>
+    </div>
+    <button class="btn-save-bid" onclick="saveNewBid(this)">💾 登録する</button>
+  </div>
+
+  <!-- KPI -->
+  <div class="kpi-row">
+    <div class="kpi-box">
+      <div class="kpi-num" id="bid-kpi-scheduled" style="color:#60a5fa;">-</div>
+      <div class="kpi-lbl">⏳ 予定</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-num" id="bid-kpi-win" style="color:#4ade80;">-</div>
+      <div class="kpi-lbl">🏆 落札</div>
+    </div>
+    <div class="kpi-box">
+      <div class="kpi-num" id="bid-kpi-lose" style="color:#f87171;">-</div>
+      <div class="kpi-lbl">❌ 落選</div>
+    </div>
+  </div>
+
+  <div id="bid-list">
+    <div class="loading-state">読み込み中...</div>
+  </div>
+
+</div><!-- /#bid-panel -->
+
 <script>
+/* ===== 既存コード (変更不可) ===== */
 let DATA = null;
 let currentFilter = 'all';
 let currentGrader = 'all';
@@ -419,7 +622,497 @@ function toggleAncient(btn) {
   renderAll();
 }
 
-loadData();
+/* ===== 追加コード: Supabase接続設定 ===== */
+const SB_URL = 'https://sgitwndpyxzsslyyvpyn.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnaXR3bmRweXh6c3NseXl2cHluIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mzg5MDM5NiwiZXhwIjoyMDg5NDY2Mzk2fQ.jMhC7mI012lTt44TakRx7fiKcZwvKXsloAY51ofnbh8';
+const SB_HDR = { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`, 'Content-Type': 'application/json' };
+
+/* ===== タブ切替 ===== */
+let _bidLoaded = false;
+
+function switchTab(tab) {
+  ['db','ceo','bid'].forEach(t => {
+    document.getElementById(`${t}-panel`).style.display = (t === tab) ? '' : 'none';
+    document.getElementById(`tab-btn-${t}`).classList.toggle('active', t === tab);
+  });
+  if (tab === 'bid' && !_bidLoaded) { _bidLoaded = true; loadBidPanel(); }
+}
+
+/* ===== ユーティリティ ===== */
+function escH(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function getUsdRate() {
+  return (DATA && DATA.rates && DATA.rates.usd_jpy_calc) ? parseFloat(DATA.rates.usd_jpy_calc) : 150;
+}
+
+function autoCalcJpy(usdId, jpyId) {
+  const usdVal = parseFloat(document.getElementById(usdId)?.value || 0);
+  const jpyEl = document.getElementById(jpyId);
+  if (jpyEl) jpyEl.textContent = usdVal > 0 ? '¥' + Math.round(usdVal * getUsdRate()).toLocaleString('ja-JP') : '¥ -';
+}
+
+/* =====================================================
+   CEO確認パネル
+   ===================================================== */
+let _ceoOffset = 0;
+const CEO_PAGE = 20;
+let _ceoTotal = 0;
+
+async function loadCeoPanel(offset, reset) {
+  offset = offset || 0;
+  if (reset || offset === 0) {
+    document.getElementById('ceo-list').innerHTML = '<div class="loading-state">読み込み中...</div>';
+    _ceoOffset = 0;
+  }
+
+  /* KPIカウント (3つ並列) */
+  try {
+    const hdr = { ...SB_HDR, 'Prefer': 'count=exact' };
+    const getCount = async (filter) => {
+      const r = await fetch(`${SB_URL}/rest/v1/daily_candidates?${filter}&select=dedup_key&limit=1`, { headers: hdr });
+      const cr = r.headers.get('content-range');
+      return cr ? (cr.split('/')[1] || '0') : '?';
+    };
+    const [pCnt, aCnt, rCnt] = await Promise.all([
+      getCount('or=(ceo_decision.eq.pending,ceo_decision.is.null)'),
+      getCount('ceo_decision=eq.approved'),
+      getCount('ceo_decision=eq.rejected')
+    ]);
+    document.getElementById('ceo-kpi-pending').textContent = pCnt;
+    document.getElementById('ceo-kpi-approved').textContent = aCnt;
+    document.getElementById('ceo-kpi-rejected').textContent = rCnt;
+    _ceoTotal = parseInt(pCnt) || 0;
+    const badge = document.getElementById('ceo-count-badge');
+    badge.textContent = _ceoTotal;
+    badge.style.display = _ceoTotal > 0 ? '' : 'none';
+  } catch(e) { console.error('CEO KPI:', e); }
+
+  /* 案件リスト */
+  try {
+    const cols = 'dedup_key,lot_title,lot_url,auction_house,buy_limit_jpy,priority_score,lot_end_time,ceo_decision,notes,judgment,judgment_reason,ai_comment';
+    const resp = await fetch(
+      `${SB_URL}/rest/v1/daily_candidates?or=(ceo_decision.eq.pending,ceo_decision.is.null)&order=priority_score.desc&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
+      { headers: SB_HDR }
+    );
+    const items = await resp.json();
+    const list = document.getElementById('ceo-list');
+    if (offset === 0 || reset) list.innerHTML = '';
+
+    if (!Array.isArray(items) || items.length === 0) {
+      if (offset === 0) list.innerHTML = '<div class="empty-state">✅ 未判断の案件はありません</div>';
+      const old = document.getElementById('ceo-more-btn');
+      if (old) old.remove();
+      return;
+    }
+
+    items.forEach(item => list.insertAdjacentHTML('beforeend', renderCandCard(item)));
+    _ceoOffset = offset + items.length;
+
+    /* もっと見るボタン */
+    const old = document.getElementById('ceo-more-btn');
+    if (old) old.remove();
+    if (_ceoOffset < _ceoTotal) {
+      const btn = document.createElement('button');
+      btn.id = 'ceo-more-btn';
+      btn.className = 'load-more-btn';
+      btn.textContent = `もっと見る（残り ${_ceoTotal - _ceoOffset} 件）`;
+      btn.onclick = () => loadCeoPanel(_ceoOffset, false);
+      list.after(btn);
+    }
+  } catch(e) {
+    console.error('CEO list:', e);
+    document.getElementById('ceo-list').innerHTML = '<div class="empty-state" style="color:#f87171;">読み込みエラー。↺ 更新を押してください。</div>';
+  }
+}
+
+function renderCandCard(item) {
+  const score = item.priority_score;
+  const scoreClass = score >= 70 ? 'score-hi' : score >= 50 ? 'score-md' : 'score-lo';
+  const scoreText = score != null ? score : '?';
+
+  const house = item.auction_house || '';
+  const hl = house.toLowerCase();
+  const tagClass = hl.includes('ebay') ? 'tag-ebay' : hl.includes('heritage') ? 'tag-heritage' : hl.includes('spink') ? 'tag-spink' : 'tag-other';
+
+  const limitText = item.buy_limit_jpy ? '¥' + Number(item.buy_limit_jpy).toLocaleString('ja-JP') : '未算出';
+
+  let deadlineHtml = '';
+  if (item.lot_end_time) {
+    const dt = new Date(item.lot_end_time);
+    const diffH = (dt - new Date()) / 3600000;
+    const ds = `${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+    if (diffH < 48)       deadlineHtml = `<span class="c-deadline deadline-urgent">🚨 ${ds}</span>`;
+    else if (diffH < 168) deadlineHtml = `<span class="c-deadline deadline-near">⏰ ${ds}</span>`;
+    else                  deadlineHtml = `<span class="c-deadline deadline-normal">📅 ${ds}</span>`;
+  }
+
+  const reason = item.ai_comment || item.judgment_reason || item.notes || '';
+  const reasonHtml = reason
+    ? `<div class="reason-text">${escH(reason)}</div>`
+    : '<div class="reason-text" style="color:#555;">（判断理由の記録なし）</div>';
+
+  const key = escH(item.dedup_key || '');
+  const title = escH(item.lot_title || '（タイトルなし）');
+  const urlHtml = item.lot_url ? `<a class="lot-link" href="${escH(item.lot_url)}" target="_blank" onclick="event.stopPropagation()">🔗 オークションで見る</a><br>` : '';
+
+  return `<div class="cand-card" id="cand-${key}">
+  <div class="cand-top" onclick="this.closest('.cand-card').classList.toggle('open')">
+    <div class="cand-title">${title}</div>
+    <div class="cand-row">
+      <span class="c-tag ${tagClass}">${escH(house) || 'Unknown'}</span>
+      <span class="c-score ${scoreClass}">Score: ${scoreText}</span>
+      <span class="c-limit">仕入限界: ${limitText}</span>
+      ${deadlineHtml}
+    </div>
+    <button class="reason-toggle" onclick="event.stopPropagation(); this.closest('.cand-card').classList.toggle('open')">▶ 判断理由を見る</button>
+  </div>
+  <div class="cand-detail">
+    ${reasonHtml}
+    ${urlHtml}
+    <div class="action-row">
+      <button class="btn-approve" onclick="event.stopPropagation(); doCeoApprove('${key}', this)">✅ 承認</button>
+      <button class="btn-ng" onclick="event.stopPropagation(); toggleNgArea('${key}')">❌ NG</button>
+    </div>
+    <div class="ng-area" id="ng-area-${key}">
+      <textarea id="ng-text-${key}" placeholder="NG理由を入力（任意）" rows="2"></textarea>
+      <button class="ng-submit" onclick="event.stopPropagation(); doCeoNG('${key}', this)">❌ NGとして確定する</button>
+    </div>
+  </div>
+</div>`;
+}
+
+function toggleNgArea(key) {
+  const a = document.getElementById(`ng-area-${key}`);
+  a.style.display = a.style.display === 'block' ? 'none' : 'block';
+  if (a.style.display === 'block') document.getElementById(`ng-text-${key}`)?.focus();
+}
+
+async function doCeoApprove(key, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    /* 1. daily_candidates を承認済みに更新 */
+    const r1 = await fetch(`${SB_URL}/rest/v1/daily_candidates?dedup_key=eq.${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ ceo_decision: 'approved', ceo_decided_at: new Date().toISOString() })
+    });
+    if (!r1.ok) throw new Error(`PATCH daily_candidates: ${r1.status}`);
+
+    /* 2. 案件情報を取得して bid_history に新規追加 */
+    const r2 = await fetch(
+      `${SB_URL}/rest/v1/daily_candidates?dedup_key=eq.${encodeURIComponent(key)}&select=lot_title,auction_house,lot_url,lot_end_time,buy_limit_jpy`,
+      { headers: SB_HDR }
+    );
+    const cands = await r2.json();
+    if (Array.isArray(cands) && cands.length > 0) {
+      const c = cands[0];
+      await fetch(`${SB_URL}/rest/v1/bid_history`, {
+        method: 'POST',
+        headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+        body: JSON.stringify({
+          lot_title: c.lot_title,
+          auction_house: c.auction_house,
+          lot_url: c.lot_url,
+          auction_end_at: c.lot_end_time || null,
+          result: 'scheduled',
+          recommended_by: 'cap'
+        })
+      });
+    }
+
+    /* 3. カードをフェードアウト → KPI 更新 */
+    const card = document.getElementById(`cand-${key}`);
+    if (card) { card.style.transition = 'opacity 0.3s'; card.style.opacity = '0'; setTimeout(() => { card.remove(); _ceoAdjustKpi(-1,1,0); }, 300); }
+    _bidLoaded = false; // 入札予定タブを次回リロード対象に
+
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = '✅ 承認';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+async function doCeoNG(key, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  const reason = (document.getElementById(`ng-text-${key}`)?.value || '').trim();
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/daily_candidates?dedup_key=eq.${encodeURIComponent(key)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ ceo_decision: 'rejected', ceo_ng_reason: reason || null, ceo_decided_at: new Date().toISOString() })
+    });
+    if (!r.ok) throw new Error(`PATCH daily_candidates: ${r.status}`);
+    const card = document.getElementById(`cand-${key}`);
+    if (card) { card.style.transition = 'opacity 0.3s'; card.style.opacity = '0'; setTimeout(() => { card.remove(); _ceoAdjustKpi(-1,0,1); }, 300); }
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = '❌ NGとして確定する';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+function _ceoAdjustKpi(pendDelta, appDelta, rejDelta) {
+  const p = v => Math.max(0, (parseInt(document.getElementById(v).textContent) || 0));
+  document.getElementById('ceo-kpi-pending').textContent  = p('ceo-kpi-pending')  + pendDelta;
+  document.getElementById('ceo-kpi-approved').textContent = p('ceo-kpi-approved') + appDelta;
+  document.getElementById('ceo-kpi-rejected').textContent = p('ceo-kpi-rejected') + rejDelta;
+  const n = p('ceo-kpi-pending') + pendDelta;
+  const badge = document.getElementById('ceo-count-badge');
+  badge.textContent = n; badge.style.display = n > 0 ? '' : 'none';
+}
+
+/* =====================================================
+   入札予定パネル
+   ===================================================== */
+async function loadBidPanel() {
+  document.getElementById('bid-list').innerHTML = '<div class="loading-state">読み込み中...</div>';
+  try {
+    const cols = 'id,lot_title,auction_house,lot_url,auction_end_at,our_bid_usd,our_bid_jpy,result,final_price_usd,final_price_jpy,notes,screenshot_path';
+    const resp = await fetch(
+      `${SB_URL}/rest/v1/bid_history?order=auction_end_at.asc.nullslast,created_at.desc&limit=100&select=${cols}`,
+      { headers: SB_HDR }
+    );
+    const items = await resp.json();
+    if (!Array.isArray(items)) throw new Error('Invalid response');
+
+    /* KPI */
+    const scheduled = items.filter(i => i.result === 'scheduled');
+    const wins      = items.filter(i => i.result === 'win');
+    const loses     = items.filter(i => i.result === 'lose');
+    document.getElementById('bid-kpi-scheduled').textContent = scheduled.length;
+    document.getElementById('bid-kpi-win').textContent       = wins.length;
+    document.getElementById('bid-kpi-lose').textContent      = loses.length;
+
+    /* 緊急カウント (scheduled + 締切48h以内) */
+    const now = new Date();
+    const urgentIds = new Set(scheduled.filter(i => i.auction_end_at && (new Date(i.auction_end_at) - now) < 172800000).map(i => i.id));
+    const urgCnt = urgentIds.size;
+    document.getElementById('bid-urgent-count').textContent = urgCnt;
+    document.getElementById('bid-urgent-header').style.display = urgCnt > 0 ? '' : 'none';
+    const urgBadge = document.getElementById('bid-urgent-badge');
+    urgBadge.textContent = urgCnt; urgBadge.style.display = urgCnt > 0 ? '' : 'none';
+
+    const list = document.getElementById('bid-list');
+    if (items.length === 0) {
+      list.innerHTML = '<div class="empty-state">入札予定はありません。<br>CEO確認タブで案件を承認すると自動追加されます。</div>';
+      return;
+    }
+
+    /* 表示順: 緊急→予定残り→落札→落選→その他 */
+    const sorted = [
+      ...items.filter(i => urgentIds.has(i.id)),
+      ...scheduled.filter(i => !urgentIds.has(i.id)),
+      ...wins,
+      ...loses,
+      ...items.filter(i => !['scheduled','win','lose'].includes(i.result))
+    ];
+    list.innerHTML = sorted.map(item => renderBidCard(item)).join('');
+  } catch(e) {
+    console.error(e);
+    document.getElementById('bid-list').innerHTML = '<div class="empty-state" style="color:#f87171;">読み込みエラー。ページを更新してください。</div>';
+  }
+}
+
+function renderBidCard(item) {
+  const result = item.result || 'scheduled';
+  const LABELS = { scheduled:'⏳ 予定', win:'🏆 落札', lose:'❌ 落選', cancelled:'キャンセル' };
+  const CLASSES = { scheduled:'r-scheduled', win:'r-win', lose:'r-lose', cancelled:'r-cancelled' };
+  const resLabel = LABELS[result] || result;
+  const resClass = CLASSES[result] || 'r-scheduled';
+
+  const now = new Date();
+  let urgentDot = '';
+  let metaParts = [escH(item.auction_house || '')];
+  if (item.auction_end_at) {
+    const dt = new Date(item.auction_end_at);
+    const diffH = (dt - now) / 3600000;
+    const ds = `${dt.getMonth()+1}/${dt.getDate()} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+    if (diffH < 48 && result === 'scheduled') urgentDot = '<span class="urgent-dot">🚨 </span>';
+    metaParts.push('締切: ' + ds);
+  }
+
+  const bidDisplay = item.our_bid_usd
+    ? `<div class="bid-amount-disp">$${Number(item.our_bid_usd).toFixed(0)}<span style="font-size:11px;color:#888;"> (¥${Number(item.our_bid_jpy||0).toLocaleString('ja-JP')})</span></div>`
+    : '<div class="bid-amount-null">入札額未登録</div>';
+
+  const id = escH(item.id);
+  const title = escH(item.lot_title || '（タイトルなし）');
+
+  /* 落札額フィールド (予定・落札時のみ表示) */
+  const finalRow = (result !== 'lose' && result !== 'cancelled') ? `
+    <div class="form-row">
+      <span class="form-lbl">落札額 (USD)</span>
+      <input class="form-input" type="number" id="bf-final-${id}" value="${escH(item.final_price_usd||'')}" placeholder="落札確定後に入力" step="0.01">
+    </div>` : '';
+
+  /* スクリーンショット表示 */
+  const ssPath = item.screenshot_path || '';
+  const ssInner = ssPath
+    ? `<img class="preview-img" id="dz-img-${id}" src="${escH(ssPath)}" onerror="this.style.display='none'">`
+    : `<span id="dz-label-${id}">📎 スクリーンショットをD&Dまたはクリックして追加</span>`;
+
+  return `<div class="bid-card" id="bid-card-${id}">
+  <div class="bid-card-top" onclick="this.closest('.bid-card').classList.toggle('open')">
+    <div class="bid-card-left">
+      <div class="bid-card-title">${urgentDot}${title}</div>
+      <div class="bid-card-meta">${metaParts.filter(Boolean).join(' | ')}</div>
+    </div>
+    <div class="bid-card-right">
+      ${bidDisplay}
+      <span class="result-badge ${resClass}">${resLabel}</span>
+    </div>
+  </div>
+  <div class="bid-detail">
+    <div class="section-lbl" style="margin-top:0">▼ 💰 入札額を登録 / 結果更新</div>
+    <div class="form-row">
+      <span class="form-lbl">入札額 (USD)</span>
+      <input class="form-input" type="number" id="bf-usd-${id}" value="${escH(item.our_bid_usd||'')}" placeholder="例: 650" step="0.01" oninput="autoCalcJpy('bf-usd-${id}','bf-jpy-${id}')">
+      <span class="jpy-hint" id="bf-jpy-${id}">${item.our_bid_jpy ? '¥'+Number(item.our_bid_jpy).toLocaleString('ja-JP') : '¥ -'}</span>
+    </div>
+    <div class="form-row">
+      <span class="form-lbl">結果</span>
+      <select class="form-select" id="bf-result-${id}">
+        <option value="scheduled" ${result==='scheduled'?'selected':''}>⏳ 予定</option>
+        <option value="win"       ${result==='win'      ?'selected':''}>🏆 落札</option>
+        <option value="lose"      ${result==='lose'     ?'selected':''}>❌ 落選</option>
+        <option value="cancelled" ${result==='cancelled'?'selected':''}>キャンセル</option>
+      </select>
+    </div>
+    ${finalRow}
+    <div class="form-row">
+      <span class="form-lbl">備考</span>
+      <input class="form-input" type="text" id="bf-notes-${id}" value="${escH(item.notes||'')}" placeholder="メモ">
+    </div>
+    <div class="drop-zone" id="dz-${id}"
+      ondragover="dzOver(event,'${id}')" ondragleave="dzLeave('${id}')" ondrop="dzDrop(event,'${id}')"
+      onclick="document.getElementById('dz-file-${id}').click()">
+      ${ssInner}
+    </div>
+    <input type="file" id="dz-file-${id}" accept="image/*" style="display:none" onchange="dzChange(event,'${id}')">
+    <button class="btn-save-bid" onclick="event.stopPropagation(); saveBidCard('${id}', this)">💾 保存</button>
+    ${item.lot_url ? `<div style="margin-top:8px;"><a class="lot-link" href="${escH(item.lot_url)}" target="_blank" onclick="event.stopPropagation()">🔗 オークションで見る</a></div>` : ''}
+  </div>
+</div>`;
+}
+
+/* ===== ドラッグ&ドロップ / ファイル選択 ===== */
+const _ssFiles = {}; // id -> File
+
+function dzOver(e, id)  { e.preventDefault(); document.getElementById(`dz-${id}`).classList.add('dragover'); }
+function dzLeave(id)    { document.getElementById(`dz-${id}`).classList.remove('dragover'); }
+function dzDrop(e, id)  { e.preventDefault(); dzLeave(id); const f = e.dataTransfer.files[0]; if (f?.type.startsWith('image/')) dzPreview(id, f); }
+function dzChange(e,id) { const f = e.target.files[0]; if (f) dzPreview(id, f); }
+
+function dzPreview(id, file) {
+  _ssFiles[id] = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    document.getElementById(`dz-${id}`).innerHTML =
+      `<img class="preview-img" id="dz-img-${id}" src="${ev.target.result}"><br><span style="font-size:10px;color:#888;">${escH(file.name)}</span>`;
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ===== 保存: 既存入札カード ===== */
+async function saveBidCard(id, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const rate = getUsdRate();
+    const usdVal   = parseFloat(document.getElementById(`bf-usd-${id}`)?.value || 0) || null;
+    const resultVal = document.getElementById(`bf-result-${id}`)?.value || 'scheduled';
+    const notesVal  = document.getElementById(`bf-notes-${id}`)?.value.trim() || null;
+    const finalUsd  = parseFloat(document.getElementById(`bf-final-${id}`)?.value || 0) || null;
+
+    let ssPath = null;
+    if (_ssFiles[id]) ssPath = await uploadScreenshot(_ssFiles[id], id);
+
+    const payload = {
+      our_bid_usd: usdVal,
+      our_bid_jpy: usdVal ? Math.round(usdVal * rate) : null,
+      result: resultVal,
+      notes: notesVal,
+      usd_jpy_rate: usdVal ? rate : null,
+      updated_at: new Date().toISOString()
+    };
+    if (finalUsd !== null) { payload.final_price_usd = finalUsd; payload.final_price_jpy = Math.round(finalUsd * rate); }
+    if (ssPath) payload.screenshot_path = ssPath;
+
+    const r = await fetch(`${SB_URL}/rest/v1/bid_history?id=eq.${id}`, {
+      method: 'PATCH', headers: { ...SB_HDR, 'Prefer': 'return=minimal' }, body: JSON.stringify(payload)
+    });
+    if (!r.ok) throw new Error(`PATCH bid_history: ${r.status}`);
+
+    btn.textContent = '✅ 保存しました';
+    setTimeout(() => { btn.disabled = false; btn.textContent = '💾 保存'; _bidLoaded = false; }, 2000);
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = '💾 保存';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+/* ===== 新規入札登録フォーム ===== */
+function toggleNewBidForm() {
+  const f = document.getElementById('newBidForm');
+  f.style.display = f.style.display === 'block' ? 'none' : 'block';
+}
+
+async function saveNewBid(btn) {
+  const title = document.getElementById('nb-title')?.value.trim();
+  if (!title) { alert('コイン名を入力してください'); return; }
+  btn.disabled = true; btn.textContent = '登録中...';
+  try {
+    const rate   = getUsdRate();
+    const house  = document.getElementById('nb-house')?.value || 'eBay';
+    const url    = document.getElementById('nb-url')?.value.trim() || null;
+    const endAt  = document.getElementById('nb-end')?.value || null;
+    const usd    = parseFloat(document.getElementById('nb-usd')?.value || 0) || null;
+
+    const r = await fetch(`${SB_URL}/rest/v1/bid_history`, {
+      method: 'POST',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        lot_title: title, auction_house: house, lot_url: url,
+        auction_end_at: endAt ? new Date(endAt).toISOString() : null,
+        our_bid_usd: usd, our_bid_jpy: usd ? Math.round(usd * rate) : null,
+        usd_jpy_rate: usd ? rate : null, result: 'scheduled', recommended_by: 'manual'
+      })
+    });
+    if (!r.ok) throw new Error(`POST bid_history: ${r.status}`);
+
+    btn.textContent = '✅ 登録しました';
+    ['nb-title','nb-url','nb-usd'].forEach(id => { const el = document.getElementById(id); if(el) el.value=''; });
+    document.getElementById('nb-end').value = '';
+    document.getElementById('nb-jpy').textContent = '¥ -';
+    setTimeout(() => {
+      btn.disabled = false; btn.textContent = '💾 登録する';
+      toggleNewBidForm(); _bidLoaded = false; loadBidPanel();
+    }, 1500);
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = '💾 登録する';
+    alert('登録エラー: ' + e.message);
+  }
+}
+
+/* ===== スクリーンショット Supabase Storage アップロード ===== */
+async function uploadScreenshot(file, bidId) {
+  try {
+    const ext = file.name.split('.').pop() || 'png';
+    const filename = `${bidId}_${Date.now()}.${ext}`;
+    const r = await fetch(`${SB_URL}/storage/v1/object/bid-screenshots/${filename}`, {
+      method: 'POST',
+      headers: { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`, 'Content-Type': file.type },
+      body: file
+    });
+    if (r.ok) return `${SB_URL}/storage/v1/object/public/bid-screenshots/${filename}`;
+    console.warn('Screenshot upload failed:', r.status);
+  } catch(e) { console.warn('Screenshot upload error:', e); }
+  return null;
+}
+
+/* ===== 初期化 ===== */
+loadData();         // 相場DBデータ（バックグラウンド）
+loadCeoPanel(0);    // CEO確認データ（デフォルトタブ）
 </script>
 </body>
 </html>
