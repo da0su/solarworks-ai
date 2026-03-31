@@ -140,7 +140,8 @@ def _to_daily_candidate(lot: dict) -> dict:
         "gross_rank":           lot.get("judgment") or "pending",
         "decision_factors":     decision_factors,
         "ai_comment":           lot.get("judgment_reason"),
-        "ceo_decision":         "pending",
+        # ceo_decision: unmatched案件はCEO確認に上げない
+        "ceo_decision":         lot.get("ceo_decision_override") or "pending",
         # ── 拡張カラム ─────────────────────────────────────
         "management_no":        lot.get("management_no"),
         "auction_house":        lot.get("auction_house"),
@@ -173,6 +174,52 @@ def _to_daily_candidate(lot: dict) -> dict:
 
 # ── メイン書き込み関数 ────────────────────────────────────────────
 
+def _audit_lots(lots: list[dict], stage: str) -> dict:
+    """
+    ロットリストの品質を監査し、混入チェック結果をログ出力する。
+
+    Returns:
+        dict: 監査カウント {"banknote": int, "no_mgmt": int, "no_ref1": int, "total": int}
+    """
+    try:
+        from scripts.fetch_noble_noonans_spink import is_non_coin_lot
+    except ImportError:
+        try:
+            from fetch_noble_noonans_spink import is_non_coin_lot
+        except ImportError:
+            is_non_coin_lot = lambda t: (False, "")  # フォールバック
+
+    banknote_count = 0
+    no_mgmt_count  = 0
+    no_ref1_count  = 0
+
+    for lot in lots:
+        title = lot.get("lot_title", "")
+        is_non, _ = is_non_coin_lot(title)
+        if is_non:
+            banknote_count += 1
+            logger.warning(f"  [AUDIT] 紙幣混入検出: {title[:60]}")
+        if not lot.get("management_no"):
+            no_mgmt_count += 1
+        if lot.get("ref1_buy_limit_20k_jpy") is None:
+            no_ref1_count += 1
+
+    logger.info(
+        f"  ╔══ 監査レポート [{stage}] ══════════════════════╗\n"
+        f"  ║ 入力総数      : {len(lots):>4}件\n"
+        f"  ║ 紙幣混入      : {banknote_count:>4}件  ← 要除外\n"
+        f"  ║ 管理番号未登録: {no_mgmt_count:>4}件  ← CEO確認対象外\n"
+        f"  ║ ref1未算出    : {no_ref1_count:>4}件  ← CEO確認対象外\n"
+        f"  ╚════════════════════════════════════════════════╝"
+    )
+    return {
+        "banknote":  banknote_count,
+        "no_mgmt":   no_mgmt_count,
+        "no_ref1":   no_ref1_count,
+        "total":     len(lots),
+    }
+
+
 def write_candidates(
     lots: list[dict],
     dry_run: bool = False,
@@ -188,18 +235,50 @@ def write_candidates(
 
     Returns:
         dict: {"ok": int, "review": int, "ceo": int, "ng": int,
-               "error": int, "total": int, "notified": dict}
+               "error": int, "total": int, "excluded": int,
+               "audit": dict, "notified": dict}
     """
     from scripts.supabase_client import get_client
     from scripts.action_notifier import decide_judgment, notify_batch
 
-    counts = {"ok": 0, "review": 0, "ceo": 0, "ng": 0, "error": 0, "total": len(lots)}
+    counts = {
+        "ok": 0, "review": 0, "ceo": 0, "ng": 0,
+        "error": 0, "total": len(lots), "excluded": 0,
+    }
 
     if not lots:
         logger.info("  [candidates_writer] 候補なし — スキップ")
         return counts
 
-    # ── Step 0: coin_slab_data から 4カラムをエンリッチ ──────────────
+    # ── Step 0-A: 取得段階フィルタ（紙幣・非硬貨を除外） ──────────────
+    try:
+        from scripts.fetch_noble_noonans_spink import is_non_coin_lot
+    except ImportError:
+        try:
+            from fetch_noble_noonans_spink import is_non_coin_lot
+        except ImportError:
+            is_non_coin_lot = lambda t: (False, "")
+
+    pre_total = len(lots)
+    coin_lots = []
+    banknote_lots = []
+    for lot in lots:
+        is_non, reason = is_non_coin_lot(lot.get("lot_title", ""))
+        if is_non:
+            banknote_lots.append(lot)
+            logger.warning(f"  [除外] 紙幣/非硬貨: {lot.get('lot_title','')[:60]}")
+        else:
+            coin_lots.append(lot)
+
+    counts["excluded"] += len(banknote_lots)
+    if banknote_lots:
+        logger.warning(
+            f"  [candidates_writer] ⚠ 紙幣/非硬貨を除外: "
+            f"{len(banknote_lots)}件 (入力{pre_total}件 → 残{len(coin_lots)}件)"
+        )
+    lots = coin_lots
+
+    # ── Step 0-B: coin_slab_data から 4カラムをエンリッチ ─────────────
     mgmt_nos = [lot.get("management_no") for lot in lots]
     ref_lookup = _fetch_ref_columns([m for m in mgmt_nos if m])
     if ref_lookup:
@@ -208,12 +287,35 @@ def write_candidates(
             if mgmt and mgmt in ref_lookup:
                 lot.update(ref_lookup[mgmt])
 
+    # ── Step 0-C: 管理番号・ref1 なし案件を分離 ──────────────────────
+    qualified = []   # CEO確認対象（management_no + ref1 あり）
+    unmatched = []   # 管理番号なし or ref1なし（DB記録するが CEO確認に上げない）
+    for lot in lots:
+        has_mgmt = bool(lot.get("management_no"))
+        has_ref1 = lot.get("ref1_buy_limit_20k_jpy") is not None
+        if has_mgmt and has_ref1:
+            qualified.append(lot)
+        else:
+            lot["coin_match_status"] = lot.get("coin_match_status") or "unmatched"
+            lot["ceo_skip"] = True   # CEO確認スキップフラグ
+            unmatched.append(lot)
+
+    logger.info(
+        f"  [candidates_writer] 品質フィルタ: "
+        f"CEO確認対象={len(qualified)}件 / 除外(unmatched)={len(unmatched)}件"
+    )
+
+    # ── Step 0-D: 監査ログ出力 ──────────────────────────────────────
+    audit = _audit_lots(lots, stage="write_candidates後")
+    counts["audit"] = audit
+    counts["total"] = len(lots)
+
     # ── Step 1: 判定 ─────────────────────────────────────────────
-    ok_list    = []
+    ok_list     = []
     review_list = []
-    ceo_list   = []
-    ng_list    = []
-    records    = []
+    ceo_list    = []
+    ng_list     = []
+    records     = []
 
     for lot in lots:
         yahoo_3m = int(lot.get("yahoo_3m_count") or 0)
@@ -221,13 +323,17 @@ def write_candidates(
         lot["judgment"]        = judgment
         lot["judgment_reason"] = reason
 
-        if judgment == "OK":
+        # unmatched は ceo_decision を "unmatched" に設定してCEO確認に上げない
+        if lot.get("ceo_skip"):
+            lot["ceo_decision_override"] = "unmatched"
+
+        if judgment == "OK" and not lot.get("ceo_skip"):
             ok_list.append(lot)
             counts["ok"] += 1
-        elif judgment == "REVIEW":
+        elif judgment == "REVIEW" and not lot.get("ceo_skip"):
             review_list.append(lot)
             counts["review"] += 1
-        elif judgment == "CEO判断":
+        elif judgment == "CEO判断" and not lot.get("ceo_skip"):
             ceo_list.append(lot)
             counts["ceo"] += 1
         else:
@@ -239,7 +345,8 @@ def write_candidates(
     logger.info(
         f"  [candidates_writer] 判定完了: "
         f"OK={counts['ok']} / REVIEW={counts['review']} / "
-        f"CEO判断={counts['ceo']} / NG={counts['ng']}"
+        f"CEO判断={counts['ceo']} / NG={counts['ng']} / "
+        f"除外済み={counts['excluded']}"
     )
 
     # ── Step 2: DB upsert ────────────────────────────────────────

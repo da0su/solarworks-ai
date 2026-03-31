@@ -163,6 +163,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .new-bid-toggle-btn { width: 100%; padding: 10px; border: 1px dashed #444; border-radius: 8px; background: transparent; color: #888; font-size: 13px; cursor: pointer; margin-bottom: 12px; }
 .new-bid-toggle-btn:hover { border-color: #ffd700; color: #ffd700; }
 .new-bid-form { background: #16213e; border-radius: 10px; padding: 12px; margin-bottom: 14px; border: 1px solid #2a2a4a; display: none; }
+
+/* ===== CEO確認カード 追加情報スタイル ===== */
+.ceo-price-grid { display: flex; gap: 5px; margin: 8px 0; }
+.ceo-pc { flex: 1; min-width: 0; background: #0a1a2e; border-radius: 6px; padding: 6px 4px; text-align: center; border: 1px solid #1e3050; }
+.ceo-pc .c-lbl { font-size: 9px; color: #6b7280; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ceo-pc .c-val { font-size: 12px; font-weight: bold; line-height: 1.2; }
+.ceo-ref-grid { display: flex; gap: 5px; margin: 0 0 8px; }
+.ceo-rc { flex: 1; min-width: 0; background: #0a1f3c; border: 1px solid #1e3a6e; border-radius: 6px; padding: 5px 4px; text-align: center; }
+.ceo-rc .c-lbl { font-size: 9px; color: #6b7280; margin-bottom: 1px; }
+.ceo-rc .c-val { font-size: 12px; font-weight: bold; color: #60a5fa; }
+.ceo-imgs { display: flex; gap: 8px; margin: 6px 0; }
+.ceo-imgs .ceo-iw { flex: 1; text-align: center; }
+.ceo-imgs img { width: 100%; max-height: 110px; object-fit: contain; border-radius: 6px; background: #0a0a1a; }
+.ceo-imgs .ceo-il { font-size: 10px; color: #555; margin-top: 2px; display: block; }
+.ceo-hist { background: #0a1520; border-radius: 6px; padding: 7px 8px; margin: 6px 0; border: 1px solid #1a2a3a; }
+.ceo-hist-ttl { font-size: 11px; color: #ffd700; font-weight: bold; margin-bottom: 5px; }
+.ceo-hr { display: flex; justify-content: space-between; align-items: center; font-size: 11px; padding: 3px 0; border-bottom: 1px solid #1a2535; }
+.ceo-hr:last-child { border-bottom: none; }
+.ceo-hr .h-d { color: #6b7280; font-size: 10px; }
+.ceo-hr .h-p { color: #4ade80; font-weight: bold; }
+.ceo-hr .h-g { color: #9ca3af; font-size: 10px; }
+.vg { color: #4ade80; } .vr { color: #f87171; } .vy { color: #ffd700; } .vb { color: #60a5fa; } .vw { color: #e2e8f0; }
 </style>
 </head>
 <body>
@@ -692,9 +714,9 @@ async function loadCeoPanel(offset, reset) {
 
   /* 案件リスト */
   try {
-    const cols = 'dedup_key,lot_title,lot_url,auction_house,buy_limit_jpy,priority_score,lot_end_time,ceo_decision,notes,judgment,judgment_reason,ai_comment';
+    const cols = 'dedup_key,lot_title,lot_url,auction_house,buy_limit_jpy,priority_score,lot_end_time,ceo_decision,notes,judgment,judgment_reason,ai_comment,current_price,estimated_sell_price,estimated_cost_jpy,expected_profit,ref1_buy_limit_20k_jpy,ref1_buy_limit_15pct_jpy,ref2_buy_limit_20k_jpy,ref2_buy_limit_15pct_jpy,management_no,fx_rate,currency';
     const resp = await fetch(
-      `${SB_URL}/rest/v1/daily_candidates?or=(ceo_decision.eq.pending,ceo_decision.is.null)&order=priority_score.desc&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
+      `${SB_URL}/rest/v1/daily_candidates?or=(ceo_decision.eq.pending,ceo_decision.is.null)&management_no=not.is.null&ref1_buy_limit_20k_jpy=not.is.null&order=expected_profit.desc.nullslast&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
       { headers: SB_HDR }
     );
     const items = await resp.json();
@@ -739,6 +761,27 @@ function renderCandCard(item) {
 
   const limitText = item.buy_limit_jpy ? '¥' + Number(item.buy_limit_jpy).toLocaleString('ja-JP') : '未算出';
 
+  /* 種別判定: lot_titleに"medal"があれば記念メダル、それ以外は硬貨 */
+  const isMedal = /\bmedal\b/i.test(item.lot_title || '');
+  const typeLabel = isMedal ? '🏅 記念メダル' : '🪙 硬貨';
+  const typeBadgeStyle = isMedal
+    ? 'background:#7c3aed;color:#e9d5ff;'
+    : 'background:#065f46;color:#6ee7b7;';
+
+  /* 管理番号 */
+  const mgmtDisplay = item.management_no
+    ? `<span style="font-size:11px;color:#60a5fa;font-weight:bold;">#${item.management_no}</span>`
+    : '<span style="font-size:11px;color:#f87171;">管理番号なし</span>';
+
+  /* 選定理由（強調表示） */
+  const selectionReason = item.ai_comment || item.judgment_reason || '';
+  const judgmentColor = item.judgment === 'OK' ? '#4ade80' : item.judgment === 'NG' ? '#f87171' : '#fbbf24';
+  const selectionHtml = selectionReason
+    ? `<div style="background:#0a1e10;border-left:3px solid ${judgmentColor};border-radius:0 6px 6px 0;padding:6px 10px;margin:6px 0;font-size:12px;color:${judgmentColor};font-weight:bold;">
+        📌 ${escH(selectionReason)}
+       </div>`
+    : '';
+
   let deadlineHtml = '';
   if (item.lot_end_time) {
     const dt = new Date(item.lot_end_time);
@@ -758,20 +801,100 @@ function renderCandCard(item) {
   const title = escH(item.lot_title || '（タイトルなし）');
   const urlHtml = item.lot_url ? `<a class="lot-link" href="${escH(item.lot_url)}" target="_blank" onclick="event.stopPropagation()">🔗 オークションで見る</a><br>` : '';
 
+  /* ---- 追加情報: data.jsonからコイン照合 ---- */
+  let coinData = null;
+  if (DATA && item.management_no) {
+    const padded = String(item.management_no).padStart(6, '0');
+    coinData = DATA.coins.find(c => c.management_no === padded) || null;
+  }
+
+  /* coin の price_history を取得 */
+  let ph = null;
+  if (coinData) {
+    ph = coinData.price_history;
+    if (typeof ph === 'string') try { ph = JSON.parse(ph); } catch(e) { ph = null; }
+    if (!Array.isArray(ph)) ph = null;
+  }
+
+  /* Yahoo想定売値 & 落札日 (最新エントリ) */
+  let yahooSell = '--', yahooDate = '--';
+  if (ph && ph.length) {
+    const latest = ph[ph.length - 1];
+    yahooSell = latest.price ? Number(latest.price).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--';
+    yahooDate = latest.date || '--';
+  }
+
+  /* フォーマット用ヘルパ */
+  const fJ = (n, cls) => n != null
+    ? `<span class="${cls||'vw'}">${Number(n).toLocaleString('ja-JP',{maximumFractionDigits:0})}<span style="font-size:9px;">円</span></span>`
+    : '<span style="color:#444;">--</span>';
+
+  /* [A] 価格4ボックス横並び */
+  const profCls = item.expected_profit > 0 ? 'vg' : item.expected_profit < 0 ? 'vr' : 'vw';
+  const priceGridHtml = `
+<div class="ceo-price-grid">
+  <div class="ceo-pc"><div class="c-lbl">現在価格</div><div class="c-val vw">${fJ(item.current_price)}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">推定総コスト</div><div class="c-val vr">${fJ(item.estimated_cost_jpy)}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">仕入限界</div><div class="c-val vy">${fJ(item.buy_limit_jpy)}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">想定利益</div><div class="c-val ${profCls}">${fJ(item.expected_profit)}</div></div>
+</div>`;
+
+  /* [B] 基準1 / 基準2 / Yahoo売値 / 落札日 */
+  const refGridHtml = `
+<div class="ceo-ref-grid">
+  <div class="ceo-rc"><div class="c-lbl">基準1</div><div class="c-val">${item.ref1_buy_limit_20k_jpy != null ? Number(item.ref1_buy_limit_20k_jpy).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--'}</div></div>
+  <div class="ceo-rc"><div class="c-lbl">基準2</div><div class="c-val">${item.ref2_buy_limit_20k_jpy != null ? Number(item.ref2_buy_limit_20k_jpy).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--'}</div></div>
+  <div class="ceo-rc"><div class="c-lbl">Yahoo売値</div><div class="c-val">${yahooSell}</div></div>
+  <div class="ceo-rc"><div class="c-lbl">落札日</div><div class="c-val" style="font-size:10px;color:#9ca3af;">${escH(yahooDate)}</div></div>
+</div>`;
+
+  /* [C] 画像 */
+  let imgsHtml = '';
+  if (coinData && (coinData.front_img_url || coinData.back_img_url)) {
+    imgsHtml = `
+<div class="ceo-imgs">
+  <div class="ceo-iw"><img src="${escH(coinData.front_img_url||'')}" loading="lazy" onerror="this.style.display='none'" alt="表"><span class="ceo-il">表面</span></div>
+  <div class="ceo-iw"><img src="${escH(coinData.back_img_url||'')}" loading="lazy" onerror="this.style.display='none'" alt="裏"><span class="ceo-il">裏面</span></div>
+</div>`;
+  }
+
+  /* [D] 過去履歴（最新3件） */
+  let histHtml = '';
+  if (ph && ph.length) {
+    const slice = [...ph].reverse().slice(0, 3);
+    const rows = slice.map(p => `<div class="ceo-hr">
+      <span class="h-d">${escH(p.date||'--')}</span>
+      <span class="h-p">${p.price ? Number(p.price).toLocaleString('ja-JP',{maximumFractionDigits:0})+'円' : '--'}</span>
+      <span class="h-g">入札:${p.bids != null ? p.bids : '?'}</span>
+    </div>`).join('');
+    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク履歴（${ph.length}件中 最新3件）</div>${rows}</div>`;
+  } else {
+    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク履歴</div><div style="font-size:11px;color:#444;padding:2px 0;">${coinData ? 'データなし' : '管理番号未登録 — 未照合'}</div></div>`;
+  }
+
   return `<div class="cand-card" id="cand-${key}">
   <div class="cand-top" onclick="this.closest('.cand-card').classList.toggle('open')">
-    <div class="cand-title">${title}</div>
-    <div class="cand-row">
+    <div class="cand-row" style="margin-bottom:5px;">
+      <span class="c-tag" style="${typeBadgeStyle}font-size:11px;padding:2px 8px;border-radius:10px;font-weight:bold;">${typeLabel}</span>
+      ${mgmtDisplay}
       <span class="c-tag ${tagClass}">${escH(house) || 'Unknown'}</span>
       <span class="c-score ${scoreClass}">Score: ${scoreText}</span>
-      <span class="c-limit">仕入限界: ${limitText}</span>
       ${deadlineHtml}
     </div>
-    <button class="reason-toggle" onclick="event.stopPropagation(); this.closest('.cand-card').classList.toggle('open')">▶ 判断理由を見る</button>
+    <div class="cand-title">${title}</div>
+    <div class="cand-row">
+      <span class="c-limit">仕入限界: ${limitText}</span>
+    </div>
+    ${selectionHtml}
+    <button class="reason-toggle" onclick="event.stopPropagation(); this.closest('.cand-card').classList.toggle('open')">▶ 詳細・価格・履歴を見る</button>
   </div>
   <div class="cand-detail">
-    ${reasonHtml}
+    ${priceGridHtml}
+    ${refGridHtml}
+    ${imgsHtml}
+    ${histHtml}
     ${urlHtml}
+    ${reasonHtml}
     <div class="action-row">
       <button class="btn-approve" onclick="event.stopPropagation(); doCeoApprove('${key}', this)">✅ 承認</button>
       <button class="btn-ng" onclick="event.stopPropagation(); toggleNgArea('${key}')">❌ NG</button>

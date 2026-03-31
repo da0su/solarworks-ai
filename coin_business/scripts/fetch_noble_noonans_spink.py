@@ -55,6 +55,90 @@ USER_AGENT = (
 REQUEST_DELAY = 2.5   # 秒（マナー遅延）
 
 
+# ════════════════════════════════════════════════════════════
+# 品目フィルタ: 硬貨・記念メダル以外を除外
+# ════════════════════════════════════════════════════════════
+
+# 紙幣・証書・債券を示すキーワード（タイトルに含まれれば除外）
+_BANKNOTE_PATTERNS = [
+    # グレーダー
+    r"\bPMG\b",                       # Paper Money Guaranty（紙幣専用）
+    # 紙幣カタログ番号
+    r"\bPick\s+[A-Z0-9]",             # World Paper Money catalogue
+    # 明示的ワード
+    r"\bbanknote\b", r"\bbank\s*note\b",
+    r"\bpaper\s*money\b", r"\bpaper\s*currency\b",
+    r"\bcurrency\s*note\b", r"\btest\s*note\b",
+    r"\buniface.*note\b", r"\bnote.*uniface\b",
+    # 債券・証書
+    r"\bbond\b(?!.*james)",           # "bond" ただし "james bond" は除外
+    r"\btreasury\s*bond\b", r"\bexchequer\s*bill\b",
+    r"\bpromissory\s*note\b", r"\bnational\s*bank\s*note\b",
+    r"\bsilver\s*certificate\b", r"\bgold\s*certificate\b",
+    r"\bfederal\s*reserve\s*note\b",
+    r"\bnotgeld\b", r"\bfractional\s*currency\b",
+    # 紙製品の証拠
+    r"\bspecimen\s*note\b", r"\bproof\s*note\b",
+]
+
+import re as _re
+
+_BANKNOTE_RE = _re.compile(
+    "|".join(_BANKNOTE_PATTERNS),
+    flags=_re.IGNORECASE,
+)
+
+# 選挙グッズ（硬貨ではない）
+_CAMPAIGN_RE = _re.compile(
+    r"\bcampaign\s*token\b|\bpolitical\s*token\b",
+    flags=_re.IGNORECASE,
+)
+
+
+def is_non_coin_lot(title: str) -> tuple[bool, str]:
+    """
+    lot_title を受け取り、硬貨・記念メダル以外であれば (True, 理由) を返す。
+    硬貨・記念メダルなら (False, "") を返す。
+
+    除外対象:
+      - 紙幣 (PMG / Pick番号 / banknote 等)
+      - 債券・証書 (bond / certificate 等)
+      - 選挙グッズ (campaign token / political token)
+    """
+    if not title:
+        return False, ""
+    if _BANKNOTE_RE.search(title):
+        return True, f"紙幣/債券キーワード一致: {title[:60]}"
+    if _CAMPAIGN_RE.search(title):
+        return True, f"Campaign/Political Token（硬貨対象外）: {title[:60]}"
+    return False, ""
+
+
+def filter_coin_lots(lots: list["AuctionLot"]) -> tuple[list, list]:
+    """
+    AuctionLot リストを coin/medal と non-coin に分割して返す。
+
+    Returns:
+        (coin_lots, excluded_lots)
+          coin_lots    : 硬貨・記念メダルと判定されたロット
+          excluded_lots: 除外されたロット (banknote 等)
+    """
+    coin_lots: list = []
+    excluded: list = []
+    for lot in lots:
+        non_coin, reason = is_non_coin_lot(lot.lot_title)
+        if non_coin:
+            logger.info(f"  [filter] 除外: {reason}")
+            excluded.append(lot)
+        else:
+            coin_lots.append(lot)
+    logger.info(
+        f"  [filter] フィルタ結果: "
+        f"通過={len(coin_lots)}件 / 除外={len(excluded)}件"
+    )
+    return coin_lots, excluded
+
+
 # ── データクラス ─────────────────────────────────────────────
 
 @dataclass
@@ -204,8 +288,9 @@ def fetch_noble_lots(sale_id: str) -> list[AuctionLot]:
         except Exception as e:
             logger.debug(f"Noble lot parse error: {e}")
 
-    logger.info(f"[Noble] 取得: {len(lots)}件 (sale_id={sale_id})")
-    return lots
+    logger.info(f"[Noble] 取得（フィルタ前）: {len(lots)}件 (sale_id={sale_id})")
+    coin_lots, excluded = filter_coin_lots(lots)
+    return coin_lots
 
 
 # ════════════════════════════════════════════════════════════
@@ -302,8 +387,9 @@ def fetch_noonans_lots(sale_slug: str) -> list[AuctionLot]:
         except Exception as e:
             logger.debug(f"Noonans lot parse error: {e}")
 
-    logger.info(f"[Noonans] 取得: {len(lots)}件 (sale={sale_slug})")
-    return lots
+    logger.info(f"[Noonans] 取得（フィルタ前）: {len(lots)}件 (sale={sale_slug})")
+    coin_lots, excluded = filter_coin_lots(lots)
+    return coin_lots
 
 
 # ════════════════════════════════════════════════════════════
@@ -396,8 +482,9 @@ def fetch_spink_lots(sale_id: str, use_archive: bool = False) -> list[AuctionLot
         except Exception as e:
             logger.debug(f"Spink lot parse error: {e}")
 
-    logger.info(f"[Spink] 取得: {len(lots)}件 (sale_id={sale_id})")
-    return lots
+    logger.info(f"[Spink] 取得（フィルタ前）: {len(lots)}件 (sale_id={sale_id})")
+    coin_lots, excluded = filter_coin_lots(lots)
+    return coin_lots
 
 
 # ════════════════════════════════════════════════════════════

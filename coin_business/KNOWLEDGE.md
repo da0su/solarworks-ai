@@ -600,3 +600,85 @@ gpt_mousiokuri/
 - サイバーへの指示は必ず **キャップ経由（Slack ai-bridge）** で行う
 - 起動前に `git pull` 必須（startup_all.bat に組み込み済み）
 - 結果はキャップへ報告 → キャップがCEOへ報告
+
+---
+
+## 18. 紙幣混入インシデント 再発防止策（2026-03-31 CEO指示・恒久対応完了）
+
+### インシデント概要
+Spink混合セールから紙幣501件（PMG/Pick 85件 + 管理番号なし416件）がCEO確認待ちリストに混入。
+CEOがCEO確認作業中に2件をNGにするまで検出されなかった。
+
+---
+
+### 根本原因（3点）
+
+| # | 場所 | 原因 |
+|---|---|---|
+| ① | `fetch_noble_noonans_spink.py` | `is_non_coin_lot()`フィルタが未実装。各フェッチ関数が全ロットを無条件返却していた |
+| ② | `candidates_writer.py` | `management_no`必須チェックがなく、coin_slab_dataに一致しないロットもCEO確認へ流れていた |
+| ③ | `web/index.html` CEO確認クエリ | `ref1_buy_limit_20k_jpy=not.is.null` フィルタが欠落しており、ref1未算出ロットも表示されていた |
+
+---
+
+### 実施した恒久対応
+
+#### レイヤー1: 取得段階フィルタ（`fetch_noble_noonans_spink.py`）
+
+```python
+# is_non_coin_lot() — PMG/Pick/banknote/bond等を正規表現で判定
+# filter_coin_lots() — AuctionLotリストを coin_lots / excluded_lots に分割
+# 各フェッチ関数末尾で filter_coin_lots() を呼び出し → coin_lots のみ返却
+```
+
+対象関数:
+- `fetch_noble_lots()` → フィルタ後のみ返却
+- `fetch_noonans_lots()` → フィルタ後のみ返却
+- `fetch_spink_lots()` → フィルタ後のみ返却
+
+#### レイヤー2: パイプライン書込フィルタ（`candidates_writer.py`）
+
+```python
+# Step 0-A: is_non_coin_lot() で紙幣除外（重複防御）
+# Step 0-C: management_no + ref1_buy_limit_20k_jpy が両方揃った案件のみ candidates 化
+#           どちらか欠ける → coin_match_status="unmatched", ceo_skip=True
+# Step 0-D: _audit_lots() で監査ログを毎回出力
+```
+
+`_audit_lots()` 出力項目:
+- 紙幣混入件数
+- 管理番号未登録件数
+- ref1未算出件数
+- 合計対象件数
+
+#### レイヤー3: 表示フィルタ（`web/index.html` CEO確認クエリ）
+
+```javascript
+// Supabase REST クエリ条件（恒久）
+management_no=not.is.null
+&ref1_buy_limit_20k_jpy=not.is.null
+&or=(ceo_decision.eq.pending,ceo_decision.is.null)
+```
+
+---
+
+### 再発防止チェックリスト
+
+CEO確認ロジックを変更する際は以下を必ず確認すること。
+
+- [ ] `fetch_*_lots()` 関数が `filter_coin_lots()` を呼んで返却しているか
+- [ ] `candidates_writer.write_candidates()` のStep 0-A/0-C が有効か
+- [ ] CEO確認クエリに `management_no=not.is.null` が含まれているか
+- [ ] CEO確認クエリに `ref1_buy_limit_20k_jpy=not.is.null` が含まれているか
+- [ ] `_audit_lots()` の出力ログに紙幣混入=0件が確認できるか
+
+---
+
+### 絶対禁止（CEOからの明示指示）
+
+| 禁止事項 | 理由 |
+|---|---|
+| 管理番号未登録のまま承認可能にする | Yahoo履歴・画像・基準価格が取得できない |
+| 選定理由なしでCEO確認に上げる | 判断根拠がなく承認/NGができない |
+| 紙幣・債券をCEO確認に表示する | 当社は硬貨・記念メダルのみ扱う |
+| 既存相場DBカード・ref1/ref2ロジックを変更する | CEO確定ロジック、変更不可 |
