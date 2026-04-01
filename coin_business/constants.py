@@ -55,13 +55,13 @@ class YahooStagingStatus:
 # ================================================================
 
 class SeedStatus:
-    READY   = "READY"    # 次回スキャン待ち（初期値）
-    RUNNING = "RUNNING"  # スキャン中
-    DONE    = "DONE"     # このサイクル完了
-    PAUSED  = "PAUSED"   # 一時停止（hit_count 過多等）
+    READY    = "READY"     # 次回スキャン待ち（初期値）
+    SCANNING = "SCANNING"  # スキャン中
+    COOLDOWN = "COOLDOWN"  # スキャン完了・次回まで待機 (next_scan_at 参照)
+    DISABLED = "DISABLED"  # 無効化 (hit_count 過多 / 手動停止)
 
-    ALL     = (READY, RUNNING, DONE, PAUSED)
-    ACTIVE  = (READY, RUNNING)
+    ALL    = (READY, SCANNING, COOLDOWN, DISABLED)
+    ACTIVE = (READY, SCANNING)
 
 
 # ================================================================
@@ -353,6 +353,7 @@ class Table:
     EBAY_LISTINGS_RAW        = "ebay_listings_raw"
     EBAY_LISTING_SNAPSHOTS   = "ebay_listing_snapshots"
     EBAY_SEED_HITS           = "ebay_seed_hits"
+    JOB_EBAY_INGEST          = "job_ebay_ingest_daily"
 
     # Phase 6
     GLOBAL_AUCTION_EVENTS    = "global_auction_events"
