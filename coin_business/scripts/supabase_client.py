@@ -31,6 +31,10 @@ def get_client() -> Client:
     return _client
 
 
+# Day6 以降のスクリプトが get_supabase_client() で呼ぶためのエイリアス
+get_supabase_client = get_client
+
+
 # ============================================================
 # 汎用CRUD
 # ============================================================
@@ -59,6 +63,33 @@ def select(table: str, columns: str = "*", filters: dict | None = None,
         q = q.order(col, desc=desc)
     q = q.range(offset, offset + limit - 1)
     return q.execute().data
+
+
+def fetch_all(table: str, columns: str = "*", filters: list | None = None,
+              order_by: str = "id") -> list[dict]:
+    """カーソルベースページネーションで全件取得。
+
+    filters: [(method, args)] のリスト
+    例: [('eq', ('source', 'yahoo')), ('gte', ('sold_date', '2024-01-01'))]
+
+    # CEO指示: limit(1000)で打ち切りにしない。全件取得を保証する。
+    """
+    client = get_client()
+    all_data = []
+    last_id = 0
+
+    while True:
+        q = client.table(table).select(columns).gt('id', last_id).order('id').limit(1000)
+        if filters:
+            for method, args in filters:
+                q = getattr(q, method)(*args)
+        resp = q.execute()
+        if not resp.data:
+            break
+        all_data.extend(resp.data)
+        last_id = resp.data[-1]['id']
+
+    return all_data
 
 
 def count(table: str, filters: dict | None = None) -> int:
