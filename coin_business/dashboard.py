@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 load_dotenv(ROOT / ".env")
 
 from scripts.supabase_client import get_supabase_client
+from constants import YahooStagingStatus
 from scripts.decision_logger import save_ceo_decision
 from scripts.evidence_builder import (
     get_candidate_evidence,
@@ -1039,6 +1040,340 @@ def render_ops_tab():
 
 
 # =========================================================
+# Yahoo履歴 CEO確認待ちタブ (Day 3)
+# =========================================================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_yahoo_pending(status_filter_key: str, sort_by: str,
+                        cert_filter: str, min_conf: float) -> list[dict]:
+    """staging レコード取得 (60秒キャッシュ)。"""
+    from db.yahoo_review_repo import load_pending_review
+    client = get_supabase_client()
+    statuses = (
+        ["PENDING_CEO", "HELD"] if status_filter_key == "PENDING+HELD"
+        else ["PENDING_CEO"] if status_filter_key == "PENDING_CEO"
+        else ["HELD"]
+    )
+    return load_pending_review(
+        client,
+        status_filter   = statuses,
+        sort_by         = sort_by,
+        limit           = 300,
+        cert_filter     = cert_filter or None,
+        min_confidence  = min_conf if min_conf > 0 else None,
+    )
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_yahoo_counts() -> dict:
+    from db.yahoo_review_repo import count_pending_review
+    return count_pending_review(get_supabase_client())
+
+
+def _yahoo_badge(status: str) -> str:
+    colors = {
+        "PENDING_CEO":      ("#f59e0b", "white"),
+        "HELD":             ("#6366f1", "white"),
+        "APPROVED_TO_MAIN": ("#16a34a", "white"),
+        "REJECTED":         ("#dc2626", "white"),
+        "PROMOTED":         ("#0ea5e9", "white"),
+    }
+    bg, fg = colors.get(status, ("#6b7280", "white"))
+    return badge_html(status, bg, fg)
+
+
+def _confidence_bar(conf: float | None) -> str:
+    if conf is None:
+        return "-"
+    pct = int((conf or 0) * 100)
+    color = "#16a34a" if pct >= 70 else "#f59e0b" if pct >= 40 else "#dc2626"
+    return (
+        f'<span style="color:{color};font-weight:bold">{pct}%</span>'
+        f'<span style="color:#9ca3af;font-size:0.8em"> (conf)</span>'
+    )
+
+
+def render_yahoo_pending_tab():
+    """Yahoo履歴 CEO確認待ち タブ本体。"""
+    from db.yahoo_review_repo import (
+        load_staging_record,
+        get_review_history,
+        save_review_decision,
+        count_pending_review,
+    )
+
+    # ---- ヘッダー ----
+    st.subheader("📋 Yahoo履歴 CEO確認待ち")
+
+    # ---- KPI ----
+    counts = _load_yahoo_counts()
+    pending_n  = counts.get("PENDING_CEO", 0)
+    held_n     = counts.get("HELD", 0)
+    approved_n = counts.get("APPROVED_TO_MAIN", 0)
+    rejected_n = counts.get("REJECTED", 0)
+    promoted_n = counts.get("PROMOTED", 0)
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("PENDING_CEO",      pending_n)
+    k2.metric("HELD",             held_n)
+    k3.metric("APPROVED_TO_MAIN", approved_n)
+    k4.metric("REJECTED",         rejected_n)
+    k5.metric("PROMOTED",         promoted_n)
+
+    st.divider()
+
+    # ---- フィルター ----
+    fc1, fc2, fc3, fc4 = st.columns([2, 2, 2, 2])
+    with fc1:
+        status_key = st.selectbox(
+            "表示ステータス",
+            ["PENDING+HELD", "PENDING_CEO", "HELD"],
+            key="yp_status_filter",
+        )
+    with fc2:
+        sort_by = st.selectbox(
+            "並び替え",
+            ["sold_date_desc", "sold_date_asc", "confidence_desc", "fetched_desc"],
+            format_func=lambda x: {
+                "sold_date_desc":  "落札日 新→旧",
+                "sold_date_asc":   "落札日 旧→新",
+                "confidence_desc": "信頼度 高→低",
+                "fetched_desc":    "取得日 新→旧",
+            }.get(x, x),
+            key="yp_sort_by",
+        )
+    with fc3:
+        cert_filter = st.selectbox(
+            "鑑定会社",
+            ["ALL", "NGC", "PCGS"],
+            key="yp_cert_filter",
+        )
+    with fc4:
+        min_conf = st.slider(
+            "最低 confidence",
+            min_value=0.0, max_value=1.0, value=0.0, step=0.05,
+            key="yp_min_conf",
+        )
+
+    cert_val = "" if cert_filter == "ALL" else cert_filter
+
+    # ---- データ取得 ----
+    rows = _load_yahoo_pending(status_key, sort_by, cert_val, min_conf)
+
+    if not rows:
+        st.info("該当レコードがありません。フィルタを調整してください。")
+        st.caption("  yahoo-sync を実行すると market_transactions から staging に同期されます。")
+        st.code("python scripts/yahoo_sold_sync.py --dry-run", language="bash")
+        return
+
+    st.caption(f"{len(rows)} 件表示中")
+
+    # ---- 一覧テーブル ----
+    list_records = []
+    for r in rows:
+        conf = r.get("parse_confidence")
+        conf_str = f"{int((conf or 0)*100)}%" if conf is not None else "-"
+        list_records.append({
+            "lot_id":      r.get("yahoo_lot_id", "")[:16],
+            "title":       (r.get("lot_title") or "")[:55],
+            "sold_date":   str(r.get("sold_date") or "-")[:10],
+            "price_jpy":   fmt_jpy(r.get("sold_price_jpy")),
+            "cert":        f"{r.get('cert_company') or ''} {r.get('cert_number') or ''}".strip() or "-",
+            "year":        str(r.get("year") or "-"),
+            "grade":       r.get("grade_text") or "-",
+            "denomination": r.get("denomination") or "-",
+            "confidence":  conf_str,
+            "status":      r.get("status", ""),
+        })
+
+    df = pd.DataFrame(list_records)
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "lot_id":      st.column_config.TextColumn("lot_id", width="small"),
+            "title":       st.column_config.TextColumn("タイトル", width="large"),
+            "sold_date":   st.column_config.TextColumn("落札日",  width="small"),
+            "price_jpy":   st.column_config.TextColumn("落札額",  width="small"),
+            "cert":        st.column_config.TextColumn("Cert",   width="medium"),
+            "year":        st.column_config.TextColumn("年",      width="small"),
+            "grade":       st.column_config.TextColumn("グレード",width="small"),
+            "denomination":st.column_config.TextColumn("額面",    width="small"),
+            "confidence":  st.column_config.TextColumn("conf",   width="small"),
+            "status":      st.column_config.TextColumn("status", width="small"),
+        },
+    )
+
+    st.divider()
+
+    # ---- 詳細パネル + レビュー ----
+    st.subheader("詳細確認 / レビュー")
+
+    # セレクタ: lot_id で選択
+    lot_id_options = [r.get("yahoo_lot_id", "") for r in rows if r.get("yahoo_lot_id")]
+    if not lot_id_options:
+        st.info("lot_id のないレコードのみです。")
+        return
+
+    selected_lot_id = st.selectbox(
+        "確認する lot_id を選択",
+        lot_id_options,
+        key="yp_selected_lot_id",
+        format_func=lambda lid: (
+            next(
+                (f"{lid} — {(r.get('lot_title') or '')[:50]}"
+                 for r in rows if r.get("yahoo_lot_id") == lid),
+                lid,
+            )
+        ),
+    )
+
+    if not selected_lot_id:
+        return
+
+    # 選択レコードを取得
+    selected_row = next(
+        (r for r in rows if r.get("yahoo_lot_id") == selected_lot_id),
+        None,
+    )
+    if not selected_row:
+        st.warning("選択レコードが見つかりません。")
+        return
+
+    staging_id = selected_row.get("id", "")
+
+    # ---- 詳細表示 ----
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        st.markdown("#### コイン情報")
+        st.markdown(f"**タイトル (生)**")
+        st.text(selected_row.get("lot_title", "-"))
+        st.markdown(f"**タイトル (正規化)**")
+        st.text(selected_row.get("title_normalized") or "-")
+
+        dc1, dc2, dc3, dc4 = st.columns(4)
+        dc1.metric("落札額", fmt_jpy(selected_row.get("sold_price_jpy")))
+        dc2.metric("落札日", str(selected_row.get("sold_date") or "-")[:10])
+        dc3.metric("年号",   str(selected_row.get("year") or "-"))
+        dc4.metric("額面",   selected_row.get("denomination") or "-")
+
+        dc5, dc6, dc7, dc8 = st.columns(4)
+        dc5.metric("鑑定会社", selected_row.get("cert_company") or "-")
+        dc6.metric("cert#",  selected_row.get("cert_number")  or "-")
+        dc7.metric("グレード", selected_row.get("grade_text")  or "-")
+        dc8.metric("confidence", f"{int((selected_row.get('parse_confidence') or 0)*100)}%")
+
+        # ソースリンク
+        source_url = selected_row.get("source_url")
+        if source_url:
+            st.markdown(f"[🔗 Yahoo!オークションで確認]({source_url})")
+        else:
+            st.caption("source_url なし")
+
+        # 画像表示
+        img_url = selected_row.get("image_url") or selected_row.get("thumbnail_url")
+        if img_url:
+            st.image(img_url, width=240, caption="落札時画像")
+        else:
+            st.caption("画像なし")
+
+    with col_right:
+        st.markdown("#### ステータス")
+        current_status = selected_row.get("status", "")
+        st.markdown(_yahoo_badge(current_status), unsafe_allow_html=True)
+
+        # ---- レビュー履歴 ----
+        st.markdown("#### レビュー履歴")
+        client = get_supabase_client()
+        history = get_review_history(client, staging_id)
+        if history:
+            for rev in history:
+                dec   = rev.get("decision", "?")
+                dec_emoji = {"approved": "✅", "rejected": "❌", "held": "⏸"}.get(dec, "?")
+                rev_at = str(rev.get("reviewed_at", ""))[:16]
+                by_who = rev.get("reviewer", "?")
+                reason = rev.get("reason") or ""
+                note   = rev.get("review_note") or ""
+                st.markdown(
+                    f"{dec_emoji} **{dec}** — {rev_at} by {by_who}"
+                    + (f"\n\n  理由: {reason}" if reason else "")
+                    + (f"\n\n  メモ: {note}" if note else "")
+                )
+        else:
+            st.caption("レビュー履歴なし")
+
+    st.divider()
+
+    # ---- レビューアクション ----
+    st.markdown("#### レビューを記録する")
+
+    # APPROVED / REJECTED の場合は再レビューを警告表示
+    if current_status in (YahooStagingStatus.APPROVED_TO_MAIN, YahooStagingStatus.REJECTED):
+        st.warning(
+            f"この案件は既に **{current_status}** です。"
+            f"変更する場合のみ操作してください。"
+        )
+
+    ra1, ra2 = st.columns(2)
+    with ra1:
+        reviewer_name = st.selectbox(
+            "レビュー担当",
+            ["ceo", "cap", "auto"],
+            key="yp_reviewer",
+        )
+    with ra2:
+        review_reason = st.text_input(
+            "理由・却下コード (任意)",
+            key="yp_reason",
+            placeholder="roi_thin / different_coin / manual_hold など",
+        )
+
+    review_note = st.text_area(
+        "メモ (任意)",
+        key="yp_note",
+        placeholder="詳細コメントを入力...",
+        height=80,
+    )
+
+    btn_c1, btn_c2, btn_c3, _ = st.columns([1, 1, 1, 3])
+    approve_btn = btn_c1.button("✅ APPROVE", key="yp_btn_approve", type="primary")
+    hold_btn    = btn_c2.button("⏸ HOLD",    key="yp_btn_hold")
+    reject_btn  = btn_c3.button("❌ REJECT",  key="yp_btn_reject",  type="secondary")
+
+    decision_to_submit: str | None = None
+    if approve_btn:
+        decision_to_submit = "approved"
+    elif hold_btn:
+        decision_to_submit = "held"
+    elif reject_btn:
+        decision_to_submit = "rejected"
+
+    if decision_to_submit:
+        result = save_review_decision(
+            client       = get_supabase_client(),
+            staging_id   = staging_id,
+            decision     = decision_to_submit,
+            reviewer     = reviewer_name,
+            reason       = review_reason or None,
+            review_note  = review_note or None,
+        )
+        if result.ok:
+            if result.warning:
+                st.warning(result.warning)
+            st.success(
+                f"✅ {decision_to_submit.upper()} 保存完了 — "
+                f"staging status → **{result.staging_status}**"
+            )
+            # キャッシュを破棄して一覧を再描画
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.error(f"保存失敗: {result.error}")
+
+
+# =========================================================
 # Main
 # =========================================================
 
@@ -1048,7 +1383,13 @@ def main():
 
     render_sidebar()
 
-    tabs = st.tabs(["📋 候補一覧", "🔍 CEO確認", "🎯 入札実績", "⚙️ 運用サマリー"])
+    tabs = st.tabs([
+        "📋 候補一覧",
+        "🔍 CEO確認",
+        "📋 Yahoo履歴確認",
+        "🎯 入札実績",
+        "⚙️ 運用サマリー",
+    ])
 
     with tabs[0]:
         try:
@@ -1066,12 +1407,19 @@ def main():
 
     with tabs[2]:
         try:
+            render_yahoo_pending_tab()
+        except Exception as e:
+            st.error(f"Yahoo履歴確認エラー: {e}")
+            import traceback; st.code(traceback.format_exc())
+
+    with tabs[3]:
+        try:
             render_bid_records_tab()
         except Exception as e:
             st.error(f"入札実績エラー: {e}")
             import traceback; st.code(traceback.format_exc())
 
-    with tabs[3]:
+    with tabs[4]:
         try:
             render_ops_tab()
         except Exception as e:
