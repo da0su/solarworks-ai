@@ -37,7 +37,7 @@ def phase_status_refresh(
     supabase = get_supabase_client()
     rows = (
         supabase.table("daily_candidates")
-        .select("id, is_active, is_sold")
+        .select("id, is_active, is_sold, source_currency, shipping_from_country, lot_size")
         .eq("is_active", True)
         .limit(limit)
         .execute()
@@ -52,7 +52,15 @@ def phase_status_refresh(
             ok += 1
             continue
         try:
-            sync_daily_candidate_current_status(cid, {})
+            sync_daily_candidate_current_status(
+                candidate_id=cid,
+                is_active=row.get("is_active"),
+                is_sold=row.get("is_sold"),
+                current_price=None,
+                source_currency=row.get("source_currency"),
+                shipping_from_country=row.get("shipping_from_country"),
+                lot_size=row.get("lot_size"),
+            )
             ok += 1
         except Exception as e:
             error += 1
