@@ -87,7 +87,7 @@ class TestNormalizeLotRecord:
         assert "lot_title"          in rec
         assert "title_normalized"   in rec
         assert "sold_price_jpy"     in rec
-        assert "sold_at"            in rec
+        assert "sold_date"           in rec
         assert "parse_confidence"   in rec
         assert "status"             in rec
 
@@ -118,7 +118,7 @@ class TestNormalizeLotRecord:
 
     def test_sold_at_normalized(self, sample_mt_row):
         rec = normalize_lot_record(sample_mt_row)
-        assert rec["sold_at"] == "2024-03-15"
+        assert rec["sold_date"] == "2024-03-15"
 
     def test_cert_company_extracted(self, sample_mt_row):
         rec = normalize_lot_record(sample_mt_row)

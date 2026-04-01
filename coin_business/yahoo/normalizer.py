@@ -121,15 +121,15 @@ def normalize_lot_record(
         "lot_title":          raw_title[:2000] if raw_title else None,
         "title_normalized":   normalized[:2000] if normalized else None,
         "sold_price_jpy":     _safe_int(mt_row.get("price_jpy") or mt_row.get("price")),
-        "sold_at":            sold_at,
+        "sold_date":          sold_at,   # DB column name is sold_date (DATE)
         "cert_company":       parsed.cert_company,
         "cert_number":        parsed.cert_number,
         "year":               parsed.year,
         "denomination":       parsed.denomination,
-        "grade_text":         parsed.grade_text,
+        "grade_text":         parsed.grade_text,   # migration 018 で追加
         "source_url":         mt_row.get("url") or mt_row.get("source_url"),
         "image_url":          mt_row.get("thumbnail_url") or mt_row.get("image_url"),
-        "parse_confidence":   parsed.parse_confidence,
+        "parse_confidence":   parsed.parse_confidence,  # migration 018 で追加
         # status は DB DEFAULT 'PENDING_CEO' に任せるが明示もする
         "status":             "PENDING_CEO",
     }
