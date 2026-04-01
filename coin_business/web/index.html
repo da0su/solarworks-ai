@@ -184,10 +184,28 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 .ceo-hr .h-d { color: #6b7280; font-size: 10px; }
 .ceo-hr .h-p { color: #4ade80; font-weight: bold; }
 .ceo-hr .h-g { color: #9ca3af; font-size: 10px; }
+.ceo-hr .h-t { color: #d1d5db; font-size: 10px; width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; margin-bottom: 2px; }
+.ceo-hr .h-ip { color: #6b7280; font-size: 10px; }
+.ceo-hr { flex-wrap: wrap; }
 .vg { color: #4ade80; } .vr { color: #f87171; } .vy { color: #ffd700; } .vb { color: #60a5fa; } .vw { color: #e2e8f0; }
+/* ── 画像拡大モーダル ── */
+.ceo-imgs .ceo-iw { cursor: pointer; }
+.ceo-imgs .ceo-iw:hover img { opacity: 0.82; outline: 2px solid #ffd700; border-radius: 6px; }
+#img-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.88); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; padding: 20px; }
+#img-modal img { max-width: 92vw; max-height: 72vh; object-fit: contain; border-radius: 10px; border: 2px solid #444; }
+#img-modal .im-lbl { color: #ffd700; font-size: 14px; font-weight: bold; margin-top: 12px; }
+#img-modal .im-close { margin-top: 14px; padding: 8px 32px; background: #222; color: #fff; border: 1px solid #555; border-radius: 8px; font-size: 15px; cursor: pointer; }
+#img-modal .im-close:hover { background: #333; }
 </style>
 </head>
 <body>
+
+<!-- ── 画像拡大モーダル ── -->
+<div id="img-modal" style="display:none" onclick="closeImgModal()">
+  <img id="img-modal-img" src="" alt="">
+  <span class="im-lbl" id="img-modal-lbl"></span>
+  <button class="im-close" onclick="event.stopPropagation(); closeImgModal()">✕ 閉じる</button>
+</div>
 
 <div class="header">
   <h1>コイン仕入れDB</h1>
@@ -676,6 +694,20 @@ function autoCalcJpy(usdId, jpyId) {
   if (jpyEl) jpyEl.textContent = usdVal > 0 ? '¥' + Math.round(usdVal * getUsdRate()).toLocaleString('ja-JP') : '¥ -';
 }
 
+/* ── 画像拡大モーダル ── */
+function openImgModal(src, label) {
+  if (!src) return;
+  document.getElementById('img-modal-img').src = src;
+  document.getElementById('img-modal-lbl').textContent = label;
+  document.getElementById('img-modal').style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+}
+function closeImgModal() {
+  document.getElementById('img-modal').style.display = 'none';
+  document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeImgModal(); });
+
 /* =====================================================
    CEO確認パネル
    ===================================================== */
@@ -894,29 +926,49 @@ function renderCandCard(item) {
   /* [C] 画像 */
   let imgsHtml = '';
   if (coinData && (coinData.front_img_url || coinData.back_img_url)) {
+    const fSrc = escH(coinData.front_img_url || '');
+    const bSrc = escH(coinData.back_img_url  || '');
     imgsHtml = `
 <div class="ceo-imgs">
-  <div class="ceo-iw"><img src="${escH(coinData.front_img_url||'')}" loading="lazy" onerror="this.style.display='none'" alt="表"><span class="ceo-il">表面</span></div>
-  <div class="ceo-iw"><img src="${escH(coinData.back_img_url||'')}" loading="lazy" onerror="this.style.display='none'" alt="裏"><span class="ceo-il">裏面</span></div>
+  <div class="ceo-iw" onclick="event.stopPropagation(); openImgModal('${fSrc}', '表面')">
+    <img src="${fSrc}" loading="lazy" onerror="this.closest('.ceo-iw').style.display='none'" alt="表">
+    <span class="ceo-il">🔍 表面（クリックで拡大）</span>
+  </div>
+  <div class="ceo-iw" onclick="event.stopPropagation(); openImgModal('${bSrc}', '裏面')">
+    <img src="${bSrc}" loading="lazy" onerror="this.closest('.ceo-iw').style.display='none'" alt="裏">
+    <span class="ceo-il">🔍 裏面（クリックで拡大）</span>
+  </div>
 </div>`;
   }
 
-  /* [D] ヤフオク履歴: データあり→表示+Yahoo検索リンク / データなし→非表示 */
+  /* [D] ヤフオク履歴: データあり→表示 / データなし→非表示 */
   let histHtml = '';
   if (ph && ph.length) {
     const slice    = [...ph].reverse().slice(0, 3);
     const histRows = slice.map(p => {
-      const rawP   = p.price ? Number(p.price) : null;
-      const ngcAdj = (isNgc && rawP) ? ` <span style="font-size:9px;color:#93c5fd;">(×0.92=¥${Math.round(rawP*0.92).toLocaleString('ja-JP')})</span>` : '';
+      const rawP    = p.price ? Number(p.price) : null;
+      const ngcAdj  = (isNgc && rawP) ? ` <span style="font-size:9px;color:#93c5fd;">(×0.92=¥${Math.round(rawP*0.92).toLocaleString('ja-JP')})</span>` : '';
+      const titleRow = p.title ? `<span class="h-t">📄 ${escH(p.title)}</span>` : '';
+      const initRow  = p.init_price ? `<span class="h-ip">開始:¥${Number(p.init_price).toLocaleString('ja-JP')}</span>` : '';
+      /* 個別URLがあれば「落札履歴を見る」、なければ行内リンクなし */
+      const entryLink = p.url
+        ? `<a href="${escH(p.url)}" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;color:#60a5fa;text-decoration:none;margin-left:4px;">🔗 落札履歴を見る</a>`
+        : '';
       return `<div class="ceo-hr">
+        ${titleRow}
         <span class="h-d">${escH(p.date||'--')}</span>
         <span class="h-p">${rawP ? rawP.toLocaleString('ja-JP',{maximumFractionDigits:0})+'円'+ngcAdj : '--'}</span>
         <span class="h-g">入札:${p.bids != null ? p.bids : '?'}</span>
+        ${initRow}${entryLink}
       </div>`;
     }).join('');
+    /* 個別URLが1件もない場合 → 終了落札履歴検索ページへ誘導（"探す"ことが前提の文言） */
+    const hasAnyUrl = slice.some(p => p.url);
     const searchQ   = encodeURIComponent((item.lot_title || '').substring(0, 30));
-    const yahooLink = `<a href="https://auctions.yahoo.co.jp/search/search?p=${searchQ}" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#60a5fa;margin-left:6px;text-decoration:none;">🔍 Yahoo検索</a>`;
-    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク履歴（${ph.length}件中 最新3件）${yahooLink}</div>${histRows}</div>`;
+    const yahooLink = hasAnyUrl
+      ? ''  /* 個別リンクあり → ヘッダーリンク不要 */
+      : `<a href="https://auctions.yahoo.co.jp/closedsearch/closedsearch?p=${searchQ}" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#60a5fa;margin-left:6px;text-decoration:none;">🔍 Yahoo履歴一覧を見る</a>`;
+    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク落札履歴（全${ph.length}件 / 最新3件表示）${yahooLink}</div>${histRows}</div>`;
   }
   /* データなし = 非表示 (histHtml 空のまま) */
 
