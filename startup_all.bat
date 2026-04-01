@@ -14,7 +14,7 @@ if not exist "logs" mkdir logs
 :: -----------------------------------------------
 :: STEP 0: git pull（GitHub正本から最新取得）
 :: -----------------------------------------------
-echo [0/5] git pull 実行中...
+echo [0/6] git pull 実行中...
 git pull >> logs\cyber_startup.log 2>&1
 if %ERRORLEVEL% == 0 (
     echo       git pull OK
@@ -26,14 +26,14 @@ if %ERRORLEVEL% == 0 (
 :: -----------------------------------------------
 :: STEP 1: sender を cyber に設定
 :: -----------------------------------------------
-echo [1/5] sender設定 (cyber)...
+echo [1/6] sender設定 (cyber)...
 python slack_bridge.py set-sender cyber >> logs\cyber_startup.log 2>&1
 echo       OK
 
 :: -----------------------------------------------
 :: STEP 2: VOICEVOX 起動確認 (ポート50021)
 :: -----------------------------------------------
-echo [2/5] VOICEVOX確認中...
+echo [2/6] VOICEVOX確認中...
 curl -s --max-time 2 http://localhost:50021/version >nul 2>&1
 if %ERRORLEVEL% == 0 (
     echo       VOICEVOX 起動済み
@@ -48,23 +48,30 @@ if %ERRORLEVEL% == 0 (
 :: -----------------------------------------------
 :: STEP 3: 楽天ROOM scheduler 起動（別ウィンドウ）
 :: -----------------------------------------------
-echo [3/5] 楽天ROOM scheduler 起動中...
+echo [3/6] 楽天ROOM scheduler 起動中...
 start "CYBER-SCHEDULER [SolarWorks AI]" cmd /k "title CYBER-SCHEDULER [SolarWorks AI] && cd /d %~dp0ops\scheduler && python scheduler.py >> %~dp0logs\cyber_scheduler.log 2>&1"
 echo       OK  (ウィンドウ: CYBER-SCHEDULER)
 
 :: -----------------------------------------------
 :: STEP 4: slack_bridge watch 起動（別ウィンドウ・自動再起動ループ）
 :: -----------------------------------------------
-echo [4/5] slack_bridge watch 常駐起動中...
+echo [4/6] slack_bridge watch 常駐起動中...
 start "CYBER-WATCH [SolarWorks AI]" cmd /k "title CYBER-WATCH [SolarWorks AI] && ops\automation\cyber_watch_loop.bat"
 echo       OK  (ウィンドウ: CYBER-WATCH)
 
 :: -----------------------------------------------
 :: STEP 5: watch-guardian 起動（別ウィンドウ）
 :: -----------------------------------------------
-echo [5/5] watch-guardian 常駐起動中...
+echo [5/6] watch-guardian 常駐起動中...
 start "CYBER-GUARDIAN [SolarWorks AI]" cmd /k "title CYBER-GUARDIAN [SolarWorks AI] && python slack_bridge.py watch-guardian >> logs\cyber_guardian.log 2>&1"
 echo       OK  (ウィンドウ: CYBER-GUARDIAN)
+
+:: -----------------------------------------------
+:: STEP 6: coin_business/web サーバー起動（ポート8502 / 自動再起動ループ）
+:: -----------------------------------------------
+echo [6/6] coin web server (port 8502) 起動中...
+start "CYBER-COINWEB [SolarWorks AI]" cmd /k "title CYBER-COINWEB [SolarWorks AI] && ops\automation\coin_web_loop.bat"
+echo       OK  (ウィンドウ: CYBER-COINWEB)
 
 :: -----------------------------------------------
 :: 完了
@@ -76,12 +83,14 @@ echo ========================================
 echo  CYBER-SCHEDULER  : 楽天ROOM 自動投稿
 echo  CYBER-WATCH      : Slack Bridge 監視
 echo  CYBER-GUARDIAN   : watch 自動復旧
+echo  CYBER-COINWEB    : coin_business/web :8502 (自動再起動)
 echo.
 echo  ログ一覧:
 echo    logs\cyber_scheduler.log
 echo    logs\cyber_watch.log
 echo    logs\cyber_guardian.log
 echo    logs\watch_self_heal.log
+echo    logs\coin_web.log
 echo ========================================
 echo.
 python slack_bridge.py state-summary
