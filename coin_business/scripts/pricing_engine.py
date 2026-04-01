@@ -181,18 +181,33 @@ def extract_candidate_identity(candidate_row: Dict[str, Any]) -> CandidateIdenti
 
 def fetch_market_transactions(limit: int = 30000) -> List[Dict[str, Any]]:
     """
-    market_transactions を取得する。
-    sold_date 降順で直近データ優先。limit=30000 で全 ~24,961 件をカバー。
+    market_transactions を取得する（ページネーション対応）。
+    Supabase は 1件あたり 1000行上限のため、1000件ずつページ取得して結合する。
+    sold_date 降順で直近データ優先。
     """
     client = get_client()
-    result = (
-        client.table("market_transactions")
-        .select("*")
-        .order("sold_date", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    return result.data or []
+    PAGE_SIZE = 1000
+    all_rows: List[Dict[str, Any]] = []
+    offset = 0
+
+    while len(all_rows) < limit:
+        batch_limit = min(PAGE_SIZE, limit - len(all_rows))
+        result = (
+            client.table("market_transactions")
+            .select("id,title,price_jpy,sold_date,grade,grader,year,denomination,source")
+            .order("sold_date", desc=True)
+            .range(offset, offset + batch_limit - 1)
+            .execute()
+        )
+        rows = result.data or []
+        if not rows:
+            break
+        all_rows.extend(rows)
+        if len(rows) < batch_limit:
+            break  # 最終ページ
+        offset += batch_limit
+
+    return all_rows
 
 
 def build_market_comp(

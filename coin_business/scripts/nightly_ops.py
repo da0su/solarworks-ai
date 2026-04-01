@@ -178,18 +178,26 @@ def phase_pricing_refresh(
 
 
 def _resolve_purchase_jpy(row: Dict[str, Any]) -> Optional[float]:
-    for key in ("buy_limit_jpy", "current_price_jpy", "price_jpy"):
+    for key in ("buy_limit_jpy", "estimated_buy_price", "estimated_cost_jpy",
+                "current_price_jpy", "price_jpy",
+                "ref1_buy_limit_20k_jpy", "ref2_buy_limit_20k_jpy"):
         v = row.get(key)
         if v is not None:
             try:
-                return float(v)
+                f = float(v)
+                if f > 0:
+                    return f
             except Exception:
                 continue
+    fx = row.get("fx_rate")
     for key in ("current_price", "price", "price_usd"):
         v = row.get(key)
         if v is not None:
             try:
-                return float(v) * 150.0
+                f = float(v)
+                if f > 0:
+                    rate = float(fx) if fx else 150.0
+                    return f * rate
             except Exception:
                 continue
     return None
