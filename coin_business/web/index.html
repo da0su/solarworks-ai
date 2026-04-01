@@ -973,34 +973,33 @@ function renderCandCard(item) {
 </div>`;
   }
 
-  /* [D] ヤフオク履歴: データあり→表示 / データなし→非表示 */
+  /* [D] ヤフオク履歴: URLあり案件のみ表示（NGルール: URLなし=参考データ扱い・CEO判断不可） */
   let histHtml = '';
   if (ph && ph.length) {
-    const slice    = [...ph].reverse().slice(0, 3);
-    const histRows = slice.map(p => {
-      const rawP    = p.price ? Number(p.price) : null;
-      const ngcAdj  = (isNgc && rawP) ? ` <span style="font-size:9px;color:#93c5fd;">(×0.92=¥${Math.round(rawP*0.92).toLocaleString('ja-JP')})</span>` : '';
-      const titleRow = p.title ? `<span class="h-t">📄 ${escH(p.title)}</span>` : '';
-      const initRow  = p.init_price ? `<span class="h-ip">開始:¥${Number(p.init_price).toLocaleString('ja-JP')}</span>` : '';
-      /* 個別URLがあれば「落札履歴を見る」、なければ行内リンクなし */
-      const entryLink = p.url
-        ? `<a href="${escH(p.url)}" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;color:#60a5fa;text-decoration:none;margin-left:4px;">🔗 落札履歴を見る</a>`
-        : '';
-      return `<div class="ceo-hr">
-        ${titleRow}
-        <span class="h-d">${escH(p.date||'--')}</span>
-        <span class="h-p">${rawP ? rawP.toLocaleString('ja-JP',{maximumFractionDigits:0})+'円'+ngcAdj : '--'}</span>
-        <span class="h-g">入札:${p.bids != null ? p.bids : '?'}</span>
-        ${initRow}${entryLink}
-      </div>`;
-    }).join('');
-    /* 個別URLが1件もない場合 → 終了落札履歴検索ページへ誘導（"探す"ことが前提の文言） */
-    const hasAnyUrl = slice.some(p => p.url);
-    const searchQ   = encodeURIComponent((item.lot_title || '').substring(0, 30));
-    const yahooLink = hasAnyUrl
-      ? ''  /* 個別リンクあり → ヘッダーリンク不要 */
-      : `<a href="https://auctions.yahoo.co.jp/closedsearch/closedsearch?p=${searchQ}" target="_blank" onclick="event.stopPropagation()" style="font-size:10px;color:#60a5fa;margin-left:6px;text-decoration:none;">🔍 Yahoo履歴一覧を見る</a>`;
-    histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク落札履歴（全${ph.length}件 / 最新3件表示）${yahooLink}</div>${histRows}</div>`;
+    /* URLあり案件のみ対象（CEO判断に使える確定履歴） */
+    const withUrl  = [...ph].reverse().filter(p => p.url);
+    const slice    = withUrl.slice(0, 3);
+    if (slice.length) {
+      const histRows = slice.map(p => {
+        const rawP    = p.price ? Number(p.price) : null;
+        const ngcAdj  = (isNgc && rawP) ? ` <span style="font-size:9px;color:#93c5fd;">(×0.92=¥${Math.round(rawP*0.92).toLocaleString('ja-JP')})</span>` : '';
+        const titleRow = p.title ? `<span class="h-t">📄 ${escH(p.title)}</span>` : '';
+        const initRow  = p.init_price ? `<span class="h-ip">開始:¥${Number(p.init_price).toLocaleString('ja-JP')}</span>` : '';
+        const entryLink = `<a href="${escH(p.url)}" target="_blank" onclick="event.stopPropagation()" style="font-size:9px;color:#60a5fa;text-decoration:none;margin-left:4px;">🔗 落札履歴を見る</a>`;
+        return `<div class="ceo-hr">
+          ${titleRow}
+          <span class="h-d">${escH(p.date||'--')}</span>
+          <span class="h-p">${rawP ? rawP.toLocaleString('ja-JP',{maximumFractionDigits:0})+'円'+ngcAdj : '--'}</span>
+          <span class="h-g">入札:${p.bids != null ? p.bids : '?'}</span>
+          ${initRow}${entryLink}
+        </div>`;
+      }).join('');
+      const urlCount = withUrl.length;
+      const totalCount = ph.length;
+      const countNote = totalCount > urlCount ? ` <span style="font-size:9px;color:#6b7280;">(全${totalCount}件中URL確定${urlCount}件)</span>` : '';
+      histHtml = `<div class="ceo-hist"><div class="ceo-hist-ttl">📊 ヤフオク落札履歴（直近${slice.length}件）${countNote}</div>${histRows}</div>`;
+    }
+    /* URLなし案件のみ = 参考データ扱い → 表示しない (histHtml 空のまま) */
   }
   /* データなし = 非表示 (histHtml 空のまま) */
 

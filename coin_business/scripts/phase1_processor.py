@@ -388,6 +388,7 @@ def main():
                 'bids': auction.get('bids'),
                 'init_price': auction.get('initPrice'),
                 'date': rec.get('sold_date', ''),
+                'url': rec.get('url', ''),
             }])
 
         # VARCHAR制限に合わせてトリミング
