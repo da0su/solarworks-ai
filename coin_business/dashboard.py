@@ -560,6 +560,26 @@ def render_tab_ceo():
         st.error(f"import error: {import_err}")
         return
 
+    # decision_logger: candidate_decisions テーブルへの正本保存
+    try:
+        from scripts.decision_logger import save_ceo_decision as _save_decision
+        _decision_logger_ok = True
+    except Exception:
+        _decision_logger_ok = False
+
+    # NG分類 → business_rules reason_code マッピング
+    _NG_TO_CODE = {
+        '価格オーバー':         'roi_thin',
+        'グレード不足':         'sellability_risk',
+        '相場データ不足':       'evidence_insufficient',
+        'マッチ不一致':         'different_coin',
+        '発送元リスク':         'ship_from_invalid',
+        '競合激化予測':         'roi_thin',
+        'スペック不明':         'manual_hold',
+        'タイミング不適':       'manual_hold',
+        'その他（自由入力）':   'manual_hold',
+    }
+
     st.markdown("#### 🔍 CEO確認 — 承認/NG判断")
     st.caption("status=pending の OK / CEO判断 / REVIEW 案件を表示しています。")
 
@@ -677,12 +697,27 @@ def render_tab_ceo():
         with st.expander("判断理由を見る"):
             st.caption(reason)
 
+        # Day2-3: 証拠・価格・Eligibility 詳細パネル
+        with st.expander("🔬 詳細（証拠・価格・判定）", expanded=False):
+            _render_candidate_detail_panel(c, key_suffix=key_prefix)
+
         # 承認/NG ボタン
         key_prefix = dedup_key[:12] if dedup_key else str(id(c))
         bcol1, bcol2, bcol3 = st.columns([2, 2, 3])
         with bcol1:
             if st.button("✅ 承認", key=f"approve_{key_prefix}", use_container_width=True):
                 ok = update_ceo_decision(dedup_key, "approved")
+                # candidate_decisions 正本に保存（DBトリガーで daily_candidates も更新）
+                if ok and _decision_logger_ok:
+                    try:
+                        _save_decision(
+                            candidate_id=str(c.get('id', '')),
+                            decision="approved",
+                            reason_code="approved",
+                            source_screen="dashboard",
+                        )
+                    except Exception as _e:
+                        pass  # 旧パスで保存済み。ログのみ失敗
                 if ok:
                     # P1: 入札予定リストへ自動追加（重複チェック）
                     _sched, _ = load_scheduled_bids()
@@ -733,6 +768,21 @@ def render_tab_ceo():
                 ok = update_ceo_decision(dedup_key, "rejected",
                                          ng_reason=ng_reason or None,
                                          comment=ng_comment or None)
+                # candidate_decisions 正本に保存（DBトリガーで daily_candidates も更新）
+                if ok and _decision_logger_ok:
+                    try:
+                        _note = ng_reason or ng_cat
+                        if ng_comment:
+                            _note = f"{_note} | {ng_comment}"
+                        _save_decision(
+                            candidate_id=str(c.get('id', '')),
+                            decision="rejected",
+                            reason_code=_NG_TO_CODE.get(ng_cat, "manual_hold"),
+                            decision_note=_note or None,
+                            source_screen="dashboard",
+                        )
+                    except Exception as _e:
+                        pass  # 旧パスで保存済み。ログのみ失敗
                 if ok:
                     st.warning(f"❌ NGとして保存しました（{ng_cat}）")
                     st.cache_data.clear()
@@ -767,6 +817,174 @@ def render_tab_ceo():
                 st.markdown(
                     f"`{cat[:12]:12}` {bar} **{cnt}件**",
                     unsafe_allow_html=False)
+
+
+# ════════════════════════════════════════════
+# Day2-5 Helper: 候補詳細パネル（証拠・価格・判定）
+# ════════════════════════════════════════════
+
+def _render_eligibility_banner(candidate_row: dict) -> bool:
+    """
+    Eligibility評価バナーを描画する。
+    Returns: approval_blocked (bool)
+    """
+    try:
+        from scripts.eligibility_rules import (
+            AUTO_PASS, AUTO_REVIEW, AUTO_REJECT,
+            build_badges, evaluate_candidate_eligibility,
+        )
+    except Exception as e:
+        st.caption(f"eligibility_rules import error: {e}")
+        return False
+
+    ev = evaluate_candidate_eligibility(candidate_row)
+
+    if ev.auto_tier == AUTO_PASS:
+        st.success(f"🟢 **AUTO_PASS** — hard rule 上は承認可能")
+    elif ev.auto_tier == AUTO_REVIEW:
+        st.warning(f"🟡 **AUTO_REVIEW** — 追加確認が必要です")
+    elif ev.auto_tier == AUTO_REJECT:
+        st.error(f"🔴 **AUTO_REJECT** — hard rule 抵触。承認不可")
+
+    badges = build_badges(ev)
+    bcol1, bcol2, bcol3 = st.columns(3)
+    with bcol1:
+        if badges["hard_fail_labels"]:
+            st.markdown("**Hard Fail**")
+            for lb in badges["hard_fail_labels"]:
+                st.markdown(f"- 🔴 {lb}")
+    with bcol2:
+        if badges["warning_labels"]:
+            st.markdown("**Warning**")
+            for lb in badges["warning_labels"]:
+                st.markdown(f"- 🟡 {lb}")
+    with bcol3:
+        if badges["info_labels"]:
+            st.markdown("**Info**")
+            for lb in badges["info_labels"]:
+                st.markdown(f"- 🟢 {lb}")
+
+    return ev.approval_blocked
+
+
+def _render_evidence_section(candidate_id: str):
+    """candidate の証拠サマリー + カード一覧を描画する"""
+    try:
+        from scripts.evidence_builder import evidence_summary, group_candidate_evidence
+    except Exception as e:
+        st.caption(f"evidence_builder import error: {e}")
+        return
+
+    summary = evidence_summary(candidate_id)
+    if not summary:
+        st.warning("⚠️ 証拠がまだ登録されていません (evidence_count=0)")
+        return
+
+    st.markdown("**証拠サマリー**")
+    items = [
+        ("source_listing", "Source"),
+        ("cert_verification", "Cert"),
+        ("yahoo_comp", "Yahoo"),
+        ("heritage_comp", "Heritage"),
+        ("spink_comp", "Spink"),
+        ("numista_ref", "Numista"),
+    ]
+    cols = st.columns(6)
+    for idx, (key, label) in enumerate(items):
+        with cols[idx]:
+            st.metric(label, summary.get(key, 0))
+
+    grouped = group_candidate_evidence(candidate_id)
+    OPEN_TYPES = {"source_listing", "cert_verification", "yahoo_comp"}
+    for etype, rows in grouped.items():
+        if not rows:
+            continue
+        with st.expander(f"{etype} ({len(rows)})", expanded=(etype in OPEN_TYPES)):
+            for row in rows:
+                title = row.get("title") or "(no title)"
+                url = row.get("evidence_url")
+                meta = row.get("meta_json") or {}
+                with st.container(border=True):
+                    st.markdown(f"**{title}**")
+                    if url:
+                        st.markdown(f"[リンクを開く]({url})")
+                    # 重要キーだけ表示
+                    show_keys = [
+                        "source", "seller", "current_price", "currency",
+                        "end_time", "shipping_from_country", "lot_size",
+                        "grader", "cert_number", "verified_status",
+                        "sale_price_jpy", "sale_date", "bucket",
+                        "difference_count", "year_exact_match",
+                        "year", "denomination", "weight", "diameter", "metal",
+                    ]
+                    filtered = {k: meta[k] for k in show_keys if k in meta}
+                    if filtered:
+                        st.json(filtered)
+                    elif meta:
+                        st.json(meta)
+
+
+def _render_pricing_section(candidate_id: str):
+    """pricing snapshot サマリーを描画する"""
+    try:
+        from scripts.pricing_engine import get_latest_pricing_snapshot
+    except Exception as e:
+        st.caption(f"pricing_engine import error: {e}")
+        return
+
+    snapshot = get_latest_pricing_snapshot(candidate_id)
+    if not snapshot:
+        st.warning("⚠️ pricing snapshot がまだありません (AUTO_REVIEW 対象)")
+        return
+
+    st.markdown("**価格サマリー**")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("想定売値 ¥", f"{snapshot.get('expected_sale_price_jpy') or 0:,.0f}")
+    c2.metric("総コスト ¥",  f"{snapshot.get('total_cost_jpy') or 0:,.0f}")
+    profit = snapshot.get("projected_profit_jpy")
+    profit_delta = f"{'▲' if (profit or 0) > 0 else '▼'}{abs(profit or 0):,.0f}"
+    c3.metric("予想利益 ¥",  f"{profit or 0:,.0f}", delta=profit_delta)
+    roi = snapshot.get("projected_roi")
+    c4.metric("ROI",         f"{roi:.2%}" if roi is not None else "—")
+
+    st.markdown("**4区分相場**")
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("直近3か月 ¥",  f"{snapshot.get('recent_3m_avg_jpy') or 0:,.0f}")
+    d2.metric("3-6か月 ¥",    f"{snapshot.get('recent_3_6m_avg_jpy') or 0:,.0f}")
+    d3.metric("6-12か月 ¥",   f"{snapshot.get('recent_6_12m_avg_jpy') or 0:,.0f}")
+    d4.metric("12か月超 ¥",   f"{snapshot.get('older_12m_plus_avg_jpy') or 0:,.0f}")
+
+    formula = snapshot.get("cost_formula_json") or {}
+    notes = formula.get("pricing_notes") or []
+    if notes:
+        with st.expander("Pricing Notes"):
+            for note in notes:
+                st.caption(f"- {note}")
+
+    st.caption("注記: 直近3か月最重視 / 年号完全一致 / 比較差分1変数まで")
+
+
+def _render_candidate_detail_panel(candidate_row: dict, key_suffix: str = ""):
+    """
+    候補1件の詳細パネル（Eligibility + 証拠 + 価格）
+    render_tab_ceo の各カード expander 内から呼ぶ。
+    """
+    candidate_id = str(candidate_row.get("id", ""))
+    if not candidate_id:
+        st.warning("candidate_id が取得できません")
+        return
+
+    st.divider()
+    st.markdown("##### 🔬 詳細評価")
+    _render_eligibility_banner(candidate_row)
+
+    st.divider()
+    st.markdown("##### 🗂 証拠")
+    _render_evidence_section(candidate_id)
+
+    st.divider()
+    st.markdown("##### 💹 価格スナップショット")
+    _render_pricing_section(candidate_id)
 
 
 # ════════════════════════════════════════════
