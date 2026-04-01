@@ -746,11 +746,22 @@ async function loadCeoPanel(offset, reset) {
 
   /* 案件リスト */
   try {
-    const cols = 'dedup_key,lot_title,lot_url,auction_house,buy_limit_jpy,priority_score,lot_end_time,ceo_decision,notes,judgment,judgment_reason,ai_comment,current_price,estimated_sell_price,estimated_cost_jpy,expected_profit,ref1_buy_limit_20k_jpy,ref1_buy_limit_15pct_jpy,ref2_buy_limit_20k_jpy,ref2_buy_limit_15pct_jpy,management_no,fx_rate,currency';
-    const resp = await fetch(
-      `${SB_URL}/rest/v1/daily_candidates?or=(ceo_decision.eq.pending,ceo_decision.is.null)&management_no=not.is.null&ref1_buy_limit_20k_jpy=not.is.null&order=expected_profit.desc.nullslast&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
+    const cols = 'dedup_key,lot_title,lot_url,auction_house,buy_limit_jpy,priority_score,lot_end_time,ceo_decision,notes,judgment,judgment_reason,ai_comment,current_price,estimated_sell_price,estimated_cost_jpy,expected_profit,ref1_buy_limit_20k_jpy,ref1_buy_limit_15pct_jpy,ref2_buy_limit_20k_jpy,ref2_buy_limit_15pct_jpy,management_no,fx_rate,currency,grading_company,cert_number';
+    /* cert_number=not.is.null フィルタを試みる（migration未適用時は fallback） */
+    const baseFilter = `or=(ceo_decision.eq.pending,ceo_decision.is.null)&management_no=not.is.null&ref1_buy_limit_20k_jpy=not.is.null`;
+    const certFilter = `${baseFilter}&cert_number=not.is.null`;
+    let resp = await fetch(
+      `${SB_URL}/rest/v1/daily_candidates?${certFilter}&order=expected_profit.desc.nullslast&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
       { headers: SB_HDR }
     );
+    /* migration 011 未適用（cert_number列がない）→ cert フィルタなしで再試行 */
+    if (!resp.ok && resp.status === 400) {
+      console.warn('[CEO] cert_number列未作成 → certフィルタなしで再取得 (migration 011 を適用してください)');
+      resp = await fetch(
+        `${SB_URL}/rest/v1/daily_candidates?${baseFilter}&order=expected_profit.desc.nullslast&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
+        { headers: SB_HDR }
+      );
+    }
     const items = await resp.json();
     const list = document.getElementById('ceo-list');
     if (offset === 0 || reset) list.innerHTML = '';
@@ -800,6 +811,27 @@ function renderCandCard(item) {
   const mgmtDisplay = item.management_no
     ? `<span style="font-size:11px;color:#60a5fa;font-weight:bold;">#${item.management_no}</span>`
     : '<span style="font-size:11px;color:#f87171;">管理番号なし</span>';
+
+  /* ── 鑑定番号 (grading_company / cert_number) ── */
+  const gc   = (item.grading_company || '').toUpperCase();
+  const cert = item.cert_number || null;
+  let certHtml = '';
+  if (gc && cert) {
+    const certUrl = gc === 'NGC'
+      ? `https://www.ngccoin.com/certlookup/${encodeURIComponent(cert)}`
+      : `https://www.pcgs.com/cert/${encodeURIComponent(cert)}`;
+    certHtml = `<div style="background:#0f1e30;border:1px solid #2563eb;border-radius:6px;padding:5px 10px;margin:4px 0;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:12px;font-weight:bold;color:#93c5fd;">${escH(gc)}</span>
+      <span style="font-size:11px;color:#e2e8f0;">Cert:</span>
+      <a href="${escH(certUrl)}" target="_blank" onclick="event.stopPropagation()"
+         style="font-size:12px;font-weight:bold;color:#fbbf24;text-decoration:none;letter-spacing:0.5px;"
+         title="${escH(gc)} 鑑定番号検索">${escH(cert)} 🔗</a>
+    </div>`;
+  } else if (gc && !cert) {
+    certHtml = `<div style="background:#1a0f0f;border:1px solid #7f1d1d;border-radius:6px;padding:4px 10px;margin:4px 0;">
+      <span style="font-size:11px;color:#f87171;">⚠️ ${escH(gc)} 鑑定番号 未取得 — 外部検証不可</span>
+    </div>`;
+  }
 
   /* ── USD/JPY価格計算 ── */
   const fxRate  = parseFloat(item.fx_rate) || 150;
@@ -983,6 +1015,7 @@ function renderCandCard(item) {
       ${deadlineHtml}
     </div>
     <div class="cand-title">${title}</div>
+    ${certHtml}
     <div class="cand-row" style="flex-wrap:wrap;gap:6px;">
       <span class="c-limit">仕入限界: ${limitText}</span>
       ${curUsd != null ? `<span style="font-size:13px;color:#e2e8f0;font-weight:bold;">$${curUsd.toLocaleString('en-US')}（約¥${curJpy.toLocaleString('ja-JP')}）</span>` : ''}

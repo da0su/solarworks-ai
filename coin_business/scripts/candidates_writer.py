@@ -18,12 +18,75 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from datetime import date, datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 50
+
+
+# ── 鑑定会社・鑑定番号 抽出 ──────────────────────────────────────────
+
+def extract_cert_info(lot_title: str) -> tuple[str | None, str | None]:
+    """
+    lot_title から grading_company と cert_number を抽出する。
+
+    Returns:
+        (grading_company, cert_number)
+        grading_company: 'NGC' | 'PCGS' | None
+        cert_number    : 文字列 or None
+
+    検出パターン (優先順):
+      1. Cert# XXXXXXX / cert XXXXXXX
+      2. # XXXXXXX
+      3. NGC/PCGS GRADE XXXXXXX (グレードの直後に来る数字)
+      4. タイトル末尾の7〜10桁数字 (例: NGC MS63 4053419)
+      5. 文字プレフィクス付き: L24401, P0001234 など (NGC/PCGS の旧フォーマット)
+    """
+    if not lot_title:
+        return None, None
+
+    title = lot_title.strip()
+
+    # grading_company 検出
+    ngc_m  = re.search(r'\bNGC\b',  title, re.IGNORECASE)
+    pcgs_m = re.search(r'\bPCGS\b', title, re.IGNORECASE)
+    if not ngc_m and not pcgs_m:
+        return None, None
+
+    grading_company = 'NGC' if ngc_m else 'PCGS'
+
+    # cert_number 抽出パターン (優先順)
+    patterns = [
+        # 1. 明示的ラベル: cert# / cert / certification#
+        r'\bcert(?:ification)?(?:\s*#\s*|\s+)(\d{6,10}(?:-\d{1,4})?)\b',
+        # 2. # + 数字
+        r'#\s*(\d{7,10}(?:-\d{1,4})?)\b',
+        # 3. グレードの直後: NGC MS63 4053419 / PCGS MS70-0001 12345678
+        r'\b(?:NGC|PCGS)\s+[A-Z]{1,3}[-+]?\s*\d{1,3}(?:/\d+)?\s+(\d{7,10}(?:-\d{1,4})?)\b',
+        # 4. タイトル末尾7〜10桁
+        r'\b(\d{7,10}(?:-\d{1,4})?)\s*$',
+        # 5. 文字プレフィクス付き旧形式: L24401 / P000123456
+        r'\b([A-Z]\d{5,9})\b',
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, title, re.IGNORECASE)
+        if not m:
+            continue
+        cert = m.group(1).strip()
+        # 除外: 4桁年号 (例: 1914, 2024)
+        if re.fullmatch(r'\d{4}', cert):
+            continue
+        # 除外: 重量・サイズ系の短い数字
+        if re.fullmatch(r'\d{1,3}', cert):
+            continue
+        return grading_company, cert
+
+    # grading_company は検出できたが cert_number なし
+    return grading_company, None
 
 
 # ── dedup_key 生成 ─────────────────────────────────────────────────
@@ -99,6 +162,13 @@ def _to_daily_candidate(lot: dict) -> dict:
     """
     today = date.today().isoformat()
 
+    # grading_company / cert_number 抽出 (lot_title から)
+    lot_title_str = lot.get("lot_title") or ""
+    _gc, _cert = extract_cert_info(lot_title_str)
+    # lot 側に明示値があれば優先
+    grading_company = lot.get("grading_company") or _gc
+    cert_number     = lot.get("cert_number")     or _cert
+
     # dedup_key (未設定の場合は生成)
     dedup_key = lot.get("dedup_key") or make_lot_dedup_key(
         source       = lot.get("source", "unknown"),
@@ -169,6 +239,9 @@ def _to_daily_candidate(lot: dict) -> dict:
         "ref1_buy_limit_15pct_jpy": lot.get("ref1_buy_limit_15pct_jpy"),
         "ref2_buy_limit_20k_jpy":   lot.get("ref2_buy_limit_20k_jpy"),
         "ref2_buy_limit_15pct_jpy": lot.get("ref2_buy_limit_15pct_jpy"),
+        # ── 鑑定番号 (migration 011_cert_columns.sql 適用後に有効) ──
+        "grading_company":          grading_company,
+        "cert_number":              cert_number,
     }
 
 
