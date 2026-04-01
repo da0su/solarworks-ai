@@ -373,6 +373,21 @@ def cmd_seed_generate():
     seed_main()
 
 
+def cmd_ebay_ingest():
+    """eBay Browse API から listing を取得し DB に保存する (Day 5)。
+    使い方:
+        python run.py ebay-ingest                       # 通常実行
+        python run.py ebay-ingest --dry-run             # 書かずに取得確認
+        python run.py ebay-ingest --smoke               # 1 seed だけ動作確認
+        python run.py ebay-ingest --limit 100           # 処理 seed 数上限
+        python run.py ebay-ingest --seed-limit 50       # 1 seed あたり取得件数
+        python run.py ebay-ingest --seed-types CERT_EXACT,CERT_TITLE
+        python run.py ebay-ingest --status-only         # READY seed 件数確認
+    """
+    from scripts.ebay_api_ingest import main as ingest_main
+    ingest_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -447,6 +462,7 @@ COMMANDS = {
     "yahoo-sync":      cmd_yahoo_sync,      # Yahoo staging 同期 (Day 2)
     "yahoo-promote":   cmd_yahoo_promote,   # APPROVED_TO_MAIN → yahoo_sold_lots 昇格 (Day 4)
     "seed-generate":   cmd_seed_generate,   # yahoo_sold_lots → yahoo_coin_seeds (Day 4)
+    "ebay-ingest":     cmd_ebay_ingest,     # eBay API listing 取得・保存 (Day 5)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,

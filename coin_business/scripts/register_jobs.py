@@ -18,6 +18,7 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
   1. yahoo_sold_sync     -- 毎日 06:00 JST  (Day 2 実装済み)
   2. yahoo_promoter      -- 毎日 06:30 JST  (Day 4 実装済み)
   3. seed_generator      -- 毎日 07:00 JST  (Day 4 実装済み)
+  4. ebay_listings_sync  -- 毎日 10:00 JST  (Day 5 実装済み)
 """
 
 from __future__ import annotations
@@ -84,16 +85,17 @@ JOBS: list[JobDef] = [
     ),
 
     # ----------------------------------------------------------------
-    # Day 5/6: eBay API 取り込み (未実装)
+    # Day 5: eBay API 取り込み (Day 5 実装済み)
+    # READY seed を使って eBay Browse API 検索 → ebay_listings_raw / snapshots 保存
     # ----------------------------------------------------------------
     JobDef(
         job_id          = "ebay_listings_sync",
-        description     = "eBay seed × listing マッチング → ebay_listings_raw",
-        script          = "ebay_api_ingest.py",  # Day 5 実装予定
-        cron_schedule   = "0 10 * * *",
+        description     = "eBay seed × listing マッチング → ebay_listings_raw + snapshots",
+        script          = "ebay_api_ingest.py",
+        cron_schedule   = "0 10 * * *",          # 毎日 10:00 JST
         cli_command     = "ebay-ingest",
         implemented_day = 5,
-        args            = [],
+        args            = ["--limit", "50"],      # 1 日 50 seed まで処理
     ),
 
     # ----------------------------------------------------------------
