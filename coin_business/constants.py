@@ -51,6 +51,41 @@ class YahooStagingStatus:
 
 
 # ================================================================
+# Yahoo! seed ステータス (yahoo_coin_seeds.seed_status)
+# ================================================================
+
+class SeedStatus:
+    READY   = "READY"    # 次回スキャン待ち（初期値）
+    RUNNING = "RUNNING"  # スキャン中
+    DONE    = "DONE"     # このサイクル完了
+    PAUSED  = "PAUSED"   # 一時停止（hit_count 過多等）
+
+    ALL     = (READY, RUNNING, DONE, PAUSED)
+    ACTIVE  = (READY, RUNNING)
+
+
+# ================================================================
+# Yahoo! seed 種別 (yahoo_coin_seeds.seed_type)
+# ================================================================
+
+class SeedType:
+    CERT_EXACT        = "CERT_EXACT"        # cert_company + cert_number 完全一致
+    CERT_TITLE        = "CERT_TITLE"        # cert_company + title_normalized
+    TITLE_NORMALIZED  = "TITLE_NORMALIZED"  # title_normalized のみ
+    YEAR_DENOM_GRADE  = "YEAR_DENOM_GRADE"  # year + denomination + grade_text
+
+    ALL = (CERT_EXACT, CERT_TITLE, TITLE_NORMALIZED, YEAR_DENOM_GRADE)
+
+    # 優先度スコア（高いほど先にスキャン）
+    PRIORITY: dict[str, float] = {
+        CERT_EXACT:       1.0,
+        CERT_TITLE:       0.7,
+        TITLE_NORMALIZED: 0.5,
+        YEAR_DENOM_GRADE: 0.3,
+    }
+
+
+# ================================================================
 # 候補レベル（Level A のみ仕入れ対象）
 # ================================================================
 
@@ -309,7 +344,10 @@ class Table:
     JOB_YAHOO_SOLD_SYNC      = "job_yahoo_sold_sync_daily"
 
     # Phase 4
+    YAHOO_SOLD_LOTS          = "yahoo_sold_lots"          # 昇格済み本DB
     YAHOO_COIN_SEEDS         = "yahoo_coin_seeds"
+    JOB_YAHOO_PROMOTER       = "job_yahoo_promoter_daily"
+    JOB_SEED_GENERATOR       = "job_seed_generator_daily"
 
     # Phase 5
     EBAY_LISTINGS_RAW        = "ebay_listings_raw"
