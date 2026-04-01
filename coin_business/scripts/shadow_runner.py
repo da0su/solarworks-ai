@@ -39,6 +39,9 @@ def _classify_agreement(ceo_decision: Optional[str], auto_tier: str) -> str:
     PENDING:       CEO未判断
     """
     decision = (ceo_decision or "pending").lower()
+    # 旧システムの 'ng' は 'rejected' と同等扱い
+    if decision == "ng":
+        decision = "rejected"
     tier = auto_tier.upper()
 
     if decision == "pending":
@@ -206,7 +209,7 @@ def print_shadow_report(
     show_disagree: bool = True,
 ) -> None:
     print(f"\n{'='*60}")
-    print(f"  Shadow Run Report — {summary.get('evaluated_at','')[:19]}")
+    print(f"  Shadow Run Report - {summary.get('evaluated_at','')[:19]}")
     print(f"{'='*60}")
     print(f"  総候補数:      {summary['total']}")
     print(f"  CEO判断済み:   {summary['decided']}")

@@ -252,7 +252,7 @@ def run_nightly_ops(
 ) -> Dict[str, Any]:
     started_at = datetime.now(timezone.utc)
     print(f"\n{'='*60}")
-    print(f"  Nightly Ops — {started_at.strftime('%Y-%m-%d %H:%M UTC')}")
+    print(f"  Nightly Ops - {started_at.strftime('%Y-%m-%d %H:%M UTC')}")
     print(f"  dry_run={dry_run}  limit={limit}")
     print(f"{'='*60}")
 
@@ -276,7 +276,7 @@ def run_nightly_ops(
 
     elapsed = (datetime.now(timezone.utc) - started_at).total_seconds()
     print(f"\n{'='*60}")
-    print(f"  Nightly Ops complete — {elapsed:.1f}s")
+    print(f"  Nightly Ops complete - {elapsed:.1f}s")
     print(f"{'='*60}\n")
 
     return results
