@@ -347,6 +347,32 @@ def cmd_yahoo_sync():
     sync_main()
 
 
+def cmd_yahoo_promote():
+    """APPROVED_TO_MAIN の staging レコードを yahoo_sold_lots に昇格する (Day 4)。
+    使い方:
+        python run.py yahoo-promote                     # 通常実行
+        python run.py yahoo-promote --dry-run           # 書かずに確認のみ
+        python run.py yahoo-promote --limit 200         # 件数上限
+        python run.py yahoo-promote --status-only       # 昇格可能件数を確認して終了
+    """
+    from scripts.yahoo_promoter import main as promote_main
+    promote_main()
+
+
+def cmd_seed_generate():
+    """yahoo_sold_lots から探索用 seed を生成し yahoo_coin_seeds に保存する (Day 4)。
+    使い方:
+        python run.py seed-generate                     # 通常実行
+        python run.py seed-generate --dry-run           # 書かずに確認のみ
+        python run.py seed-generate --new-only          # seed がない lot のみ処理
+        python run.py seed-generate --since 2024-01-01  # 指定日以降の lot のみ
+        python run.py seed-generate --limit 500         # 件数上限
+        python run.py seed-generate --status-only       # yahoo_sold_lots 件数確認
+    """
+    from scripts.seed_generator import main as seed_main
+    seed_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -419,6 +445,8 @@ COMMANDS = {
     "overseas-fetch":  cmd_overseas_fetch,  # 海外オークション落札済みデータ取得
     "overseas-watch":  cmd_overseas_watch,  # 全世界オークション常時監視 (Layer 1-4)
     "yahoo-sync":      cmd_yahoo_sync,      # Yahoo staging 同期 (Day 2)
+    "yahoo-promote":   cmd_yahoo_promote,   # APPROVED_TO_MAIN → yahoo_sold_lots 昇格 (Day 4)
+    "seed-generate":   cmd_seed_generate,   # yahoo_sold_lots → yahoo_coin_seeds (Day 4)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,

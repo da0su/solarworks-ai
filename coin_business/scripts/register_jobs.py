@@ -15,7 +15,9 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
     - crontab に CRON_SCHEDULE の値を貼り付ける
 
 現在登録済みジョブ:
-  1. yahoo_sold_sync  — 毎日 09:00 JST  (Day 2 実装済み)
+  1. yahoo_sold_sync     -- 毎日 06:00 JST  (Day 2 実装済み)
+  2. yahoo_promoter      -- 毎日 06:30 JST  (Day 4 実装済み)
+  3. seed_generator      -- 毎日 07:00 JST  (Day 4 実装済み)
 """
 
 from __future__ import annotations
@@ -47,24 +49,38 @@ JOBS: list[JobDef] = [
         job_id          = "yahoo_sold_sync_daily",
         description     = "Yahoo!落札履歴を staging に同期 (PENDING_CEO で蓄積)",
         script          = "yahoo_sold_sync.py",
-        cron_schedule   = "0 9 * * *",          # 毎日 09:00 JST
+        cron_schedule   = "0 6 * * *",           # 毎日 06:00 JST
         cli_command     = "yahoo-sync",
         implemented_day = 2,
         args            = ["--new-only"],        # 差分のみ
     ),
 
     # ----------------------------------------------------------------
-    # Day 4: Yahoo promoter (未実装 — Day 4 に実装予定)
+    # Day 4: Yahoo promoter (Day 4 実装済み)
     # CEO 承認済み (APPROVED_TO_MAIN) を本DB yahoo_sold_lots へ昇格
     # ----------------------------------------------------------------
     JobDef(
         job_id          = "yahoo_promoter_daily",
         description     = "APPROVED_TO_MAIN → yahoo_sold_lots へ昇格",
-        script          = "yahoo_promoter.py",   # Day 4 実装予定
-        cron_schedule   = "30 9 * * *",          # 毎日 09:30 JST
-        cli_command     = "yahoo-promote",       # Day 4 追加予定
+        script          = "yahoo_promoter.py",
+        cron_schedule   = "30 6 * * *",          # 毎日 06:30 JST
+        cli_command     = "yahoo-promote",
         implemented_day = 4,
         args            = [],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 4: Seed generator (Day 4 実装済み)
+    # yahoo_sold_lots から探索用 seed を生成 → yahoo_coin_seeds へ
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "seed_generator_daily",
+        description     = "yahoo_sold_lots → yahoo_coin_seeds に seed 生成",
+        script          = "seed_generator.py",
+        cron_schedule   = "0 7 * * *",           # 毎日 07:00 JST
+        cli_command     = "seed-generate",
+        implemented_day = 4,
+        args            = ["--new-only"],         # 差分のみ
     ),
 
     # ----------------------------------------------------------------
