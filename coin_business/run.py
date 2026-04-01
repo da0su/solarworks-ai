@@ -334,6 +334,19 @@ def cmd_overseas_watch():
     )
 
 
+def cmd_yahoo_sync():
+    """Yahoo!落札データを yahoo_sold_lots_staging に同期する (Day 2)。
+    使い方:
+        python run.py yahoo-sync                        # 通常実行
+        python run.py yahoo-sync --dry-run              # 書かずに変換結果のみ表示
+        python run.py yahoo-sync --new-only             # 未登録のみ upsert
+        python run.py yahoo-sync --since 2024-01-01     # 指定日以降のみ
+        python run.py yahoo-sync --limit 100            # 件数上限 (テスト用)
+    """
+    from scripts.yahoo_sold_sync import main as sync_main
+    sync_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -405,6 +418,7 @@ COMMANDS = {
     "ebay-integrate":  cmd_ebay_integrate, # eBay候補を daily_candidates へ統合
     "overseas-fetch":  cmd_overseas_fetch,  # 海外オークション落札済みデータ取得
     "overseas-watch":  cmd_overseas_watch,  # 全世界オークション常時監視 (Layer 1-4)
+    "yahoo-sync":      cmd_yahoo_sync,      # Yahoo staging 同期 (Day 2)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,
