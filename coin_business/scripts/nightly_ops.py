@@ -144,7 +144,7 @@ def phase_pricing_refresh(
     # 市場データ一括取得
     market_rows = None
     if not dry_run:
-        market_rows = fetch_market_transactions(limit=10000)
+        market_rows = fetch_market_transactions(limit=30000)
         print(f"  market_rows={len(market_rows)}")
 
     ok = error = skip = 0

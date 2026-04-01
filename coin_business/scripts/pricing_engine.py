@@ -26,7 +26,7 @@ from scripts.supabase_client import get_client
 COL_CANDIDATES = {
     "title": ["title", "item_title", "auction_title", "name"],
     "sale_price_jpy": ["sale_price_jpy", "price_jpy", "final_price_jpy", "hammer_price_jpy", "amount_jpy"],
-    "sale_date": ["sale_date", "ended_at", "sold_at", "transaction_date", "created_at"],
+    "sale_date": ["sale_date", "sold_date", "ended_at", "sold_at", "transaction_date", "created_at"],
     "year": ["year", "coin_year", "year_text", "issue_year"],
     "mintmark": ["mintmark", "mint_mark"],
     "grade": ["grade", "grade_text", "slab_grade"],
@@ -179,15 +179,16 @@ def extract_candidate_identity(candidate_row: Dict[str, Any]) -> CandidateIdenti
 # Market transactions loading
 # ============================================================
 
-def fetch_market_transactions(limit: int = 5000) -> List[Dict[str, Any]]:
+def fetch_market_transactions(limit: int = 30000) -> List[Dict[str, Any]]:
     """
     market_transactions を取得する。
-    初版は broad fetch。後で SQL filter を追加最適化する。
+    sold_date 降順で直近データ優先。limit=30000 で全 ~24,961 件をカバー。
     """
     client = get_client()
     result = (
         client.table("market_transactions")
         .select("*")
+        .order("sold_date", desc=True)
         .limit(limit)
         .execute()
     )

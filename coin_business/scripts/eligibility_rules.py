@@ -113,24 +113,120 @@ def _reason_label(code: str) -> str:
     return labels.get(code, code)
 
 
+import re as _re
+
+# オークションハウスsource → 発送元国の推定マップ
+_SOURCE_SHIP_FROM: Dict[str, str] = {
+    "spink": "UK",
+    "heritage": "US",
+    "stacks": "US",
+    "stack": "US",
+    "ngc": "US",
+    "pcgs": "US",
+    "ebay": "",      # eBayはshipping_from_countryを直接使う
+    "yahoo": "JP",   # ヤフオク = 日本（後続ルールで skip対象）
+}
+
+def _infer_ship_from(candidate_row: Dict[str, Any]) -> Optional[str]:
+    """
+    shipping_from_country が直接あればそれを優先。
+    なければ source フィールドから推定する。
+    """
+    direct = _as_text(_pick(candidate_row, "shipping_from_country", "ship_from_country", "ship_from"))
+    if direct:
+        return direct
+    source = (_as_text(_pick(candidate_row, "source", "auction_house")) or "").lower()
+    for key, country in _SOURCE_SHIP_FROM.items():
+        if key in source:
+            return country
+    return None
+
+
+def _extract_grader_from_title(title: Optional[str]) -> Optional[str]:
+    """
+    lot_title テキストから [PCGS XF45] / NGC MS63 などを抽出する。
+    """
+    if not title:
+        return None
+    text = title.upper()
+    if "PCGS" in text:
+        return "PCGS"
+    if "NGC" in text:
+        return "NGC"
+    return None
+
+
+def _extract_cert_from_title(title: Optional[str]) -> Optional[str]:
+    """
+    lot_title テキストから cert番号らしきパターンを抽出する。
+    例: PCGS 12345678, #12345678, cert:12345678
+    """
+    if not title:
+        return None
+    # [PCGS MS63] や [NGC AU50] の後ろにある数字列
+    m = _re.search(r'\b(?:PCGS|NGC)\s+[A-Z0-9]{2,6}\s+(\d{5,10})\b', title, _re.IGNORECASE)
+    if m:
+        return m.group(1)
+    # #で始まる数字列
+    m = _re.search(r'#(\d{5,10})', title)
+    if m:
+        return m.group(1)
+    # [PCGS XF45] のようにgraderが入っていれば cert "present" とみなす
+    if _re.search(r'\b(?:PCGS|NGC)\s+[A-Z]{1,3}\d{1,3}', title, _re.IGNORECASE):
+        return "in_title"
+    return None
+
+
+def _is_ebay_source(candidate_row: Dict[str, Any]) -> bool:
+    """eBay由来の候補かどうか判定"""
+    source = (_as_text(_pick(candidate_row, "source", "auction_house")) or "").lower()
+    return "ebay" in source
+
+
 def extract_candidate_snapshot(candidate_row: Dict[str, Any]) -> Dict[str, Any]:
+    # title解決: lot_title を優先
+    title = _as_text(_pick(candidate_row, "lot_title", "title", "item_title", "auction_title"))
+
+    # grader: 直接カラム優先 → lot_title から抽出
+    grader = _as_text(_pick(candidate_row, "grader", "grading_company"))
+    if not grader:
+        grader = _extract_grader_from_title(title)
+
+    # cert_number: 直接カラム優先 → lot_title から抽出
+    cert = _as_text(_pick(candidate_row, "cert_number", "cert", "slab_cert_number"))
+    if not cert:
+        cert = _extract_cert_from_title(title)
+
+    # ship_from: カラム直接 → source推定
+    ship_from = _infer_ship_from(candidate_row)
+
+    # source_currency: eBay以外は通貨チェックをスキップ（NULL扱いにする）
+    # eBay以外 (Spink/Heritage) は HKD/GBP/USD混在で正常なのでcurrency_invalid を出さない
+    is_ebay = _is_ebay_source(candidate_row)
+    if is_ebay:
+        source_currency = _as_text(_pick(candidate_row, "source_currency", "currency"))
+    else:
+        # eBay以外はUSD強制チェック不要 → "USD"固定でバイパス
+        source_currency = "USD"
+
     return {
         "candidate_id": str(_pick(candidate_row, "id")),
-        "title": _as_text(_pick(candidate_row, "title", "item_title", "auction_title")),
+        "title": title,
         "category_text": _as_text(_pick(candidate_row, "category", "coin_type", "category_text")),
-        "grader": _as_text(_pick(candidate_row, "grader", "grading_company")),
-        "cert_number": _as_text(_pick(candidate_row, "cert_number", "cert", "slab_cert_number")),
+        "grader": grader,
+        "cert_number": cert,
         "lot_size": _as_int(_pick(candidate_row, "lot_size")),
         "is_active": _as_bool(_pick(candidate_row, "is_active")),
         "is_sold": _as_bool(_pick(candidate_row, "is_sold")),
-        "source_currency": _as_text(_pick(candidate_row, "source_currency", "currency")),
-        "shipping_from_country": _as_text(_pick(candidate_row, "shipping_from_country", "ship_from_country")),
+        "source_currency": source_currency,
+        "shipping_from_country": ship_from,
         "evidence_count": _as_int(_pick(candidate_row, "evidence_count")) or 0,
         "projected_profit_jpy": _as_float(_pick(candidate_row, "projected_profit_jpy")),
         "projected_roi": _as_float(_pick(candidate_row, "projected_roi")),
         "comparison_quality_score": _as_float(_pick(candidate_row, "comparison_quality_score")),
         "recommended_max_bid_jpy": _as_float(_pick(candidate_row, "recommended_max_bid_jpy")),
         "current_price": _as_float(_pick(candidate_row, "current_price", "price", "current_price_jpy")),
+        "is_ebay": is_ebay,
     }
 
 

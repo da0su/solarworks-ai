@@ -35,10 +35,11 @@ def get_review_queue(
       - is_sold IS FALSE
     """
     supabase = get_supabase_client()
+    # 'ng' は旧パイプライン自動判定。新システムでCEOが再確認するためpendingと同等扱い
     q = (
         supabase.table("daily_candidates")
         .select("*")
-        .or_("ceo_decision.is.null,ceo_decision.eq.pending")
+        .or_("ceo_decision.is.null,ceo_decision.eq.pending,ceo_decision.eq.ng")
         .eq("is_active", True)
         .eq("is_sold", False)
         .order("created_at", desc=True)
