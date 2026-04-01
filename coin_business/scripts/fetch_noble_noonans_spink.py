@@ -79,6 +79,12 @@ _BANKNOTE_PATTERNS = [
     r"\bnotgeld\b", r"\bfractional\s*currency\b",
     # 紙製品の証拠
     r"\bspecimen\s*note\b", r"\bproof\s*note\b",
+    # 中国・アジア紙幣（Spink HK オークション対策）
+    r"\btael[s]?\b",                          # 両（タレ）= 中国紙幣単位
+    r"\bGovernment\s+Bank\b",                 # 政府系発行機関 = 紙幣発行体
+    r"\bSavings?\s+Bank\b",                   # 貯蓄銀行 = 紙幣発行体
+    r"\bpost\s+production\s+specimen\b",      # 印刷後試作品 = 紙幣用語
+    r"\bpost\s+issue\s+specimen\b",           # 発行後見本 = 紙幣用語
 ]
 
 import re as _re

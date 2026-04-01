@@ -389,6 +389,7 @@ def main():
                 'init_price': auction.get('initPrice'),
                 'date': rec.get('sold_date', ''),
                 'url': rec.get('url', ''),
+                'title': rec.get('title', ''),  # ロット数量検出・グレード照合用
             }])
 
         # VARCHAR制限に合わせてトリミング

@@ -7,6 +7,7 @@
 """
 
 import json
+import re
 import sys
 import statistics
 from pathlib import Path
@@ -122,8 +123,29 @@ def process_row(row, latest_rates, db, rates_cache):
     if not price_history:
         return None
 
+    # ── Quality Filter: 複数枚ロット・参照不可エントリを除外 ──────────────────
+    _MULTI_LOT_RE = re.compile(
+        r'\b(?:lot\s+of|×\s*\d|set\s+of|\d+\s*枚|\d+\s*coins?|\d+\s*pcs?)\b'
+        r'|\b\d{1,2}\s*(?:枚|本|個)\s*セット',
+        re.IGNORECASE,
+    )
+
+    def _ph_quality(entry: dict) -> str:
+        """price_history エントリの品質を返す: 'exact' | 'multi_lot' | 'fuzzy'"""
+        title = entry.get('title', '')
+        if title and _MULTI_LOT_RE.search(title):
+            return 'multi_lot'
+        if title:
+            return 'exact'
+        return 'fuzzy'
+
+    # 複数枚ロットを除外した有効エントリのみ使用
+    valid_ph = [p for p in price_history if _ph_quality(p) != 'multi_lot']
+    if not valid_ph:
+        valid_ph = price_history  # 全除外時はフォールバック（安全策）
+
     # 直近の落札 (date降順で最初)
-    sorted_ph = sorted(price_history, key=lambda x: x.get('date', ''), reverse=True)
+    sorted_ph = sorted(valid_ph, key=lambda x: x.get('date', ''), reverse=True)
     latest_sale = sorted_ph[0]
     sold_date = latest_sale.get('date', '')
     yahoo_price = int(latest_sale.get('price', 0))
@@ -147,7 +169,7 @@ def process_row(row, latest_rates, db, rates_cache):
         sold_melt = 0
 
     # --- 基準1: プレミアム+地金連動方式 ---
-    prices = [int(p.get('price', 0)) for p in price_history if p.get('price')]
+    prices = [int(p.get('price', 0)) for p in valid_ph if p.get('price')]
     median_price = calc_median_5pattern(prices)
 
     ref1_buy_limit = None
