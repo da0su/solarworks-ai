@@ -147,7 +147,6 @@ def fetch_yahoo_market_transactions(
 # 変換
 # ================================================================
 
-@dataclass_like
 class SyncStats:
     """同期処理の統計情報"""
     total_fetched:    int = 0

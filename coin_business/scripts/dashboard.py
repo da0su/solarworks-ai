@@ -178,7 +178,7 @@ def _print_kpi(kpi: dict) -> None:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     print()
     print(BOLD("=" * 60))
-    print(BOLD(f"  🪙 SolarWorks AI — コイン仕入れ Dashboard  {now}"))
+    print(BOLD(f"  [coin] SolarWorks AI -- coin_business Dashboard  {now}"))
     print(BOLD("=" * 60))
     print()
     print(BOLD("  📊 KPI サマリー"))

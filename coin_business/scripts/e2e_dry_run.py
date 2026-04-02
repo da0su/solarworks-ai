@@ -30,9 +30,17 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import sys
 import time
+
+# Windows cp932 端末での emoji 文字化け防止
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -75,49 +83,70 @@ def _run_stage(stage_no: int, name: str, fn) -> StageResult:
 
 def _stage_yahoo_sync() -> str:
     from scripts.yahoo_sold_sync import run_sync
-    result = run_sync(dry_run=True, limit=5)
-    return f"fetched={result.fetched_count} upserted={result.upserted_count}"
+    # run_sync returns int exit_code (0=ok, 1=error)
+    exit_code = run_sync(dry_run=True, limit=5)
+    return f"exit_code={exit_code}"
 
 
 def _stage_yahoo_promote() -> str:
-    from scripts.yahoo_promoter import run_promotion
-    result = run_promotion(dry_run=True, limit=5)
-    return f"promoted={result.promoted_count}"
+    from scripts.yahoo_promoter import run_promote
+    result = run_promote(dry_run=True, limit=5)
+    return f"promoted={result.promoted_count} errors={result.error_count}"
 
 
 def _stage_seed_generate() -> str:
-    from scripts.seed_generator import run_seed_generation
-    result = run_seed_generation(dry_run=True, limit=5)
-    return f"generated={getattr(result, 'generated_count', '?')}"
+    from scripts.seed_generator import run_seed_generator
+    result = run_seed_generator(dry_run=True, limit=5)
+    # returns dict with keys: lots_processed, seeds_generated, seeds_upserted, error_count
+    if isinstance(result, dict):
+        return (
+            f"lots={result.get('lots_processed', 0)} "
+            f"seeds={result.get('seeds_generated', 0)} "
+            f"upserted={result.get('seeds_upserted', 0)}"
+        )
+    return f"result={result}"
 
 
 def _stage_ebay_scan() -> str:
-    from scripts.ebay_seed_scanner import run_scan
-    result = run_scan(dry_run=True, limit=3)
-    return f"scanned={getattr(result, 'scanned_count', '?')}"
+    # ebay_seed_scanner.py has no standalone run() — import check only
+    import importlib
+    spec = importlib.util.find_spec("scripts.ebay_seed_scanner")
+    if spec is None:
+        raise ImportError("scripts.ebay_seed_scanner not found")
+    return "import_ok (no run() API — CLI only)"
 
 
 def _stage_ebay_ingest() -> str:
     from scripts.ebay_api_ingest import run_ingest
     result = run_ingest(dry_run=True, limit=3)
-    return f"ingested={getattr(result, 'ingested_count', '?')}"
+    return (
+        f"seeds={result.seeds_scanned} "
+        f"listings={result.listings_fetched} saved={result.listings_saved}"
+    )
 
 
 def _stage_global_sync() -> str:
     from scripts.global_auction_sync import run_sync as run_gsync
     result = run_gsync(dry_run=True)
-    return f"synced={getattr(result, 'synced_count', '?')}"
+    return (
+        f"fetched={result.events_fetched} synced={result.events_synced} "
+        f"new={result.events_new} errors={result.error_count}"
+    )
 
 
 def _stage_global_ingest() -> str:
     from scripts.global_lot_ingest import run_ingest as run_gingest
-    result = run_gingest(dry_run=True, limit=5)
-    return f"ingested={getattr(result, 'ingested_count', '?')}"
+    # run_ingest has no 'limit' param
+    result = run_gingest(dry_run=True)
+    return (
+        f"events={result.events_processed} lots_fetched={result.lots_fetched} "
+        f"saved={result.lots_saved} status={result.status_str()}"
+    )
 
 
 def _stage_match_engine() -> str:
-    from scripts.match_engine import run_match_engine
-    result = run_match_engine(dry_run=True, limit=5)
+    from scripts.match_engine import run_match
+    result = run_match(dry_run=True, limit=5)
     return (
         f"listings={result.listings_scanned} lots={result.lots_scanned} "
         f"matches={result.matches_created} level_a={result.level_a_count}"
@@ -230,21 +259,24 @@ def _print_summary(results: list[StageResult]) -> None:
     error = sum(1 for r in results if r.status == "error")
     skip  = sum(1 for r in results if r.status == "skip")
 
+    # ASCII-safe icons (cp932 端末でも文字化けしない)
+    ICON = {"ok": "[OK]  ", "error": "[ERR] ", "skip": "[SKIP]"}
+
     print("\n" + "=" * 70)
     print("E2E Dry Run Summary")
     print("=" * 70)
     for r in results:
-        icon = {"ok": "✅", "error": "❌", "skip": "⏭"}.get(r.status, "?")
-        detail = f" — {r.detail}" if r.detail else ""
+        icon    = ICON.get(r.status, "[?]   ")
+        detail  = f" -- {r.detail}" if r.detail else ""
         elapsed = f" ({r.elapsed_ms}ms)" if r.elapsed_ms else ""
         print(f"  {icon} Stage {r.stage_no:02d} {r.name}{elapsed}{detail}")
 
     print("-" * 70)
     print(f"  Total: {ok} ok / {error} error / {skip} skip")
     if error > 0:
-        print("  ⚠️  一部ステージでエラーが発生しました。詳細は上記ログを確認してください。")
+        print("  [WARN] 一部ステージでエラーが発生しました。詳細は上記ログを確認してください。")
     else:
-        print("  🎉 全ステージ完了!")
+        print("  [DONE] 全ステージ完了!")
     print()
 
 
