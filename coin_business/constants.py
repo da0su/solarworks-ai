@@ -456,6 +456,8 @@ class Table:
     CANDIDATE_MATCH_RESULTS  = "candidate_match_results"
     CANDIDATE_WATCHLIST      = "candidate_watchlist"
     WATCHLIST_SNAPSHOTS      = "watchlist_snapshots"
+    JOB_MATCH_ENGINE         = "job_match_engine_daily"
+    JOB_CAP_AUDIT            = "job_cap_audit_daily"
 
     # Phase 9
     NOTIFICATION_LOG         = "notification_log"
