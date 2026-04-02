@@ -19,6 +19,9 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
   2. yahoo_promoter      -- 毎日 06:30 JST  (Day 4 実装済み)
   3. seed_generator      -- 毎日 07:00 JST  (Day 4 実装済み)
   4. ebay_listings_sync  -- 毎日 10:00 JST  (Day 5 実装済み)
+  5. ebay_seed_scanner_1 -- 毎日 08:00 JST  (Day 6 実装済み)
+  6. ebay_seed_scanner_2 -- 毎日 14:00 JST  (Day 6 実装済み)
+  7. ebay_seed_scanner_3 -- 毎日 20:00 JST  (Day 6 実装済み)
 """
 
 from __future__ import annotations
@@ -96,6 +99,46 @@ JOBS: list[JobDef] = [
         cli_command     = "ebay-ingest",
         implemented_day = 5,
         args            = ["--limit", "50"],      # 1 日 50 seed まで処理
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 6: eBay seed scanner 1回目 (Day 6 実装済み)
+    # READY seed を priority 降順でスキャン → ebay_seed_hits
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "ebay_seed_scanner_1",
+        description     = "Yahoo seed 起点 eBay スキャン (1回目 08:00 JST)",
+        script          = "ebay_seed_scanner.py",
+        cron_schedule   = "0 8 * * *",           # 毎日 08:00 JST
+        cli_command     = "ebay-scan",
+        implemented_day = 6,
+        args            = ["--limit", "50"],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 6: eBay seed scanner 2回目 (Day 6 実装済み)
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "ebay_seed_scanner_2",
+        description     = "Yahoo seed 起点 eBay スキャン (2回目 14:00 JST)",
+        script          = "ebay_seed_scanner.py",
+        cron_schedule   = "0 14 * * *",          # 毎日 14:00 JST
+        cli_command     = "ebay-scan",
+        implemented_day = 6,
+        args            = ["--limit", "50"],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 6: eBay seed scanner 3回目 (Day 6 実装済み)
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "ebay_seed_scanner_3",
+        description     = "Yahoo seed 起点 eBay スキャン (3回目 20:00 JST)",
+        script          = "ebay_seed_scanner.py",
+        cron_schedule   = "0 20 * * *",          # 毎日 20:00 JST
+        cli_command     = "ebay-scan",
+        implemented_day = 6,
+        args            = ["--limit", "50"],
     ),
 
     # ----------------------------------------------------------------
