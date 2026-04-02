@@ -327,6 +327,82 @@ def parse_title(title: str) -> dict:
     if tags:
         result["tags"] = tags
 
+    # ============================================================
+    # Weight (troy oz) — 地金価値計算用
+    # ============================================================
+    weight_oz = None
+    # 分数oz を先にチェック (1/2 oz が "2 oz" として誤マッチしないよう先行評価)
+    wm = re.search(r'(\d+)/(\d+)\s*(?:troy\s*)?oz', title, re.IGNORECASE)
+    if wm:
+        weight_oz = int(wm.group(1)) / int(wm.group(2))
+    else:
+        # 整数・小数oz: 1 oz, 1.5 oz, 0.5oz
+        wm = re.search(r'(?<![/\d])(\d+(?:\.\d+)?)\s*(?:troy\s*)?oz', title, re.IGNORECASE)
+        if wm:
+            weight_oz = float(wm.group(1))
+        else:
+            # グラム表記 → oz換算
+            wm = re.search(r'(\d+(?:\.\d+)?)\s*(?:g(?:ram)?s?)\b', title, re.IGNORECASE)
+            if wm:
+                weight_oz = float(wm.group(1)) / 31.1035
+            else:
+                # シリーズ別デフォルト重量
+                series_name = result.get("series", "")
+                denom = result.get("denomination", "")
+                mat = result.get("material", "")
+                if series_name == "モルガンダラー" or "Morgan" in title:
+                    weight_oz = 26.73 / 31.1035  # 0.8594 oz
+                elif series_name == "ソブリン" or "Sovereign" in title:
+                    weight_oz = 7.98 / 31.1035   # 0.2566 oz
+                elif series_name == "パンダ" and mat == "銀":
+                    weight_oz = 30.0 / 31.1035   # 0.9646 oz (30g)
+                elif "1ソブリン" in denom or "フルソブリン" in title:
+                    weight_oz = 7.98 / 31.1035
+                elif "2ソブリン" in denom or "ダブルソブリン" in title:
+                    weight_oz = 15.98 / 31.1035
+                elif "Half" in title and "Sovereign" in title:
+                    weight_oz = 3.99 / 31.1035
+
+    if weight_oz is not None and weight_oz > 0:
+        result["weight_oz"] = round(weight_oz, 4)
+
+    # ============================================================
+    # Purity (0-1) — 地金価値計算用
+    # ============================================================
+    purity = None
+    # 明示的な純度表記: .999, .9999, 99.99%, 900/1000
+    pm = re.search(r'\.(\d{3,4})\b', title)
+    if pm:
+        digits = pm.group(1)
+        purity = int(digits) / (10 ** len(digits))
+    else:
+        pm = re.search(r'(\d{2,3}(?:\.\d+)?)\s*%', title)
+        if pm:
+            purity = float(pm.group(1)) / 100
+        else:
+            pm = re.search(r'(\d{3})/1000', title)
+            if pm:
+                purity = int(pm.group(1)) / 1000
+            else:
+                # シリーズ別デフォルト純度
+                series_name = result.get("series", "")
+                mat = result.get("material", "")
+                if series_name in ("モルガンダラー", "ウォーキングリバティ"):
+                    purity = 0.900
+                elif series_name == "ソブリン":
+                    purity = 0.917
+                elif series_name in ("パンダ", "メイプルリーフ", "ブリタニア",
+                                      "カンガルー", "コアラ", "クッカバラ",
+                                      "フィルハーモニー", "クルーガーランド", "リベルタード"):
+                    purity = 0.999 if mat == "銀" else 0.9999
+                elif mat == "銀":
+                    purity = 0.999  # 現代銀貨のデフォルト
+                elif mat == "金":
+                    purity = 0.900  # 近代金貨のデフォルト
+
+    if purity is not None and 0 < purity <= 1:
+        result["purity"] = round(purity, 4)
+
     return result
 
 
