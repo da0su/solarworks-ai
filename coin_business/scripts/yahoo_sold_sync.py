@@ -100,10 +100,11 @@ def fetch_yahoo_market_transactions(
         list of dict (各 row に id/title/price_jpy/sold_date/url/item_id 等を含む)
     """
     all_rows: list[dict] = []
-    last_id  = 0
+    offset   = 0
     fetched  = 0
 
     while True:
+        # UUID主キーの場合 .gt("id", 0) が使えないためオフセットページネーションを使用
         q = (
             client.table(Table.MARKET_TRANSACTIONS)
             .select(
@@ -111,9 +112,8 @@ def fetch_yahoo_market_transactions(
                 "thumbnail_url, grader, grade, year, denomination, country"
             )
             .eq("source", Source.YAHOO)
-            .gt("id", last_id)
-            .order("id")
-            .limit(FETCH_BATCH_SIZE)
+            .order("sold_date", desc=False)
+            .range(offset, offset + FETCH_BATCH_SIZE - 1)
         )
         if since:
             q = q.gte("sold_date", since)
@@ -121,7 +121,7 @@ def fetch_yahoo_market_transactions(
         try:
             resp = q.execute()
         except Exception as exc:
-            logger.error("market_transactions 取得失敗 (last_id=%d): %s", last_id, exc)
+            logger.error("market_transactions 取得失敗 (offset=%d): %s", offset, exc)
             break
 
         rows = resp.data or []
@@ -130,10 +130,13 @@ def fetch_yahoo_market_transactions(
 
         all_rows.extend(rows)
         fetched += len(rows)
-        last_id = rows[-1]["id"]
+        offset  += len(rows)
 
         if fetched % REPORT_INTERVAL == 0:
             logger.info("  取得中... %d 件", fetched)
+
+        if len(rows) < FETCH_BATCH_SIZE:
+            break  # 最終ページ
 
         if limit and fetched >= limit:
             all_rows = all_rows[:limit]
