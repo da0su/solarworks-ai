@@ -280,8 +280,68 @@ class TMinusStage:
     T7  = 7    # 開催1週間前: 全 lot 更新
     T3  = 3    # 開催3日前: 注目 lot 優先監視
     T1  = 1    # 開催前日: 最終確認・アラート
+    T0  = 0    # 開催当日・終了後
 
     ALL = (T21, T7, T3, T1)
+
+    @staticmethod
+    def from_days_until(days_until: int) -> int | None:
+        """
+        開催までの残り日数から T-minus ステージを返す。
+
+        Args:
+            days_until: (auction_date - today).days
+
+        Returns:
+            21, 7, 3, 1, 0 のいずれか。
+            21 より遠ければ None (監視対象外)。
+        """
+        if days_until < 0:
+            return TMinusStage.T0      # 終了後
+        if days_until == 0:
+            return TMinusStage.T1      # 当日は T-1 と同扱い (最高頻度)
+        if days_until <= 1:
+            return TMinusStage.T1
+        if days_until <= 3:
+            return TMinusStage.T3
+        if days_until <= 7:
+            return TMinusStage.T7
+        if days_until <= 21:
+            return TMinusStage.T21
+        return None   # 監視ウィンドウ外
+
+
+# ================================================================
+# T-minus ステージ別の lot 取得間隔 (時間)
+# 開催日に近づくほど頻度を上げる
+# ================================================================
+
+class TMinusCadence:
+    """
+    T-minus ステージごとの lot ingest 間隔（時間）。
+    開催日に近づくほど短い間隔になる。
+    """
+    T21_HOURS =  24   # T-21 以遠: 1 日 1 回
+    T7_HOURS  =  12   # T-7  段階: 1 日 2 回
+    T3_HOURS  =   6   # T-3  段階: 4 時間ごと (1 日 4 回)
+    T1_HOURS  =   1   # T-1  段階: 毎時
+
+    _MAP: dict[int, int] = {
+        TMinusStage.T21: T21_HOURS,
+        TMinusStage.T7:  T7_HOURS,
+        TMinusStage.T3:  T3_HOURS,
+        TMinusStage.T1:  T1_HOURS,
+    }
+
+    @classmethod
+    def interval_hours(cls, t_minus_stage: int | None) -> int:
+        """
+        T-minus ステージに対応する ingest 間隔（時間）を返す。
+        None や 0 (終了済み) は T21_HOURS (最低頻度) を返す。
+        """
+        if t_minus_stage is None or t_minus_stage == TMinusStage.T0:
+            return cls.T21_HOURS
+        return cls._MAP.get(t_minus_stage, cls.T21_HOURS)
 
 
 # ================================================================
@@ -389,6 +449,8 @@ class Table:
     GLOBAL_AUCTION_EVENTS    = "global_auction_events"
     GLOBAL_AUCTION_LOTS      = "global_auction_lots"
     GLOBAL_LOT_SNAPSHOTS     = "global_lot_price_snapshots"
+    JOB_GLOBAL_SYNC          = "job_global_auction_sync_daily"
+    JOB_GLOBAL_INGEST        = "job_global_lot_ingest_daily"
 
     # Phase 7/8
     CANDIDATE_MATCH_RESULTS  = "candidate_match_results"
