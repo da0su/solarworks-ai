@@ -462,6 +462,8 @@ class Table:
     # Phase 9
     NOTIFICATION_LOG         = "notification_log"
     NEGOTIATE_LATER          = "negotiate_later"
+    JOB_PRICING_ENGINE       = "job_pricing_engine_daily"
+    JOB_KEEP_WATCH           = "job_keep_watch_daily"
 
 
 # ================================================================
