@@ -430,6 +430,33 @@ def cmd_global_ingest():
     ingest_main()
 
 
+def cmd_match_engine():
+    """eBay listing / global lot を Yahoo seed と照合し Level A/B/C を判定する (Day 8)。
+    使い方:
+        python run.py match-engine                      # 通常実行
+        python run.py match-engine --dry-run            # 書かずに確認のみ
+        python run.py match-engine --smoke              # eBay 1件 + lot 1件のみ
+        python run.py match-engine --limit 100          # 処理件数上限
+        python run.py match-engine --source ebay        # eBay のみ
+        python run.py match-engine --source global      # global lot のみ
+        python run.py match-engine --status-only        # 未処理件数確認
+    """
+    from scripts.match_engine import main as match_main
+    match_main()
+
+
+def cmd_cap_audit():
+    """Level A match に監査 gate を適用し AUDIT_PASS を daily_candidates に昇格する (Day 8)。
+    使い方:
+        python run.py cap-audit                         # 通常実行
+        python run.py cap-audit --dry-run               # 書かずに確認のみ
+        python run.py cap-audit --limit 50              # 処理件数上限
+        python run.py cap-audit --status-only           # 未審査 Level A 件数確認
+    """
+    from scripts.cap_audit_runner import main as audit_main
+    audit_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -508,6 +535,8 @@ COMMANDS = {
     "ebay-ingest":     cmd_ebay_ingest,     # eBay API listing 取得・保存 (Day 5)
     "global-sync":     cmd_global_sync,     # 世界オークション event 同期 (Day 7)
     "global-ingest":   cmd_global_ingest,   # 世界オークション lot 取得・保存 (Day 7)
+    "match-engine":    cmd_match_engine,    # eBay/global lot × Yahoo seed 照合 (Day 8)
+    "cap-audit":       cmd_cap_audit,       # Level A audit gate → daily_candidates 昇格 (Day 8)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,

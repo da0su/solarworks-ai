@@ -25,6 +25,8 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
   8. global_auction_sync   -- 毎日 07:30 JST  (Day 7 実装済み)
   9. global_lot_ingest_1   -- 毎日 08:30 JST  (Day 7 実装済み)
  10. global_lot_ingest_2   -- 毎日 14:30 JST  (Day 7 実装済み)
+ 11. match_engine_daily    -- 毎日 09:00 JST  (Day 8 実装済み)
+ 12. cap_audit_daily       -- 毎日 09:30 JST  (Day 8 実装済み)
 """
 
 from __future__ import annotations
@@ -186,13 +188,28 @@ JOBS: list[JobDef] = [
     ),
 
     # ----------------------------------------------------------------
-    # Day 8: match + CAP audit (未実装)
+    # Day 8: match_engine (Day 8 実装済み)
+    # eBay listing / global lot × Yahoo seed 照合 → candidate_match_results
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "match_engine_daily",
+        description     = "eBay/global lot × Yahoo seed 照合 → Level A/B/C 判定",
+        script          = "match_engine.py",
+        cron_schedule   = "0 9 * * *",            # 毎日 09:00 JST
+        cli_command     = "match-engine",
+        implemented_day = 8,
+        args            = ["--limit", "100"],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 8: CAP audit runner (Day 8 実装済み)
+    # Level A match に audit gate → AUDIT_PASS を daily_candidates に昇格
     # ----------------------------------------------------------------
     JobDef(
         job_id          = "cap_audit_daily",
-        description     = "match_engine → cap_audit_runner → daily_candidates 昇格",
-        script          = "cap_audit_runner.py",  # Day 8 実装予定
-        cron_schedule   = "0 11 * * *",
+        description     = "Level A match に audit gate → AUDIT_PASS を daily_candidates 昇格",
+        script          = "cap_audit_runner.py",
+        cron_schedule   = "30 9 * * *",           # 毎日 09:30 JST
         cli_command     = "cap-audit",
         implemented_day = 8,
         args            = [],
