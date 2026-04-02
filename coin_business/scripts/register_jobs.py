@@ -27,6 +27,8 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
  10. global_lot_ingest_2   -- 毎日 14:30 JST  (Day 7 実装済み)
  11. match_engine_daily    -- 毎日 09:00 JST  (Day 8 実装済み)
  12. cap_audit_daily       -- 毎日 09:30 JST  (Day 8 実装済み)
+ 13. pricing_engine_daily  -- 毎日 11:00 JST  (Day 9 実装済み)
+ 14. keep_watch_runner     -- */10 分ごと     (Day 9 実装済み)
 """
 
 from __future__ import annotations
@@ -213,6 +215,34 @@ JOBS: list[JobDef] = [
         cli_command     = "cap-audit",
         implemented_day = 8,
         args            = [],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 9: pricing engine (Day 9 実装済み)
+    # AUDIT_PASS 候補に target_max_bid_jpy / comparison_quality_score を計算
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "pricing_engine_daily",
+        description     = "AUDIT_PASS 候補に pricing 計算 → target_max_bid_jpy 保存",
+        script          = "candidate_pricer.py",
+        cron_schedule   = "0 11 * * *",           # 毎日 11:00 JST (cap-audit 後)
+        cli_command     = "run-pricing",
+        implemented_day = 9,
+        args            = ["--limit", "100"],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 9: keep-watch refresher (Day 9 実装済み)
+    # ACTIVE watchlist アイテムを refresh cadence に従い自動更新
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "keep_watch_runner",
+        description     = "KEEP watchlist の ACTIVE アイテムを状態更新",
+        script          = "keep_watch_refresher.py",
+        cron_schedule   = "*/10 * * * *",         # 10分ごと
+        cli_command     = "keep-watch",
+        implemented_day = 9,
+        args            = ["--limit", "100"],
     ),
 
     # ----------------------------------------------------------------

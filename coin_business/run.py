@@ -457,6 +457,28 @@ def cmd_cap_audit():
     audit_main()
 
 
+def cmd_run_pricing():
+    """AUDIT_PASS 済み daily_candidates に pricing 計算を実施する (Day 9)。
+    使い方:
+        python run.py run-pricing                       # 通常実行
+        python run.py run-pricing --dry-run             # 書かずに確認のみ
+        python run.py run-pricing --limit 50            # 処理件数上限
+    """
+    from scripts.candidate_pricer import main as pricer_main
+    pricer_main()
+
+
+def cmd_keep_watch():
+    """candidate_watchlist の ACTIVE アイテムを更新する (Day 9)。
+    使い方:
+        python run.py keep-watch                        # 通常実行
+        python run.py keep-watch --dry-run              # 書かずに確認のみ
+        python run.py keep-watch --limit 100            # 処理件数上限
+    """
+    from scripts.keep_watch_refresher import main as watch_main
+    watch_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -537,6 +559,8 @@ COMMANDS = {
     "global-ingest":   cmd_global_ingest,   # 世界オークション lot 取得・保存 (Day 7)
     "match-engine":    cmd_match_engine,    # eBay/global lot × Yahoo seed 照合 (Day 8)
     "cap-audit":       cmd_cap_audit,       # Level A audit gate → daily_candidates 昇格 (Day 8)
+    "run-pricing":     cmd_run_pricing,     # AUDIT_PASS 候補に pricing 計算 (Day 9)
+    "keep-watch":      cmd_keep_watch,      # KEEP watchlist 更新 (Day 9)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,
