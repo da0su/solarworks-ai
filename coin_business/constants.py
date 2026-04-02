@@ -465,6 +465,10 @@ class Table:
     JOB_PRICING_ENGINE       = "job_pricing_engine_daily"
     JOB_KEEP_WATCH           = "job_keep_watch_daily"
 
+    # Phase 10 (Day 10)
+    JOB_MORNING_BRIEF        = "job_morning_brief_daily"
+    JOB_NOTION_SYNC          = "job_notion_sync_daily"
+
 
 # ================================================================
 # Migration 適用順（Supabase SQL Editor で順番通りに実行）
