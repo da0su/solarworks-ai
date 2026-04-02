@@ -403,6 +403,33 @@ def cmd_ebay_ingest():
     ingest_main()
 
 
+def cmd_global_sync():
+    """世界オークション event を取得し global_auction_events に保存する (Day 7)。
+    使い方:
+        python run.py global-sync                       # 通常実行
+        python run.py global-sync --dry-run             # 書かずに確認のみ
+        python run.py global-sync --house heritage      # Heritage のみ
+        python run.py global-sync --include-all         # T-21 以遠も保存
+        python run.py global-sync --status-only         # upcoming event 件数確認
+    """
+    from scripts.global_auction_sync import main as sync_main
+    sync_main()
+
+
+def cmd_global_ingest():
+    """世界オークション lot を取得し global_auction_lots / snapshots に保存する (Day 7)。
+    使い方:
+        python run.py global-ingest                     # 通常実行
+        python run.py global-ingest --dry-run           # 書かずに確認のみ
+        python run.py global-ingest --force             # cadence 無視で全 event 処理
+        python run.py global-ingest --house spink       # Spink のみ
+        python run.py global-ingest --event-id UUID     # 特定 event のみ
+        python run.py global-ingest --status-only       # ingest 待ち event 件数確認
+    """
+    from scripts.global_lot_ingest import main as ingest_main
+    ingest_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -479,6 +506,8 @@ COMMANDS = {
     "seed-generate":   cmd_seed_generate,   # yahoo_sold_lots → yahoo_coin_seeds (Day 4)
     "ebay-scan":       cmd_ebay_scan,       # Yahoo seed 起点 eBay スキャン (Day 6)
     "ebay-ingest":     cmd_ebay_ingest,     # eBay API listing 取得・保存 (Day 5)
+    "global-sync":     cmd_global_sync,     # 世界オークション event 同期 (Day 7)
+    "global-ingest":   cmd_global_ingest,   # 世界オークション lot 取得・保存 (Day 7)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,

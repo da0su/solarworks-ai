@@ -15,13 +15,16 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
     - crontab に CRON_SCHEDULE の値を貼り付ける
 
 現在登録済みジョブ:
-  1. yahoo_sold_sync     -- 毎日 06:00 JST  (Day 2 実装済み)
-  2. yahoo_promoter      -- 毎日 06:30 JST  (Day 4 実装済み)
-  3. seed_generator      -- 毎日 07:00 JST  (Day 4 実装済み)
-  4. ebay_listings_sync  -- 毎日 10:00 JST  (Day 5 実装済み)
-  5. ebay_seed_scanner_1 -- 毎日 08:00 JST  (Day 6 実装済み)
-  6. ebay_seed_scanner_2 -- 毎日 14:00 JST  (Day 6 実装済み)
-  7. ebay_seed_scanner_3 -- 毎日 20:00 JST  (Day 6 実装済み)
+  1. yahoo_sold_sync       -- 毎日 06:00 JST  (Day 2 実装済み)
+  2. yahoo_promoter        -- 毎日 06:30 JST  (Day 4 実装済み)
+  3. seed_generator        -- 毎日 07:00 JST  (Day 4 実装済み)
+  4. ebay_listings_sync    -- 毎日 10:00 JST  (Day 5 実装済み)
+  5. ebay_seed_scanner_1   -- 毎日 08:00 JST  (Day 6 実装済み)
+  6. ebay_seed_scanner_2   -- 毎日 14:00 JST  (Day 6 実装済み)
+  7. ebay_seed_scanner_3   -- 毎日 20:00 JST  (Day 6 実装済み)
+  8. global_auction_sync   -- 毎日 07:30 JST  (Day 7 実装済み)
+  9. global_lot_ingest_1   -- 毎日 08:30 JST  (Day 7 実装済み)
+ 10. global_lot_ingest_2   -- 毎日 14:30 JST  (Day 7 実装済み)
 """
 
 from __future__ import annotations
@@ -142,14 +145,42 @@ JOBS: list[JobDef] = [
     ),
 
     # ----------------------------------------------------------------
-    # Day 7: 世界オークション lot 取り込み (未実装)
+    # Day 7: 世界オークション event 同期 (Day 7 実装済み)
+    # Heritage / Stack's Bowers / Spink / Noble のイベントを global_auction_events へ
     # ----------------------------------------------------------------
     JobDef(
         job_id          = "global_auction_sync",
-        description     = "T-minus 管理: global_auction_events / lots 同期",
-        script          = "global_auction_sync.py",  # Day 7 実装予定
-        cron_schedule   = "0 8 * * *",
+        description     = "世界オークション event を global_auction_events に同期",
+        script          = "global_auction_sync.py",
+        cron_schedule   = "30 7 * * *",           # 毎日 07:30 JST
         cli_command     = "global-sync",
+        implemented_day = 7,
+        args            = [],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 7: 世界オークション lot 取り込み 1回目 (Day 7 実装済み)
+    # T-minus cadence に基づいて lot を取得 → global_auction_lots + snapshots
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "global_lot_ingest_1",
+        description     = "世界オークション lot 取り込み (1回目 08:30 JST)",
+        script          = "global_lot_ingest.py",
+        cron_schedule   = "30 8 * * *",           # 毎日 08:30 JST
+        cli_command     = "global-ingest",
+        implemented_day = 7,
+        args            = [],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 7: 世界オークション lot 取り込み 2回目 (Day 7 実装済み)
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "global_lot_ingest_2",
+        description     = "世界オークション lot 取り込み (2回目 14:30 JST)",
+        script          = "global_lot_ingest.py",
+        cron_schedule   = "30 14 * * *",          # 毎日 14:30 JST
+        cli_command     = "global-ingest",
         implemented_day = 7,
         args            = [],
     ),
