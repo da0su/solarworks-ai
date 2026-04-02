@@ -34,7 +34,9 @@ logger = logging.getLogger(__name__)
 RAW_TABLE       = Table.EBAY_LISTINGS_RAW       # "ebay_listings_raw"
 SNAP_TABLE      = Table.EBAY_LISTING_SNAPSHOTS  # "ebay_listing_snapshots"
 SEEDS_TABLE     = Table.YAHOO_COIN_SEEDS        # "yahoo_coin_seeds"
+HITS_TABLE      = Table.EBAY_SEED_HITS          # "ebay_seed_hits"
 JOB_TABLE       = Table.JOB_EBAY_INGEST         # "job_ebay_ingest_daily"
+JOB_SCANNER     = Table.JOB_EBAY_SCANNER        # "job_ebay_scanner_daily"
 
 # ================================================================
 # スナップショット設定
@@ -327,6 +329,82 @@ def requeue_cooled_seeds(client) -> int:
 
 
 # ================================================================
+# seed hit 管理
+# ================================================================
+
+def upsert_seed_hit(
+    client,
+    seed_id:       str,
+    listing_id:    str,
+    ebay_item_id:  str,
+    match_score:   float,
+    match_type:    str,
+    matched_query: str,
+    hit_rank:      int,
+    hit_reason:    str,
+    match_details: dict | None = None,
+) -> Optional[str]:
+    """
+    ebay_seed_hits に hit レコードを UPSERT する。
+
+    同一 (seed_id, listing_id) は重複しない (UNIQUE 制約)。
+    既存 hit はスコア・ランク等を更新する。
+
+    Returns:
+        保存された UUID 文字列、失敗時は None
+    """
+    import json as _json
+    rec: dict = {
+        "seed_id":       seed_id,
+        "listing_id":    listing_id,
+        "ebay_item_id":  ebay_item_id,
+        "match_score":   round(match_score, 3),
+        "match_type":    match_type,
+        "matched_query": matched_query[:500] if matched_query else None,
+        "hit_rank":      hit_rank,
+        "hit_reason":    hit_reason,
+    }
+    if match_details:
+        rec["match_details"] = _json.dumps(match_details, ensure_ascii=False)
+
+    try:
+        resp = client.table(HITS_TABLE).upsert(
+            rec,
+            on_conflict="seed_id,listing_id",
+        ).execute()
+        if resp.data:
+            return resp.data[0].get("id")
+        return None
+    except Exception as exc:
+        logger.error(
+            "ebay_seed_hits upsert 失敗 seed=%s item=%s: %s",
+            seed_id, ebay_item_id, exc,
+        )
+        return None
+
+
+def get_existing_hit_listing_ids(client, seed_id: str) -> set[str]:
+    """
+    seed_id に対して既に登録済みの listing_id セットを返す。
+    重複 hit 抑止に使う。
+
+    Returns:
+        既存 hit の listing_id set (空なら空 set)
+    """
+    try:
+        resp = (
+            client.table(HITS_TABLE)
+            .select("listing_id")
+            .eq("seed_id", seed_id)
+            .execute()
+        )
+        return {row["listing_id"] for row in (resp.data or [])}
+    except Exception as exc:
+        logger.error("get_existing_hit_listing_ids 失敗 seed=%s: %s", seed_id, exc)
+        return set()
+
+
+# ================================================================
 # ジョブ記録
 # ================================================================
 
@@ -364,4 +442,39 @@ def record_ingest_run(
         return True
     except Exception as exc:
         logger.error("ingest ジョブ記録失敗: %s", exc)
+        return False
+
+
+def record_scanner_run(
+    client,
+    run_date:      str,
+    status:        str,
+    seeds_scanned: int = 0,
+    hits_found:    int = 0,
+    hits_saved:    int = 0,
+    error_count:   int = 0,
+    error_message: Optional[str] = None,
+) -> bool:
+    """
+    job_ebay_scanner_daily にスキャナー実行記録を insert する。
+
+    Args:
+        run_date:  "YYYY-MM-DD"
+        status:    "ok" | "partial" | "error"
+    """
+    try:
+        record: dict = {
+            "run_date":      run_date,
+            "status":        status,
+            "seeds_scanned": seeds_scanned,
+            "hits_found":    hits_found,
+            "hits_saved":    hits_saved,
+            "error_count":   error_count,
+        }
+        if error_message:
+            record["error_message"] = error_message[:2000]
+        client.table(JOB_SCANNER).insert(record).execute()
+        return True
+    except Exception as exc:
+        logger.error("scanner ジョブ記録失敗: %s", exc)
         return False

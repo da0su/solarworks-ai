@@ -86,6 +86,35 @@ class SeedType:
 
 
 # ================================================================
+# eBay seed scanner クールダウン時間 (seed_type 別)
+# CERT_EXACT が最高頻度、YEAR_DENOM_GRADE が最低頻度
+# ================================================================
+
+class ScannerCadence:
+    """seed_type ごとの COOLDOWN 時間（時間）。
+    priority が高い seed ほど短い間隔で再スキャンする。
+    """
+    CERT_EXACT_HOURS        = 1    # CERT_EXACT → 1 時間
+    CERT_TITLE_HOURS        = 2    # CERT_TITLE → 2 時間
+    TITLE_NORMALIZED_HOURS  = 4    # TITLE_NORMALIZED → 4 時間
+    YEAR_DENOM_GRADE_HOURS  = 6    # YEAR_DENOM_GRADE → 6 時間
+
+    _MAP: dict[str, int] = {
+        "CERT_EXACT":       CERT_EXACT_HOURS,
+        "CERT_TITLE":       CERT_TITLE_HOURS,
+        "TITLE_NORMALIZED": TITLE_NORMALIZED_HOURS,
+        "YEAR_DENOM_GRADE": YEAR_DENOM_GRADE_HOURS,
+    }
+
+    @classmethod
+    def cooldown_hours(cls, seed_type: str) -> int:
+        """seed_type に対応するクールダウン時間（時間）を返す。
+        未知の seed_type は最大値 YEAR_DENOM_GRADE_HOURS を返す。
+        """
+        return cls._MAP.get(seed_type, cls.YEAR_DENOM_GRADE_HOURS)
+
+
+# ================================================================
 # 候補レベル（Level A のみ仕入れ対象）
 # ================================================================
 
@@ -354,6 +383,7 @@ class Table:
     EBAY_LISTING_SNAPSHOTS   = "ebay_listing_snapshots"
     EBAY_SEED_HITS           = "ebay_seed_hits"
     JOB_EBAY_INGEST          = "job_ebay_ingest_daily"
+    JOB_EBAY_SCANNER         = "job_ebay_scanner_daily"
 
     # Phase 6
     GLOBAL_AUCTION_EVENTS    = "global_auction_events"
