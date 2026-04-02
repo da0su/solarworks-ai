@@ -29,6 +29,8 @@ cron / Supabase pg_cron）向けの設定情報を一覧する。
  12. cap_audit_daily       -- 毎日 09:30 JST  (Day 8 実装済み)
  13. pricing_engine_daily  -- 毎日 11:00 JST  (Day 9 実装済み)
  14. keep_watch_runner     -- */10 分ごと     (Day 9 実装済み)
+ 15. morning_brief         -- 毎日 08:00 JST  (Day 10 実装済み)
+ 16. notion_sync_daily     -- 毎日 11:30 JST  (Day 10 実装済み)
 """
 
 from __future__ import annotations
@@ -246,16 +248,31 @@ JOBS: list[JobDef] = [
     ),
 
     # ----------------------------------------------------------------
-    # Day 10: 朝次 Slack 通知 (未実装)
+    # Day 10: 朝ブリーフ Slack 通知 (Day 10 実装済み)
+    # KPI サマリーを毎朝 Slack に送信
     # ----------------------------------------------------------------
     JobDef(
         job_id          = "morning_brief",
-        description     = "毎朝8時: 前日の候補サマリーを Slack に送信",
-        script          = "slack_notifier.py",  # Day 10 実装予定
-        cron_schedule   = "0 8 * * *",
-        cli_command     = "slack-brief",
+        description     = "毎朝8時: KPI サマリーを Slack #ceo-room に送信",
+        script          = "slack_notifier.py",
+        cron_schedule   = "0 8 * * *",           # 毎日 08:00 JST
+        cli_command     = "slack-notify",
         implemented_day = 10,
-        args            = ["--type", "morning_brief"],
+        args            = ["morning-brief"],
+    ),
+
+    # ----------------------------------------------------------------
+    # Day 10: Notion 台帳同期 (Day 10 実装済み)
+    # daily_candidates + watchlist を Notion へ一方向同期
+    # ----------------------------------------------------------------
+    JobDef(
+        job_id          = "notion_sync_daily",
+        description     = "毎日 11:30: Notion 候補台帳・KEEP監視台帳を同期",
+        script          = "notion_sync.py",
+        cron_schedule   = "30 11 * * *",          # 毎日 11:30 JST (pricing 後)
+        cli_command     = "notion-sync",
+        implemented_day = 10,
+        args            = ["--limit", "100"],
     ),
 ]
 

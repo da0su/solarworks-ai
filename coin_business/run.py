@@ -479,6 +479,43 @@ def cmd_keep_watch():
     watch_main()
 
 
+def cmd_slack_notify():
+    """Slack 通知を送信する (Day 10)。
+    使い方:
+        python run.py slack-notify morning-brief        # 朝ブリーフ
+        python run.py slack-notify morning-brief --dry-run
+        python run.py slack-notify ending-soon --dry-run
+        python run.py slack-notify bid-ready   --dry-run
+    """
+    from scripts.slack_notifier import main as notifier_main
+    notifier_main()
+
+
+def cmd_notion_sync():
+    """Notion 台帳へ候補/watchlist を一方向同期する (Day 10)。
+    使い方:
+        python run.py notion-sync                       # 全同期
+        python run.py notion-sync --dry-run             # 書かずに確認のみ
+        python run.py notion-sync --candidates-only     # 候補台帳のみ
+        python run.py notion-sync --watchlist-only      # KEEP監視台帳のみ
+        python run.py notion-sync --limit 50
+    """
+    from scripts.notion_sync import main as notion_main
+    notion_main()
+
+
+def cmd_dashboard():
+    """ターミナル向けダッシュボードを表示する (Day 10)。
+    使い方:
+        python run.py dashboard                         # フル表示
+        python run.py dashboard --kpi-only              # KPI のみ
+        python run.py dashboard --candidates --limit 20
+        python run.py dashboard --watchlist
+    """
+    from scripts.dashboard import main as dashboard_main
+    dashboard_main()
+
+
 def cmd_count():
     """全テーブル件数表示"""
     from scripts.supabase_client import get_client
@@ -561,6 +598,9 @@ COMMANDS = {
     "cap-audit":       cmd_cap_audit,       # Level A audit gate → daily_candidates 昇格 (Day 8)
     "run-pricing":     cmd_run_pricing,     # AUDIT_PASS 候補に pricing 計算 (Day 9)
     "keep-watch":      cmd_keep_watch,      # KEEP watchlist 更新 (Day 9)
+    "slack-notify":    cmd_slack_notify,    # Slack 通知送信 (Day 10)
+    "notion-sync":     cmd_notion_sync,     # Notion 台帳一方向同期 (Day 10)
+    "dashboard":       cmd_dashboard,       # ターミナル Dashboard 表示 (Day 10)
     "calc-ref":        cmd_calc_ref,        # 仕入上限再計算
     "collect": cmd_collect,
     "analyze": cmd_analyze,
