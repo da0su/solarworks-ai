@@ -1,0 +1,174 @@
+{
+  "version": "1.0",
+  "created_at": "2026-04-04T14:47:12.701972+00:00",
+  "last_updated_at": "2026-04-04T14:47:12.701972+00:00",
+  "columns": [
+    "TODO",
+    "WORKING",
+    "BLOCKED",
+    "DONE"
+  ],
+  "items": [
+    {
+      "id": "IMP-001",
+      "title": "last_tsバグ修正 - botメッセージでlast_tsを汚染しない",
+      "description": "slack_realtime_poller.py のno-new-messagesブランチでlast_tsを更新しない修正",
+      "status": "DONE",
+      "owner": "cap",
+      "priority": "P0",
+      "due_at": "2026-04-04",
+      "done_at": "2026-04-04T14:47:12.701972+00:00",
+      "next_action": null,
+      "tags": [
+        "slack",
+        "poller",
+        "bugfix"
+      ]
+    },
+    {
+      "id": "IMP-002",
+      "title": "Socket Mode移行 - xapp-トークン設定待ち",
+      "description": "SLACK_APP_TOKEN(xapp-1-...)をCEOが.envに設定後、slack_socket_poller.pyを起動",
+      "status": "BLOCKED",
+      "owner": "ceo",
+      "priority": "P1",
+      "due_at": null,
+      "done_at": null,
+      "next_action": "1. https://api.slack.com/apps → Socket Mode有効化\n2. App-Level Tokens → Generate (scope: connections:write)\n3. .envにSLACK_APP_TOKEN=xapp-1-...追加\n4. python scripts/slack_socket_poller.py 起動",
+      "tags": [
+        "slack",
+        "monitoring",
+        "setup"
+      ]
+    },
+    {
+      "id": "IMP-003",
+      "title": "7件NMD→NEED_PRICE_UPDATE再振分",
+      "description": "eBay OK+rejected 7件をNEED_PRICE_UPDATE(価格根拠不足)に再分類",
+      "status": "DONE",
+      "owner": "cap",
+      "priority": "P0",
+      "due_at": "2026-04-04",
+      "done_at": "2026-04-04T14:47:12.701972+00:00",
+      "next_action": null,
+      "tags": [
+        "daily_candidates",
+        "judgment",
+        "ebay"
+      ]
+    },
+    {
+      "id": "IMP-004",
+      "title": "CEO判断187件→NEED_PRICE_UPDATE/priority_group化",
+      "description": "CEO判断Spink187件をNEED_PRICE_UPDATE+priority_group_1~3に分類。PG1(27件)はREADY_FOR_CEOに昇格",
+      "status": "DONE",
+      "owner": "cap",
+      "priority": "P0",
+      "due_at": "2026-04-04",
+      "done_at": "2026-04-04T14:47:12.701972+00:00",
+      "next_action": null,
+      "tags": [
+        "daily_candidates",
+        "judgment",
+        "spink",
+        "priority"
+      ]
+    },
+    {
+      "id": "IMP-005",
+      "title": "READY_FOR_CEO 27件のbuy_limit_jpy計算(Spinkプロキシ)",
+      "description": "priority_group_1 27件のexpected_sale_price_jpy=Spink見積プロキシ、buy_limit_jpy=利益計算式適用",
+      "status": "DONE",
+      "owner": "cap",
+      "priority": "P0",
+      "due_at": "2026-04-04",
+      "done_at": "2026-04-04T14:47:12.701972+00:00",
+      "next_action": "外部市場調査で各コインのYahoo相場を確認してexpected_sale_price_jpyを実データに更新",
+      "tags": [
+        "daily_candidates",
+        "pricing",
+        "ready_for_ceo"
+      ]
+    },
+    {
+      "id": "IMP-006",
+      "title": "priority_group_2 102件のbuy_limit_jpy計算",
+      "description": "Spink 500k-1M範囲102件のexpected_sale_price_jpy/buy_limit_jpy計算",
+      "status": "TODO",
+      "owner": "cap",
+      "priority": "P1",
+      "due_at": null,
+      "done_at": null,
+      "next_action": "市場調査または500k-1M Spink見積プロキシで計算後READY_FOR_CEOへ昇格",
+      "tags": [
+        "daily_candidates",
+        "pricing",
+        "spink"
+      ]
+    },
+    {
+      "id": "IMP-007",
+      "title": "REVIEW 319件のevidenceスコア付与・振分",
+      "description": "Spink 294件+Heritage 25件のREVIEW候補を適切なステータスに振分",
+      "status": "TODO",
+      "owner": "cap",
+      "priority": "P2",
+      "due_at": null,
+      "done_at": null,
+      "next_action": "各候補のevidenceを調査してNEED_PRICE_UPDATE/NEED_EVIDENCE/NGに振分",
+      "tags": [
+        "daily_candidates",
+        "judgment",
+        "heritage",
+        "spink"
+      ]
+    },
+    {
+      "id": "IMP-008",
+      "title": "dashboard.py CEO確認タブ実装",
+      "description": "READY_FOR_CEO候補をCEOが承認/NG判断できるStreamlit UIの追加",
+      "status": "TODO",
+      "owner": "cap",
+      "priority": "P1",
+      "due_at": null,
+      "done_at": null,
+      "next_action": "dashboard.py に「CEO確認」タブを追加。候補一覧・承認/NGボタン・NG理由入力",
+      "tags": [
+        "dashboard",
+        "ui",
+        "streamlit"
+      ]
+    },
+    {
+      "id": "IMP-009",
+      "title": "slack 300秒ポーラー暫定運用",
+      "description": "Socket Mode設定まで300秒間隔でconversations.historyをポーリング",
+      "status": "WORKING",
+      "owner": "cap",
+      "priority": "P1",
+      "due_at": null,
+      "done_at": null,
+      "next_action": "IMP-002(Socket Mode)完了後に廃止",
+      "tags": [
+        "slack",
+        "poller"
+      ]
+    },
+    {
+      "id": "IMP-010",
+      "title": "入札実績DBとダッシュボード",
+      "description": "bid_historyテーブル作成・入札実績の入力UI(dashboard.py)",
+      "status": "TODO",
+      "owner": "cap",
+      "priority": "P2",
+      "due_at": null,
+      "done_at": null,
+      "next_action": "CEO確認タブ(IMP-008)完了後に着手",
+      "tags": [
+        "dashboard",
+        "bid_history",
+        "streamlit"
+      ]
+    }
+  ]
+}

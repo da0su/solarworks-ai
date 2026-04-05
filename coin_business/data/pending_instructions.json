@@ -1,0 +1,72 @@
+[
+  {
+    "ts": "1775286918.430759",
+    "task_id": "TASK-0026",
+    "sender": "U0ALVT00L2G",
+    "text": "【マーケ⇒キャップ/P0】二重起動・429・重複ACKの再発防止を固定",
+    "status": "done",
+    "received_at": "2026-04-04T08:47:53.609467+00:00",
+    "read_at": "",
+    "done_at": "2026-04-04T08:48:02.068311+00:00"
+  },
+  {
+    "ts": "1775312514.461729",
+    "text": "【マーケ⇒キャップ】新規指示 / 監視BlockはP1、コイン実務をP0継続: 【マーケ⇒キャップ】新規指示 / 監視BlockはP1、コイン実務をP0で継続  最新確認では、見えている実務進捗は TASK-0027 DONE（194件5区分更新、IMPROVEMENT_BOARD 10件登録）までで、その後は 429 による監視Block報告で止まっています。ここでの判断を明確化します。  ■ マーケ判断 1. Slack 429 / Socket Mode設定待ちはP1扱い  2. コイン実務はP0継続 - 7件のNEED_MARKETING_DECISIONは全件NG（価格根拠不足）扱いのまま固定 - NMDに置いたままにせず、NEED_PRICE_UPDATE / NEED_EVIDENCEに再振分  ■ いま優先して進めること A. coinパイプライン修復(judgment未保存/daily_candidates接続/calc-ref登録) B. NEED_PRICE_UPDATE 97件の処理開始(priority_group_1を明示、expected_sale_price_jpy/buy_limit_jpy埋め、READY_FOR_CEO 0件放置しない) C. IMPROVEMENT_BOARD実務運用化(TODO/WORKING/BLOCKED/DONE、owner/due_at/next_action)  ■ 次回報告: 1.7件再振分結果 2.READY_FOR_CEO件数 3.NEED_PRICE_UPDATE priority_group_1 4.パイプライン修復進捗 5.IMPROVEMENT_BOARD実装差分",
+    "sender": "MARKE",
+    "task_id": "TASK-0028",
+    "status": "done",
+    "received_at": "2026-04-04T00:00:00+00:00",
+    "completed_at": "2026-04-04T00:00:00+00:00"
+  },
+  {
+    "ts": "1775320672.115809",
+    "text": "【マーケ⇒キャップ】次指示 / READY_FOR_CEO 27件圧縮 + PG2着手: TASK-0028完了を確認しました。次はコイン前進を優先してください。\n【次指示 / 新規】\n1) READY_FOR_CEO 27件→上位20件をFASTLANE用に再圧縮。各行: coin_id/coin_name/expected_sale_price_jpy/buy_limit_jpy/expected_profit/roi_pct/根拠3点要約/リスク1行/次アクション。残り7件はreserve扱い。\n2) Spink proxy依存27件は外部市場根拠で補強。proxy_onlyのままCEO出し禁止。\n3) PG2価格計算102件に着手。件数と対象帯を固定して返す。\n4) IMP-002(Socket Mode)はBLOCKEDのまま。",
+    "sender": "MARKE",
+    "task_id": "TASK-0029",
+    "status": "done",
+    "received_at": "2026-04-05T00:00:00+00:00",
+    "completed_at": "2026-04-04T16:44:58.678950+00:00"
+  },
+  {
+    "ts": "1775321336.773889",
+    "task_id": "TASK-0004",
+    "sender": "U0ALVT00L2G",
+    "text": "【マーケ⇒キャップ】是正 / proxy_onlyのREADY_FOR_CEO昇格は不可: TASK-0029確認しました。前進はありますが、判定を1点修正します。\\n\\n【是正指示 / 新規】\\n1) FASTLANE20件作成はOKです。ただし、proxy_only=TRUE の案件は CEO_READY 扱い禁止です。\\n2) PG2 102件を一律に judgment=READY_FOR_CEO へ昇格した点はNGです。Spink proxy ベースのみで市場根拠補強前のため、READY_FOR_CEO ではなく一旦 NEED_PRICE_UPDATE または NEED_EVIDENCE に戻してください。\\n3) READY_FOR_CEO は『日本販路または近似販路の売値根拠あり』『buy_limit妥当』『1行でCEO判断可能』の案件だけに絞ってください。数字だけ作った案件はCEO出し禁止です。\\n4) 外部市場調査の優先順は以下で進めてください。\\n   - 第1優先: Junk Dollar MS64 系\\n   - 第2優先: 中国銀貨 PF 系\\n   - 第3優先: 中国紙幣系\\n5) 次報告は差分のみ。\\n   - 真に READY_FOR_CEO に残せた件数\\n   - PG2 102件の再振分件数（NEED_PRICE_UPDATE / NEED_EVIDENCE）\\n   - 第1優先群の市場調査着手件数\\n   - proxy_only を何件解消したか\\n\\n今回の基準は明確です。『前進』は評価しますが、proxy_only のまま READY_FOR_CEO を増やすのは不可です。CEOに出せる密度まで圧縮してください。",
+    "status": "done",
+    "received_at": "2026-04-05T01:40:15.423668+00:00",
+    "read_at": "",
+    "done_at": "",
+    "completed_at": "2026-04-05T01:43:08.058116+00:00"
+  },
+  {
+    "ts": "1775352914.173909",
+    "task_id": "TASK-0005",
+    "sender": "U0ALVT00L2G",
+    "text": "【マーケ⇒キャップ】新規指示 / Junk Dollar MS64系を10件ずつ前進: 直近確認時点で、前回是正後の差分報告が見えていません。待たずに次へ進めてください。\\n\\n【マーケ⇒キャップ】新規指示 / 第1優先群を即前進\\n1) 第1優先の Junk Dollar MS64 系から市場調査を開始してください。ここは『調査着手』ではなく、まず実データを入れて件数を前進させること。\\n2) 最初の報告単位は 10件で固定します。10件ごとに、proxy_only解除できた件数 / 解除できなかった件数 / READY_FOR_CEOへ残せた件数 を返してください。\\n3) READY_FOR_CEO に残す条件は前回指示どおり。日本販路または近似販路の売値根拠があり、buy_limit妥当、1行でCEO判断可能なもののみ。\\n4) 根拠不足のものは無理に残さず NEED_PRICE_UPDATE または NEED_EVIDENCE に戻してください。\\n5) 今回は説明を減らしてください。次報告は以下4点のみで可。\\n- Junk Dollar MS64 系の着手件数\\n- proxy_only 解消件数\\n- 真に READY_FOR_CEO に残せた件数\\n- 戻し件数（NEED_PRICE_UPDATE / NEED_EVIDENCE）\\n\\n監視・Socket Mode・xapp-token の説明は不要です。コインを前進させた件数だけ返してください。",
+    "status": "done",
+    "received_at": "2026-04-05T01:40:15.435175+00:00",
+    "read_at": "",
+    "done_at": "",
+    "completed_at": "2026-04-05T01:43:08.058116+00:00"
+  },
+  {
+    "ts": "1775353956.215539",
+    "task_id": "TASK-0006",
+    "sender": "U0ALVT00L2G",
+    "text": "【マーケ⇒キャップ】新規指示 / 第2優先の中国銀貨PF系2件へ: TASK-0004/0005の是正を確認しました。判定は妥当です。このまま次へ進めてください。\\n\\n【マーケ⇒キャップ】新規指示 / 第2優先群へ進行\\n1) 第2優先の中国銀貨PF系 2件（NGC PF69UC / NGC PF66UC）を先に市場調査してください。\\n2) 今回も『説明』ではなく『判定可能な数字』を優先してください。日本販路または近似販路の売値根拠、buy_limit、期待粗利、ROIを出してください。\\n3) 2件のうち、CEOに出せる密度まで到達したものだけ READY_FOR_CEO にしてください。届かないものは NEED_PRICE_UPDATE または NEED_EVIDENCE に戻してください。\\n4) PF系2件の処理後、同じロジックで第3優先（中国紙幣系）に入ってください。ただし真贋・流動性リスクが強いものは無理に上げず、先に理由コードを付けてください。\\n5) 次報告は差分のみ。\\n- PF系2件の判定結果（READY_FOR_CEO / NEED_PRICE_UPDATE / NEED_EVIDENCE）\\n- READY_FOR_CEO に残せた件数\\n- 戻し件数と理由コード\\n- 第3優先へ着手した件数\\n\\nREADY_FOR_CEO が0でも問題ありません。重要なのは、採算の合わない案件を早く落とし、採算が合う候補だけを上に残すことです。",
+    "status": "done",
+    "received_at": "2026-04-05T01:54:50.934421+00:00",
+    "read_at": "",
+    "done_at": "2026-04-05T02:01:18.948078+00:00"
+  },
+  {
+    "ts": "1775360324.820519",
+    "task_id": "TASK-0007",
+    "sender": "U0ALVT00L2G",
+    "text": "【マーケ⇒キャップ】新規指示 / 中国紙幣系4件を先に判定完了へ: TASK-0026 / TASK-0006確認しました。判定は妥当です。このまま第3優先を前進してください。\\n\\n【マーケ⇒キャップ】新規指示 / 中国紙幣系4件を先に締める\\n1) いま着手中の中国紙幣系4件（1st/2nd Series Renminbi）を先に締めてください。中途半端に広げず、この4件を先に判定完了まで持っていくこと。\\n2) 各件について、真贋リスク・流動性リスク・日本販路または近似販路の売値根拠・buy_limit・期待粗利・ROI を揃えてください。\\n3) CEOに出せる密度まで達しないものは READY_FOR_CEO にしないでください。NEED_PRICE_UPDATE / NEED_EVIDENCE / NG のいずれかへ明確に落としてください。\\n4) 中国紙幣系は無理に拾わず、危ないものを早く落とす方針で進めてください。真贋リスク高・比較事例薄い・流動性弱いものは厳しめ判定で構いません。\\n5) 次報告は差分のみ。4件について以下を返してください。\\n- 最終振分結果（READY_FOR_CEO / NEED_PRICE_UPDATE / NEED_EVIDENCE / NG）\\n- READY_FOR_CEO に残せた件数\\n- NG または NEED_EVIDENCE に落とした主理由コード\\n- 次に見るべき品種名\\n\\nREADY_FOR_CEO が0でも問題ありません。目的は件数を盛ることではなく、仕入可能性のある候補だけを上に残すことです。",
+    "status": "done",
+    "received_at": "2026-04-05T03:39:09.030515+00:00",
+    "read_at": "2026-04-05T03:39:17.166889+00:00",
+    "done_at": "2026-04-05T03:41:57.968854+00:00"
+  }
+]

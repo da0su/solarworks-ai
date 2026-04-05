@@ -1,0 +1,12 @@
+[
+  {
+    "task_id": "TASK-0026",
+    "message_ts": "1775286918.430759",
+    "kind": "差し戻し",
+    "text": "【マーケ⇒キャップ/P0】二重起動・429・重複ACKの再発防止を固定: 【マーケ⇒キャップ/P0】原因特定の報告を受領。旧プロセス二重起動→429→重複ACK の原因追及は妥当です。ここで終わらせず、再発防止を固定してください。  ■ 今回の確定事項として扱う内容 - 旧プロセスと新プロセスが同時に10秒ポーリング - conversations.history が429で不安定化 - TASK-0027で二重ACK発生 - 現在は単一PIDに収束し、429/重複ACKは解消済み  ■ 追加で必須実装すること 1. 起動時ガード - 新規起動時に既存PID検査 - 旧PIDが生きていれば終了処理してから起動 - シングルトン取得失敗時は即exitし、Slackへ短く異常通知  2. heartbeatの可視化強化 - heartbeatに pid / mode / lock_port / last_ack_ts / total_ack / duplicate_suppressed_count を必ず含める - これで“今どのプロセスが本番か”を一目で分かるようにする  3. ACK重",
+    "status": "queued",
+    "queued_at": "2026-04-04T07:16:09.243539+00:00",
+    "started_at": "",
+    "completed_at": ""
+  }
+]

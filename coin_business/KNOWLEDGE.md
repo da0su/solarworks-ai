@@ -1,5 +1,23 @@
 # coin_business 実装ナレッジ完全版
-**最終更新: 2026-03-30** （正式UI決定 + 4カラム追加完了）
+**最終更新: 2026-04-04** （CHG-034: Slack窓口・スプシURL・報告プロトコル追加）
+
+---
+
+## 0-B. 運用窓口・正本一覧（2026-04-04 確定）
+
+| 役割 | 場所 | 説明 |
+|---|---|---|
+| **Slack正式窓口** | `#coin-cap-marke` (C0AMLJU2GRW) | 依頼・報告・差し戻しはここ |
+| **現況管理スプシ** | https://docs.google.com/spreadsheets/d/1GcgmMAJ97ALU6_uWlN6JN3AvNJjRUzMZ4YxsAGTtRiE/edit | マーケ正式台帳（MARKETING_REVIEW/INVESTIGATION/OBSERVATION） |
+| **キャップ作成スプシ** | https://docs.google.com/spreadsheets/d/1AcMr2bolPbuVZSmAxQEfUw5vy7DHLc97rSlUQqJrMgA/edit | キャップ作業用（参考） |
+| **相場レビューHTML** | https://sgitwndpyxzsslyyvpyn.supabase.co/storage/v1/object/public/coin-web/mkt_review_11.html | CEO用外部公開ページ（v11） |
+| **ナレッジ正本** | `coin_business/KNOWLEDGE.md` | ルール・設計・計算式 |
+
+### Slack報告プロトコル
+- セッション開始時: `python scripts/check_coin_channel.py` で未読確認
+- 業務完了時: `from scripts.report_to_marke import report_done` で必ず報告
+- 滞留時: `report_blocked()` でCEO escalation条件に合致する場合のみCEOへ
+- 報告5点必須: 実施内容 / 変更箇所 / 結果 / 証跡 / 残課題
 
 ---
 
@@ -150,6 +168,75 @@ ref2_buy_limit_jpy = int((yahoo_recent_price * 0.90 * 0.85 - 2750) / 1.10)
 - 件数 / 平均価格 / 中央価格 / 最高価格 / 10万超件数 / 30万超件数
 
 `market_stats.py` に `--time` フラグで実装済み。
+
+---
+
+## 4-B. CAP判断固定ルール（2026-04-03 CEO/CAO確定）
+
+### ルール1: GSA Hoard / 非GSA は別商品扱い
+```
+Morgan Dollar（カーソンシティ等）の比較において:
+- GSA Hoard (NGC)    = GSA封筒・BOX付き、日本市場プレミアム大
+- 非GSA (PCGS/NGC)   = 通常グレードコイン、日本市場プレミアムなし
+同グレードでも期待売価が ¥50,000-60,000 異なる場合がある。
+→ GSA参照で計算した buy_limit に 非GSA eBay出品を当てはめてはならない
+→ 混在比較は一律 comparison_type=NONE / cap_judgment=CAP_NG
+```
+
+### ルール2: 金スポット高騰局面のゴールド系抑制
+```
+金スポット > $2,700/oz の場合:
+- ゴールドコイン全般を原則 CAP_NG とする
+- buy_limit 計算は行うが、eBay価格との差額を必ず明記
+- 例外: $50 以上の価格乖離がなければ WATCH として残す
+
+再評価トリガー:
+- 金スポットが $2,600/oz を下回った週にゴールド系再スキャン
+```
+
+### ルール3: シルバー系は売価天井を先に確認
+```
+処理順序を逆転させる:
+1. 先に market_transactions から直近3か月の Japan 売価中央値を確認
+2. calc_profit(sell_jpy) で buy_limit を計算
+3. buy_limit > 0 かつ profit >= 20,000 の場合のみ eBay検索に進む
+
+売価天井確認なしでeBay価格から計算を始めてはならない。
+→ シルバー系での無駄スキャンを防ぐ
+```
+
+### ルール4: ニアミス案件の扱い
+```
+ニアミスの定義: eBay価格が buy_limit の +5% 以内 (例: $560 → $588 まで)
+
+ニアミス案件の処理:
+- ceo_review_log に marketing_status=OBSERVATION で登録
+- review_bucket を CHG番号で明示
+- cap_comment に「NEAR-MISS」を冠し、具体的な差額を記録
+- 製品差（GSA/非GSA、PF/MS等）がある場合は比較無効として CAP_NG
+- CEO確認タブには上げない（BUY候補ではない）
+- 次回再評価トリガーを cap_comment に明記
+
+ニアミス案件の再活用:
+- 次回スキャン時に同銘柄が buy_limit 以下で出た場合、前回のニアミス記録を参照
+- 価格変動の追跡として活用
+```
+
+### ルール5: NO BUY 周期の報告テンプレート
+```
+BUY候補が0件の場合、以下の5項目で報告する:
+
+1. 本日のBUY候補数: 0件
+2. NO BUYの主因:
+   - 市場要因 (金スポット高騰など)
+   - 比較要因 (参照データなし/製品差)
+   - 製品差要因 (GSA/非GSA、PF/MS混在)
+3. ニアミス案件数: N件 (銘柄名・差額を列挙)
+4. 再評価トリガー: (具体的な条件)
+5. 次回監視対象: (銘柄・会場・価格閾値)
+
+「NO BUY」で終わらせず、次回の起点を必ず残す。
+```
 
 ---
 
@@ -681,4 +768,163 @@ CEO確認ロジックを変更する際は以下を必ず確認すること。
 | 管理番号未登録のまま承認可能にする | Yahoo履歴・画像・基準価格が取得できない |
 | 選定理由なしでCEO確認に上げる | 判断根拠がなく承認/NGができない |
 | 紙幣・債券をCEO確認に表示する | 当社は硬貨・記念メダルのみ扱う |
+
+---
+
+## 18. daily_scan.py 3段階パイプライン（2026-04-03 CEO指示実装）
+
+**最終更新: 2026-04-03** (CHG-019 〜 CHG-022)
+
+### アーキテクチャ
+
+```
+daily_scan.py 実行フロー（3段階）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+【第1段階: 市場取得】
+  STEP1: eBay 6バケット取得 (limit_per_bucket=200, auction_only=True)
+         ROUND1_BUCKETS: NGC/PCGS × gold/silver/platinum = 6本
+         → 目標300件以上 (実測: 347件)
+  STEP2: 除外フィルタ + パース (EXCLUDE_KW, 発送元US/GB, NGC/PCGS確認)
+         → 実測: 180件残
+
+【第2段階: スコープ判定】scope_filter_stage2()
+  - DB完全一致なしでは落とさない
+  - Gold: $5/$10 Eagle (超小型分数) のみ除外 → 残り全通過
+  - Silver: $50 Eagle=grade65+ / HIGH_VALUE_SILVER_COMBOS-4pt緩め / UNKNOWN=grade63+ / その他=grade60+
+  - Platinum: 全通過
+  - 目標: 120〜180件 (実測: 96件 / eBay API制限が律速)
+
+【第3段階: スコアリング】score_and_tier_stage3()
+  - DB照合 (ROUND1完全一致 / ROUND2 year_delta・grade_delta)
+  - 100点満点 4軸スコア (CEO設計)
+  - 上位100件返却 → Top20/50/100 に振り分け
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### 4軸スコアリング（CEO設計、100点満点）
+
+| 軸 | 関数 | 範囲 | 基準 |
+|---|---|---|---|
+| 利益見込み | score_profit_axis() | 0-40 | ≥¥70k=40 / ≥¥50k=34 / ≥¥30k=28 / ≥¥20k=22 / >0=10 / 0=0 / なし=5 |
+| DB類似 | score_db_axis() | 0-30 | R1完全一致=30 / R2近傍=18 / なし=0 |
+| 入札数 | score_bids_axis() | 0-20 | ≥21=20 / ≥11=16 / ≥6=12 / ≥3=8 / ≥1=5 / 0=2 |
+| ヤフ参照価格 | score_yahoo_ref_axis() | 0-10 | ≥¥500k=10 / ≥¥300k=8 / ≥¥200k=6 / ≥¥100k=4 |
+
+### 固定語彙
+
+| 軸 | 語彙 |
+|---|---|
+| 利益見込み | 2万円以上可 / 薄利 / 2万円未満 / 赤字懸念 / 算定保留 |
+| DB類似 | あり / 近傍のみ / なし |
+
+### 実行コマンド
+
+```bash
+cd coin_business
+python scripts/daily_scan.py                # デフォルト: --limit 200 --days 7
+python scripts/daily_scan.py --limit 200    # 明示指定
+python scripts/daily_scan.py --no-auction   # Auction限定を外す（補助調査）
+```
+
+### 出力ファイル（4提出物）
+
+| ファイル | 内容 |
+|---|---|
+| `docs/daily_scan/YYYYMMDD_A_summary.md` | 日次サマリ + 3段階内訳 + Top100未達時詳細 |
+| `docs/daily_scan/YYYYMMDD_B_bid_candidates.md` | 入札候補 (PASS/HOLD) |
+| `docs/daily_scan/YYYYMMDD_C_notable.md` | 注目候補 Top20/50/100 表形式 |
+| `docs/daily_scan/YYYYMMDD_D_watch.md` | WATCH一覧 |
+
+### DB状況と影響
+
+| テーブル | 件数 | daily_scan.py での使用 |
+|---|---|---|
+| market_transactions | 24,961件 | ❌ 直接不使用 (staging経由) |
+| yahoo_sold_lots_staging | 6,349件 | ✅ ROUND1/ROUND2照合に使用 |
+| coin_slab_data | 2,927件 | ❌ 未接続（English slab text） |
+
+**DB照合率0%の根本原因（2026-04-03時点）:**
+1. yahoo_sold_lots_staging が 6,349件しかない（market_transactions 24,961件の25%）
+2. staging の conf=0.65 (denomination=UNKNOWN) は CONF_MIN=0.7 で除外
+3. Morgan Dollar / Half Eagle 等の典型米国コインが JP_DENOM に未登録 → denomination=UNKNOWN → 照合不可
+
+**DB照合回復のためのアクション:**
+- `yahoo_sold_sync.py` で市場_transactions → staging への同期（目標: 23,949件追加）
+- JP_DENOM に Morgan Dollar / Peace Dollar / Walking Liberty / Half Eagle / Franklin Half 追加
+- coin_slab_data (English) を score_and_tier_stage3() の二次参照として接続
+
+### CEO確認台帳 2システム設計（CHG-022 / 2026-04-03 CEO指示）
+
+#### 設計原則
+```
+母集団DB (Read-Only 永続固定)          運用DB / CEO確認台帳 (別管理領域)
+─────────────────────────────       ─────────────────────────────────
+market_transactions (24,961件)   →   ceo_review_log (Top20/50/100/BID)
+yahoo_sold_lots_staging (6,349件)     bid_history (入札実績)
+                                      ↑ ヤフオク履歴DBとは完全分離
+```
+- Yahoo歴史DBは **完全Read-Only** で固定。UPDATE/DELETE/INSERT一切禁止
+- CEO確認・重複排除・OK/NG学習はすべて ceo_review_log に蓄積
+
+#### 7日重複禁止条項（DEDUP_DAYS=7）
+同一 eBay item_id を7日以内に重複提出禁止。再提出は以下の条件のみ許可:
+| resubmit_reason | 条件 |
+|---|---|
+| price_drop_10pct | 前回比10%以上下落 |
+| bids_plus_5 | 入札数+5以上増加 |
+| ending_24h | 終了まで24時間以内 |
+| ceo_hold_recheck | CEO が HOLD と判断した案件 |
+| cap_manual_resubmit | Cap が理由付きで再提出価値ありと判断 |
+
+#### ceo_review_log テーブル（Migration 029 — 028を置換）
+```sql
+-- migrations/029_ceo_review_log_v2.sql (Supabase SQL Editorで手動実行が必要)
+-- ※migration 028 は未適用のためスキップ。029 のみ適用。
+主要カラム:
+  marketplace, item_id, url                    -- 候補識別
+  title_snapshot, cert_company, cert_number,   -- コイン属性スナップショット
+  grade, country, year, denomination, material
+  bid_count_snapshot, price_snapshot_usd/jpy
+  yahoo_ref_price, profit_estimate, db_similarity, db_ref_id, snapshot_score
+  scan_date, review_bucket                     -- Top20/50/100/BID/WATCH
+  first_seen_at, submitted_to_ceo_at, submit_count
+  duplicate_status (NEW/DUPLICATE_BLOCKED/RESUBMITTED)
+  resubmit_reason
+  ceo_decision (OK/NG/HOLD), reason_code, reason_text, reviewed_at
+
+reason_code: PRICE_TOO_HIGH / PROFIT_TOO_LOW / DB_NO_MATCH / TYPE_MISMATCH /
+             SIZE_MISMATCH / CERT_NEEDS_CHECK / TOO_HOT_BIDDING /
+             NOT_INTERESTING / WATCH_ONLY / NEED_MORE_EVIDENCE
+
+CEO判断別再提出ルール:
+  OK   → 同一案件の再提出禁止。入札進行管理へ移す
+  NG   → 原則30日再提出禁止。価格急落・重大更新のみ例外
+  HOLD → 再提出可。「何が変わったか」を resubmit_reason に必ず記録
+```
+
+#### daily_scan.py デデュプ実装（CHG-022）
+新規関数:
+- `load_recent_submissions(days=7)` — ceo_review_log 直近7日提出済みを辞書で取得（テーブル未作成時は空dict）
+- `check_resubmit_reason(ep, item, prev)` — 再提出条件判定。None=ブロック
+- `dedup_filter(scored_items, recent_submissions)` — NEW/RESUBMITTED/DUPLICATE_BLOCKED に分類
+- `save_ceo_review_entries(...)` — Top20/50/100/BID を upsert（on_conflict=marketplace+item_id+scan_date）
+
+STEP3-B: CEO確認台帳 照会 (直近7日重複チェック)
+STEP6-C: 重複除外フィルタ → NEW/再提出許可/ブロック 件数サマリ出力
+
+定数: DEDUP_DAYS=7 / PRICE_DROP_THRESH=0.10 / BIDS_PLUS_THRESH=5 / ENDING_HOURS_THRESH=24.0
+
+#### 日次サマリ必須出力項目
+```
+直近7日提出済み: N件
+NEW:            N件
+再提出許可:      N件
+重複ブロック:    N件
+────────────────────
+Top20 / Top50 / Top100 / 入札候補 / WATCH
+🚫 重複ブロック / 🔄 再提出許可
+📋 ceo_review_log: N件 保存 (or テーブル未作成時スキップ)
+```
+
+※ **migration 029 のSupabase適用はCap手動実施が必要**（SQL Editor で実行）
 | 既存相場DBカード・ref1/ref2ロジックを変更する | CEO確定ロジック、変更不可 |

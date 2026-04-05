@@ -562,11 +562,56 @@ def cmd_report():
         print(f"レポート生成完了: {filepath}")
 
 
+def cmd_daily_scan():
+    """daily_scan.py を実行して eBay スキャン + ceo_review_log 保存。"""
+    from scripts.daily_scan import run_phase_a
+    run_phase_a()
+
+
+def cmd_world_scan():
+    """world_auction_scan.py を実行して世界オークション投入。"""
+    from scripts.world_auction_scan import run_world_scan
+    run_world_scan(verbose=True)
+
+
+def cmd_yield_report():
+    """会場別歩留まりレポートを表示。"""
+    import argparse
+    from scripts.venue_yield_report import run_yield_report
+    # sys.argv から --date / --all-time を取得
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--date", default=None)
+    p.add_argument("--all-time", action="store_true")
+    known, _ = p.parse_known_args()
+    run_yield_report(scan_date=known.date, all_time=known.all_time, verbose=True)
+
+
 def cmd_all():
     logger.info("=== 一括実行開始 ===")
     cmd_collect()
     cmd_report()
     logger.info("=== 一括実行完了 ===")
+
+
+def cmd_cap_enrichment():
+    """CAP分析: Yahoo照合+利益計算+CAP判定→ceo_review_log更新。"""
+    import argparse
+    from scripts.cap_enrichment import run_cap_enrichment
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--source", default="EBAY")
+    p.add_argument("--bucket", default="Top20")
+    p.add_argument("--id", default=None)
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--no-dry-run", dest="dry_run", action="store_false")
+    p.set_defaults(dry_run=True)
+    known, _ = p.parse_known_args()
+    run_cap_enrichment(
+        source=known.source,
+        bucket=known.bucket,
+        dry_run=known.dry_run,
+        item_id=known.id,
+        verbose=True,
+    )
 
 
 # ============================================================
@@ -606,6 +651,10 @@ COMMANDS = {
     "analyze": cmd_analyze,
     "report": cmd_report,
     "all": cmd_all,
+    "daily-scan":      cmd_daily_scan,    # eBay日次スキャン → ceo_review_log保存
+    "world-scan":      cmd_world_scan,    # 世界オークション投入
+    "yield-report":    cmd_yield_report,  # 会場別歩留まりレポート
+    "cap-enrichment":  cmd_cap_enrichment, # CAP分析: Yahoo照合+利益計算+CAP判定
 }
 
 

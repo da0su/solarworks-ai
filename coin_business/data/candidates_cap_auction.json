@@ -1,0 +1,197 @@
+{
+  "bin": [],
+  "auction": [
+    {
+      "type": "AUCTION",
+      "key": "2017--eagle-NGC-PF70",
+      "ebay": {
+        "title": "2017-W $1 Silver Eagle PF70UC FDOI NGC 4540015-153 Jeppson Washington + Bonus",
+        "url": "https://www.ebay.com/itm/225900805581",
+        "price_usd": 199.95,
+        "shipping_usd": 0,
+        "is_auction": true,
+        "bid_count": 0,
+        "time_left": ""
+      },
+      "cand": {
+        "title": "【スミソニアン協会】 金貨 Private Issue Struck 2017 1/2oz　Liberty Eagle NGC PF70UC",
+        "price": 391000,
+        "date": "2026-02-08",
+        "url": "https://page.auctions.yahoo.co.jp/jp/auction/f1218200853",
+        "year": 2017,
+        "mint": "",
+        "series": "eagle",
+        "grader": "NGC",
+        "grade": "PF70",
+        "grade_type": "PF",
+        "key": "2017--eagle-NGC-PF70",
+        "ebay_query": "2017 eagle NGC PF70"
+      },
+      "max_bid_usd": 1640.32,
+      "current_price_usd": 199.95,
+      "bid_count": 0,
+      "time_left": "",
+      "yahoo_median": 391000
+    },
+    {
+      "type": "AUCTION",
+      "key": "2017--eagle-NGC-PF70",
+      "ebay": {
+        "title": "2017 S $1 Limited Edition Set 1 Oz Silver American Eagle Proof NGC PF70 UC ER",
+        "url": "https://www.ebay.com/itm/188028692548",
+        "price_usd": 199.99,
+        "shipping_usd": 0,
+        "is_auction": true,
+        "bid_count": 0,
+        "time_left": ""
+      },
+      "cand": {
+        "title": "【スミソニアン協会】 金貨 Private Issue Struck 2017 1/2oz　Liberty Eagle NGC PF70UC",
+        "price": 391000,
+        "date": "2026-02-08",
+        "url": "https://page.auctions.yahoo.co.jp/jp/auction/f1218200853",
+        "year": 2017,
+        "mint": "",
+        "series": "eagle",
+        "grader": "NGC",
+        "grade": "PF70",
+        "grade_type": "PF",
+        "key": "2017--eagle-NGC-PF70",
+        "ebay_query": "2017 eagle NGC PF70"
+      },
+      "max_bid_usd": 1640.32,
+      "current_price_usd": 199.99,
+      "bid_count": 0,
+      "time_left": "",
+      "yahoo_median": 391000
+    },
+    {
+      "type": "AUCTION",
+      "key": "2021--britannia-NGC-PF70",
+      "ebay": {
+        "title": "2021 2oz G.Britian $£5 BRITANNIA WITH LION NGC PF70 UC FIRST DAY OF ISSUE",
+        "url": "https://www.ebay.com/itm/125211968474",
+        "price_usd": 450,
+        "shipping_usd": 44.51,
+        "is_auction": true,
+        "bid_count": 0,
+        "time_left": ""
+      },
+      "cand": {
+        "title": "【最高鑑定・発行最初の25枚！・大型】★ブリタニアとライオン★2021 イギリス ５オンス 10ポンド 銀貨 NGC PF70 ULTRA CAMEO 資産保全",
+        "price": 149000,
+        "date": "2026-01-31",
+        "url": "https://page.auctions.yahoo.co.jp/jp/auction/r1172539998",
+        "year": 2021,
+        "mint": "",
+        "series": "britannia",
+        "grader": "NGC",
+        "grade": "PF70",
+        "grade_type": "PF",
+        "key": "2021--britannia-NGC-PF70",
+        "ebay_query": "2021 britannia NGC PF70"
+      },
+      "max_bid_usd": 615.47,
+      "current_price_usd": 450,
+      "bid_count": 0,
+      "time_left": "",
+      "yahoo_median": 149000
+    },
+    {
+      "type": "AUCTION",
+      "key": "2013--eagle-PCGS-MS70",
+      "ebay": {
+        "title": "2013 (W) SILVER EAGLE NGC MS70 ER MAC FINEST GRADE MAC SPOTLESS .",
+        "url": "https://www.ebay.com/itm/335908978627",
+        "price_usd": 119.94,
+        "shipping_usd": 0,
+        "is_auction": true,
+        "bid_count": 0,
+        "time_left": "1点"
+      },
+      "cand": {
+        "title": "【Gold Eagle】アメリカ 金貨 2013 5ドル PCGS MS70",
+        "price": 100000,
+        "date": "2026-01-25",
+        "url": "https://auctions.yahoo.co.jp/jp/auction/1216522288",
+        "year": 2013,
+        "mint": "",
+        "series": "eagle",
+        "grader": "PCGS",
+        "grade": "MS70",
+        "grade_type": "MS",
+        "key": "2013--eagle-PCGS-MS70",
+        "ebay_query": "2013 eagle PCGS MS70"
+      },
+      "max_bid_usd": 407.96,
+      "current_price_usd": 119.94,
+      "bid_count": 0,
+      "time_left": "1点",
+      "yahoo_median": 100000
+    },
+    {
+      "type": "AUCTION",
+      "key": "1993--eagle-NGC-PF69",
+      "ebay": {
+        "title": "1993-P $1 Silver American Eagle PF69UCAM NGC # 4513627-007 + Bonus",
+        "url": "https://www.ebay.com/itm/226131507597",
+        "price_usd": 149.95,
+        "shipping_usd": 0,
+        "is_auction": true,
+        "bid_count": 0,
+        "time_left": ""
+      },
+      "cand": {
+        "title": "★特価 銀地金価格以下！★ 1993年 オーストラリア カワセミ 10ドル 10オンス 銀貨 アメリカンイーグル NGC PF69 UC 限定500枚",
+        "price": 180000,
+        "date": "2026-01-17",
+        "url": "https://page.auctions.yahoo.co.jp/jp/auction/n1216061945",
+        "year": 1993,
+        "mint": "",
+        "series": "eagle",
+        "grader": "NGC",
+        "grade": "PF69",
+        "grade_type": "PF",
+        "key": "1993--eagle-NGC-PF69",
+        "ebay_query": "1993 eagle NGC PF69"
+      },
+      "max_bid_usd": 746.75,
+      "current_price_usd": 149.95,
+      "bid_count": 0,
+      "time_left": "",
+      "yahoo_median": 180000
+    },
+    {
+      "type": "AUCTION",
+      "key": "1993--eagle-NGC-PF69",
+      "ebay": {
+        "title": "1993-P $1 Silver American Eagle PF69DCAM ANACS # 7668239 + Bonus",
+        "url": "https://www.ebay.com/itm/375525794010",
+        "price_usd": 139.95,
+        "shipping_usd": 0,
+        "is_auction": true,
+        "bid_count": 0,
+        "time_left": ""
+      },
+      "cand": {
+        "title": "★特価 銀地金価格以下！★ 1993年 オーストラリア カワセミ 10ドル 10オンス 銀貨 アメリカンイーグル NGC PF69 UC 限定500枚",
+        "price": 180000,
+        "date": "2026-01-17",
+        "url": "https://page.auctions.yahoo.co.jp/jp/auction/n1216061945",
+        "year": 1993,
+        "mint": "",
+        "series": "eagle",
+        "grader": "NGC",
+        "grade": "PF69",
+        "grade_type": "PF",
+        "key": "1993--eagle-NGC-PF69",
+        "ebay_query": "1993 eagle NGC PF69"
+      },
+      "max_bid_usd": 746.75,
+      "current_price_usd": 139.95,
+      "bid_count": 0,
+      "time_left": "",
+      "yahoo_median": 180000
+    }
+  ]
+}

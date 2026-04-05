@@ -53,20 +53,28 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
-REQUEST_DELAY  = 2.5   # 秒
-MAX_PAGES      = 5     # 1オークション最大ページ数
-LOTS_PER_PAGE  = 100   # Heritage 1ページ最大件数
-USD_JPY_RATE   = 150.0 # 暫定為替レート（fetch_daily_rates.py で更新予定）
+REQUEST_DELAY      = 2.0   # 秒
+MAX_PAGES          = 10    # 1オークション最大ページ数 (Heritageは25件/page → 10p=250件)
+LOTS_PER_PAGE      = 25    # Heritage実測値: auction_name+atype形式は25件/page固定
+LOTS_PER_PAGE_REQ  = 25    # リクエスト時の Nrpp 値
+USD_JPY_RATE       = 150.0 # 暫定為替レート（fetch_daily_rates.py で更新予定）
 
 # Heritage のロット検索エンドポイント（catalog mode）
 HERITAGE_SEARCH_BASE = "https://coins.ha.com/c/search/results.zx"
 
-# 検索パラメータ（アーカイブではなく現在出品）
+# 検索パラメータ（現在出品 / World Coins 専用）
+# 変更履歴: CHG-027 2026-04-03
+#   旧 N=790+231+4294967251 + type=surl-XXXXX →
+#       JS描画ページ or Medals/Tokens/Nuggets アーカイブを返す（使用不可）
+#   新 mode=live + auction_name=XXXXX + type=atype →
+#       サーバーサイド描画で実際のオークションロット一覧を返す（確認済）
+#   確認: sale 61610 page1=Ancients (EXCLUDE_KWで除外) / page2〜=World Coins (NGC/PCGS含む)
 SEARCH_PARAMS_LIVE = {
-    "dept": "1909",          # World & Ancient Coins
-    "N":    "790+231+4294967251",  # カテゴリフィルタ
-    "ic3":  "1",
-    "Nrpp": str(LOTS_PER_PAGE),
+    "dept": "1909",              # World & Ancient Coins
+    "mode": "live",              # 現在出品中 (archiveではなく)
+    "type": "atype",             # サーバーサイド描画モード
+    "Nrpp": str(LOTS_PER_PAGE_REQ),  # 25件/page (Heritage固定値)
+    # auction_name は _fetch_page() で動的に設定
 }
 
 
@@ -118,13 +126,14 @@ def _extract_sale_no(auction: dict) -> Optional[str]:
 def _fetch_page(session: requests.Session, sale_no: str, page: int = 1) -> Optional[str]:
     """
     Heritage の1ページ分の HTML を取得。
+    【CHG-027】 mode=live&auction_name=XXXXX&type=atype 形式に変更。
     失敗時は None。
     """
     params = dict(SEARCH_PARAMS_LIVE)
-    params["type"] = f"surl-{sale_no}"
+    # auction_name=XXXXX で sale を指定 (type=surl-XXXXX は JS描画のため不使用)
+    params["auction_name"] = sale_no
     if page > 1:
-        params["Nrpp"] = str(LOTS_PER_PAGE)
-        params["No"]   = str((page - 1) * LOTS_PER_PAGE)
+        params["No"] = str((page - 1) * LOTS_PER_PAGE_REQ)
 
     try:
         resp = session.get(HERITAGE_SEARCH_BASE, params=params, timeout=20)
@@ -263,9 +272,9 @@ def _parse_html_lots(html: str, sale_no: str) -> list[dict]:
         re.IGNORECASE,
     )
 
-    # URL
+    # URL (coins.ha.com / historical.ha.com 両対応)
     url_pattern = re.compile(
-        r'href="(https://coins\.ha\.com/itm/[^"?]+(?:\?[^"]*)?)"',
+        r'href="(https://(?:coins|historical)\.ha\.com/itm/[^"?]+(?:\?[^"]*)?)"',
         re.IGNORECASE,
     )
 
@@ -301,10 +310,10 @@ def _parse_html_lots(html: str, sale_no: str) -> list[dict]:
             "current_price": price_usd,
         })
 
-    # ── fallback: URL+タイトルの単純抽出
+    # ── fallback: URL+タイトルの単純抽出 (coins/historical 両対応)
     if not lots:
         urls_and_titles = re.findall(
-            r'href="(https://coins\.ha\.com/itm/[^"]+)"[^>]*>[^<]*<[^>]+>([^<]{10,120})<',
+            r'href="(https://(?:coins|historical)\.ha\.com/itm/[^"]+)"[^>]*>[^<]*<[^>]+>([^<]{10,120})<',
             html,
         )
         for url, title in urls_and_titles[:50]:
@@ -454,9 +463,9 @@ def fetch_heritage_lots(
                 raw_lots.extend(html_lots)
                 logger.debug(f"    page {page}: HTML {len(html_lots)}件")
 
-            # 最終ページ判定（取得件数が LOTS_PER_PAGE 未満 = 最終ページ）
+            # 最終ページ判定（取得件数が LOTS_PER_PAGE_REQ 未満 = 最終ページ）
             page_count = len(json_lots or html_lots)
-            if page_count < LOTS_PER_PAGE:
+            if page_count < LOTS_PER_PAGE_REQ:
                 break
 
             time.sleep(REQUEST_DELAY)

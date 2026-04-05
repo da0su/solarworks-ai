@@ -1,0 +1,12 @@
+{
+  "stats": {
+    "success": 2787,
+    "html_fail": 147,
+    "no_next_data": 0,
+    "no_images": 0,
+    "dl_fail": 0,
+    "api_fail": 0
+  },
+  "total_processed": 2934,
+  "backup_count": 2934
+}

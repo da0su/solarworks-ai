@@ -1,0 +1,257 @@
+eBay仕入調査レポート
+生成日時: 2026-03-30 15:18:10
+USD/JPY: 161.0
+マッチ件数: 12
+============================================================
+
+=== 管理番号: 001147 ===
+DB: NGC | 1914A GERMANY 20M | MS 63
+仕入上限: USD832 (134,031円)
+DB参考ヤフオク価格: 195,000円
+
+[eBay出品]
+タイトル: 1914 A Prussia Germany Gold 20 Mark Coin NGC MS63 .2305AGW L24401
+出品価格: $1004.00 (161,644円) ※API価格。要ブラウザ確認
+入札: 14件
+URL: https://www.ebay.com/itm/236710306271?_skw=NGC+Gold&hash=item371d08a1df:g:QckAAeSwbzRpwyt7
+
+[ヤフオクライバル]
+出品中: 32,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/o1214520800
+直近落札: 110,880円 24件入札
+直近落札: 4,033円 26件入札
+直近落札: 7,600円 28件入札
+
+-> ライバルが32,800円で出品中。仕入上限134,031円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 000553 ===
+DB: NGC | 1925 POLAND G10Z | MS 65
+仕入上限: USD492 (79,189円)
+DB参考ヤフオク価格: 100,001円
+
+[eBay出品]
+タイトル: 1925 POLAND 10 ZLOTYCH GOLD COIN - NGC MS65
+出品価格: $570.00 (91,770円) ※API価格。要ブラウザ確認
+入札: 12件
+URL: https://www.ebay.com/itm/377065932505?_skw=NGC+Gold&hash=item57cae186d9:g:sioAAeSwgHhpxeXb
+
+[ヤフオクライバル]
+出品中: 165,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/r1224637171
+出品中: 176,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/l1221363126
+出品中: 298,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/k1221470985
+直近落札: 29,610円 33件入札
+直近落札: 250,000円 1件入札
+直近落札: 233,000円 1件入札
+
+-> ライバルが165,000円で売れ残り。仕入れ非推奨
+[判定] NG
+
+=== 管理番号: 001001 ===
+DB: NGC | 1904 $20 | MS 62
+仕入上限: USD3,180 (511,946円)
+DB参考ヤフオク価格: 801,000円
+
+[eBay出品]
+タイトル: 1904 US $20 Liberty Gold Piece Double Eagle NGC MS62
+出品価格: $4191.00 (674,751円) ※API価格。要ブラウザ確認
+入札: 28件
+URL: https://www.ebay.com/itm/168269238944?_skw=NGC+Gold&hash=item272da0d2a0:g:4WwAAeSwc3Fpxqys
+
+[ヤフオクライバル]
+出品中: 230,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/p1222548736
+出品中: 230,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/t1124950385
+直近落札: 801,000円 2件入札
+直近落札: 5,750円 37件入札
+直近落札: 8,252円 12件入札
+
+-> ライバルが230,000円で出品中。仕入上限511,946円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 000398 ===
+DB: NGC | 1915S AUSTRALIA 1SOV | MS 63
+仕入上限: USD561 (90,290円)
+DB参考ヤフオク価格: 138,000円
+
+[eBay出品]
+タイトル: 1915S Australia Gold Sovereign NGC MS-63 Samaszko's Carson City Gold Hoard Label
+出品価格: $1299.00 (209,139円) ※API価格。要ブラウザ確認
+入札: 0件
+URL: https://www.ebay.com/itm/227269906984?_skw=NGC+Gold&hash=item34ea579228:g:troAAeSwuzZpF3L5
+
+[ヤフオクライバル]
+出品中: 228,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/j1219030413
+直近落札: 6,750円 34件入札
+直近落札: 31,003円 59件入札
+直近落札: 138,000円 1件入札
+
+-> ライバルが228,000円で売れ残り。仕入れ非推奨
+[判定] NG
+
+=== 管理番号: 001316 ===
+DB: NGC | 1904 $20 | MS 62
+仕入上限: USD3,289 (529,523円)
+DB参考ヤフオク価格: 520,000円
+
+[eBay出品]
+タイトル: 1904 US $20 Liberty Gold Piece Double Eagle NGC MS62 #281003-021
+出品価格: $4799.00 (772,639円) ※API価格。要ブラウザ確認
+入札: 0件
+URL: https://www.ebay.com/itm/168269238124?_skw=NGC+Gold&hash=item272da0cf6c:g:cuwAAeSw16ZpxvHN
+
+[ヤフオクライバル]
+出品中: 230,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/p1222548736
+出品中: 230,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/t1124950385
+直近落札: 801,000円 2件入札
+直近落札: 5,750円 37件入札
+直近落札: 8,252円 12件入札
+
+-> ライバルが230,000円で出品中。仕入上限529,523円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 001655 ===
+DB: NGC | 1935LB SWITZERLND G20F | MS 66
+仕入上限: USD766 (123,248円)
+DB参考ヤフオク価格: 175,000円
+
+[eBay出品]
+タイトル: 1935 Switzerland 20 Franc Gold Helvetia NGC MS66  22 Stars On Edge Historic
+出品価格: $2450.00 (394,450円) ※API価格。要ブラウザ確認
+入札: 0件
+URL: https://www.ebay.com/itm/168257485007?_skw=NGC+Gold&hash=item272ced78cf:g:YREAAeSwOAhpk3Ru
+
+[ヤフオクライバル]
+出品中: 350,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/m1221120901
+直近落札: 175,000円 1件入札
+
+-> ライバルが350,000円で売れ残り。仕入れ非推奨
+[判定] NG
+
+=== 管理番号: 001889 ===
+DB: NGC | 1986 EAGLE S$1 | MS 69
+仕入上限: USD708 (113,969円)
+DB参考ヤフオク価格: 170,000円
+
+[eBay出品]
+タイトル: 3 NGC MS69 US 1ozt .999 Silver Eagle $1 1986 1987 1988  L24424
+出品価格: $0.99 (159円) ※API価格。要ブラウザ確認
+入札: 0件
+URL: https://www.ebay.com/itm/336507834348?_skw=NGC+Silver&hash=item4e596e0fec:g:9GQAAeSwqaJpyb~5
+
+[ヤフオクライバル]
+出品中: 49,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/k1130168194
+直近落札: 950,000円 1件入札
+直近落札: 44,000円 1件入札
+
+-> ライバルが49,800円で出品中。仕入上限113,969円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 000372 ===
+DB: NGC | 2019Mo Mexico 5 Onza | PF 70 ULTRA CAMEO
+仕入上限: USD437 (70,420円)
+DB参考ヤフオク価格: 122,000円
+
+[eBay出品]
+タイトル: 2019 MEXICO 1 ONZA LIBERTAD COIN 1 TROY OZ SILVER NGC PF 70 ULTRA CAMEO
+出品価格: $222.50 (35,822円) ※API価格。要ブラウザ確認
+入札: 2件
+URL: https://www.ebay.com/itm/257422935820?_skw=NGC+Silver&hash=item3bef9a470c:g:OJUAAeSwaO1pwrgn
+
+[ヤフオクライバル]
+出品中: 29,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/m1223839358
+出品中: 14,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/u1212066948
+出品中: 15,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/n1224034873
+直近落札: 20,300円 5件入札
+直近落札: 60,000円 1件入札
+直近落札: 178,000円 1件入札
+
+-> ライバルが14,000円で出品中。仕入上限70,420円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 001391 ===
+DB: PCGS | 2015-W $100 | MS70
+仕入上限: USD3,415 (549,865円)
+DB参考ヤフオク価格: 725,455円
+
+[eBay出品]
+タイトル: 2015-W $100 AMERICAN LIBERTY HIGH RELIEF PCGS MS70 1 OZ .9999 FINE GOLD
+出品価格: $6000.00 (966,000円) ※API価格。要ブラウザ確認
+入札: 0件
+URL: https://www.ebay.com/itm/318066008564?_skw=PCGS+Gold&hash=item4a0e3621f4:g:joIAAeSwI6dpqynD
+
+[ヤフオクライバル]
+出品中: 36,313円（入札なし）https://auctions.yahoo.co.jp/jp/auction/b1223226528
+直近落札: 28,000円 42件入札
+直近落札: 25,500円 22件入札
+直近落札: 23,201円 60件入札
+
+-> ライバルが36,313円で出品中。仕入上限549,865円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 001400 ===
+DB: PCGS | 2021-(W) First Day of Issue $1 | MS70
+仕入上限: USD665 (107,110円)
+DB参考ヤフオク価格: 160,000円
+
+[eBay出品]
+タイトル: 2021 $1 AMERICAN SILVER EAGLE UNC T-1 Balan Sign FDOI 1 oz 999 PCGS MS70 A6672
+出品価格: $67.00 (10,787円) ※API価格。要ブラウザ確認
+入札: 6件
+URL: https://www.ebay.com/itm/397710133773?_skw=PCGS+Silver&hash=item5c995f0a0d:g:LpQAAeSwKO1ptEfs
+
+[ヤフオクライバル]
+出品中: 25,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/r1223615956
+出品中: 29,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/d1221374550
+出品中: 1,000円（1件入札）https://auctions.yahoo.co.jp/jp/auction/l1224495230
+直近落札: 28,800円 1件入札
+直近落札: 28,300円 6件入札
+直近落札: 44,800円 4件入札
+
+-> ライバルが25,000円で出品中。仕入上限107,110円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 002179 ===
+DB: PCGS | 2024-Mo Mexico 5 Onza | PR70
+仕入上限: USD526 (84,682円)
+DB参考ヤフオク価格: 130,000円
+
+[eBay出品]
+タイトル: 2024 1oz Silver Mexican Libertad Coin PCGS PR70 First Day of Issue
+出品価格: $188.50 (30,348円) ※API価格。要ブラウザ確認
+入札: 19件
+URL: https://www.ebay.com/itm/227273593983?_skw=PCGS+Silver&hash=item34ea8fd47f:g:2YcAAeSwkXVpxLu-
+
+[ヤフオクライバル]
+出品中: 79,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/x1223374841
+出品中: 55,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/t1224446144
+出品中: 21,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/s1224511725
+直近落札: 21,800円 1件入札
+直近落札: 43,000円 1件入札
+直近落札: 32,800円 1件入札
+
+-> ライバルが21,800円で出品中。仕入上限84,682円を下回り利益出ない
+[判定] NG
+
+=== 管理番号: 001269 ===
+DB: PCGS | 2025 $20 The Great Wall of China 3oz Ag High Relief Colorized First Day of | PR70DCAM
+仕入上限: USD456 (73,345円)
+DB参考ヤフオク価格: 100,000円
+
+[eBay出品]
+タイトル: 2025 Cook Islands 3oz Silver $20 The Great Wall of China PCGS PR70 First Day
+出品価格: $304.00 (48,944円) ※API価格。要ブラウザ確認
+入札: 2件
+URL: https://www.ebay.com/itm/227273528813?_skw=PCGS+Silver&hash=item34ea8ed5ed:g:GTQAAeSwrdVpxKth
+
+[ヤフオクライバル]
+出品中: 84,800円（入札なし）https://auctions.yahoo.co.jp/jp/auction/o1213378555
+出品中: 150,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/s1224474113
+出品中: 200,000円（入札なし）https://auctions.yahoo.co.jp/jp/auction/t1224440562
+直近落札: 85,000円 1件入札
+直近落札: 79,000円 1件入札
+直近落札: 22,000円 5件入札
+
+-> ライバルが68,800円で出品中。仕入上限73,345円を下回り利益出ない
+[判定] NG
+
+============================================================
+サマリー: OK=0, REVIEW=0, NG=12, CEO判断=0

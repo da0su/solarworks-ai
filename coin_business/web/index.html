@@ -215,7 +215,8 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 <!-- タブナビ (追加) -->
 <div class="tab-nav">
   <button class="tab-btn" id="tab-btn-db" onclick="switchTab('db')">📊 相場DB</button>
-  <button class="tab-btn active" id="tab-btn-ceo" onclick="switchTab('ceo')">🔍 CEO確認<span class="tab-badge" id="ceo-count-badge" style="display:none">0</span></button>
+  <button class="tab-btn" id="tab-btn-mkt" onclick="switchTab('mkt')">📋 マーケ確認<span class="tab-badge" id="mkt-count-badge" style="display:none">0</span></button>
+  <button class="tab-btn active" id="tab-btn-ceo" onclick="switchTab('ceo')">✅ CEO確認<span class="tab-badge" id="ceo-count-badge" style="display:none">0</span></button>
   <button class="tab-btn" id="tab-btn-bid" onclick="switchTab('bid')">🎯 入札予定<span class="tab-badge" id="bid-urgent-badge" style="display:none">0</span></button>
 </div>
 
@@ -302,17 +303,55 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   </div>
 
   <div class="kpi-row">
-    <div class="kpi-box">
-      <div class="kpi-num" id="ceo-kpi-pending">-</div>
-      <div class="kpi-lbl">未判断</div>
+    <div class="kpi-box"><div class="kpi-num" id="ceo-kpi-pending">-</div><div class="kpi-lbl">未判断</div></div>
+    <div class="kpi-box"><div class="kpi-num" id="ceo-kpi-ok" style="color:#4ade80;">-</div><div class="kpi-lbl">OK</div></div>
+    <div class="kpi-box"><div class="kpi-num" id="ceo-kpi-ng" style="color:#f87171;">-</div><div class="kpi-lbl">NG</div></div>
+  </div>
+  <div class="kpi-row">
+    <div class="kpi-box"><div class="kpi-num" id="ceo-kpi-hold" style="color:#fbbf24;">-</div><div class="kpi-lbl">HOLD</div></div>
+    <div class="kpi-box"><div class="kpi-num" id="ceo-kpi-blocked" style="color:#6b7280;">-</div><div class="kpi-lbl">BLOCKED</div></div>
+    <div class="kpi-box"><div class="kpi-num" id="ceo-kpi-resub" style="color:#fbbf24;">-</div><div class="kpi-lbl">再提出可</div></div>
+  </div>
+
+  <!-- 会場別件数 -->
+  <div id="ceo-venue-counts" style="display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 10px;font-size:11px;"></div>
+
+  <div style="margin-bottom:10px;">
+    <!-- 第1段: ソースグループ (eBay / 世界オークション) -->
+    <div class="filters" id="ceo-source-filters" style="margin-bottom:6px;">
+      <button class="active" onclick="setCeoSourceGroup('all',this)">全件</button>
+      <button onclick="setCeoSourceGroup('EBAY',this)">eBay</button>
+      <button onclick="setCeoSourceGroup('WORLD',this)">🌍 世界オークション</button>
     </div>
-    <div class="kpi-box">
-      <div class="kpi-num" id="ceo-kpi-approved" style="color:#4ade80;">-</div>
-      <div class="kpi-lbl">承認済み</div>
+    <!-- 第2段: 世界オークション 会場別 (世界オークション選択時のみ表示) -->
+    <div class="filters" id="ceo-house-filters" style="margin-bottom:6px;display:none;">
+      <button class="active" onclick="setCeoAuctionHouse('all',this)">全会場</button>
+      <button onclick="setCeoAuctionHouse('HERITAGE',this)" style="border-color:#f59e0b;color:#f59e0b;">★ Heritage</button>
+      <button onclick="setCeoAuctionHouse('NOBLE',this)">Noble</button>
+      <button onclick="setCeoAuctionHouse('SPINK',this)">Spink</button>
+      <button onclick="setCeoAuctionHouse('NOONANS',this)">Noonans</button>
+      <button onclick="setCeoAuctionHouse('STACKS_BOWERS',this)">Stack's Bowers</button>
+      <button onclick="setCeoAuctionHouse('GREATCOLLECTIONS',this)">GreatCollections</button>
+      <button onclick="setCeoAuctionHouse('SIXBID',this)">Sixbid</button>
+      <button onclick="setCeoAuctionHouse('CATAWIKI',this)">Catawiki</button>
+      <button onclick="setCeoAuctionHouse('MA_SHOPS',this)">MA-Shops</button>
+      <button onclick="setCeoAuctionHouse('OTHER',this)">Other</button>
     </div>
-    <div class="kpi-box">
-      <div class="kpi-num" id="ceo-kpi-rejected" style="color:#f87171;">-</div>
-      <div class="kpi-lbl">NG済み</div>
+    <!-- 第3段: 判断フィルター -->
+    <div class="filters" id="ceo-decision-filters" style="margin-bottom:6px;">
+      <button class="active" onclick="setCeoFilter('pending',this)">未判断のみ</button>
+      <button onclick="setCeoFilter('hold',this)">HOLDのみ</button>
+      <button onclick="setCeoFilter('blocked',this)">BLOCK表示</button>
+      <button onclick="setCeoFilter('all',this)">全件</button>
+    </div>
+    <!-- 第4段: バケットフィルター -->
+    <div class="filters" id="ceo-bucket-filters">
+      <button class="active" onclick="setCeoBucket('all',this)">全バケット</button>
+      <button onclick="setCeoBucket('BID',this)">BID</button>
+      <button onclick="setCeoBucket('Top20',this)">Top20</button>
+      <button onclick="setCeoBucket('Top50',this)">Top50</button>
+      <button onclick="setCeoBucket('Top100',this)">Top100</button>
+      <button onclick="setCeoBucket('WATCH',this)">WATCH</button>
     </div>
   </div>
 
@@ -321,6 +360,40 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   </div>
 
 </div><!-- /#ceo-panel -->
+
+
+<!-- ② マーケ確認パネル -->
+<div id="mkt-panel" style="display:none">
+
+  <div class="panel-header">
+    <div class="panel-title">📋 マーケ確認</div>
+    <button onclick="loadMktPanel(true)" style="background:none;border:1px solid #444;border-radius:6px;color:#888;padding:4px 10px;font-size:12px;cursor:pointer;">&#8635; 更新</button>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi-box"><div class="kpi-num" id="mkt-kpi-review" style="color:#fbbf24;">-</div><div class="kpi-lbl">&#128338; 確認待ち</div></div>
+    <div class="kpi-box"><div class="kpi-num" id="mkt-kpi-approved" style="color:#4ade80;">-</div><div class="kpi-lbl">&#9989; 承認済</div></div>
+    <div class="kpi-box"><div class="kpi-num" id="mkt-kpi-returned" style="color:#f87171;">-</div><div class="kpi-lbl">&#10060; 差し戻し</div></div>
+  </div>
+
+  <div style="margin-bottom:10px;">
+    <div class="filters" id="mkt-source-filters" style="margin-bottom:6px;">
+      <button class="active" onclick="setMktSourceGroup('all',this)">全件</button>
+      <button onclick="setMktSourceGroup('EBAY',this)">eBay</button>
+      <button onclick="setMktSourceGroup('WORLD',this)">&#127758; 世界オークション</button>
+    </div>
+    <div class="filters" id="mkt-status-filters">
+      <button class="active" onclick="setMktStatusFilter('MARKETING_REVIEW',this)">確認待ち</button>
+      <button onclick="setMktStatusFilter('MARKETING_RETURNED',this)">差し戻し</button>
+      <button onclick="setMktStatusFilter('all',this)">全件</button>
+    </div>
+  </div>
+
+  <div id="mkt-list">
+    <div class="loading-state">読み込み中...</div>
+  </div>
+
+</div><!-- /#mkt-panel -->
 
 
 <!-- ③ 入札予定パネル -->
@@ -671,11 +744,12 @@ const SB_HDR = { 'apikey': SB_KEY, 'Authorization': `Bearer ${SB_KEY}`, 'Content
 let _bidLoaded = false;
 
 function switchTab(tab) {
-  ['db','ceo','bid'].forEach(t => {
+  ['db','mkt','ceo','bid'].forEach(t => {
     document.getElementById(`${t}-panel`).style.display = (t === tab) ? '' : 'none';
     document.getElementById(`tab-btn-${t}`).classList.toggle('active', t === tab);
   });
   if (tab === 'bid' && !_bidLoaded) { _bidLoaded = true; loadBidPanel(); }
+  if (tab === 'mkt' && !_mktLoaded) { _mktLoaded = true; loadMktPanel(false); }
 }
 
 /* ===== ユーティリティ ===== */
@@ -709,93 +783,558 @@ function closeImgModal() {
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeImgModal(); });
 
 /* =====================================================
-   CEO確認パネル
+   CEO確認パネル v2 — ceo_review_log 対応
    ===================================================== */
-let _ceoOffset = 0;
-const CEO_PAGE = 20;
-let _ceoTotal = 0;
+let _ceoItems = [];
+let _ceoDecisionFilter    = 'pending';
+let _ceoBucketFilter      = 'all';
+let _ceoSourceGroupFilter = 'all';   // 'all' | 'EBAY' | 'WORLD'
+let _ceoAuctionHouseFilter = 'all';  // 'all' | 'HERITAGE' | 'STACKS_BOWERS' | 'GREATCOLLECTIONS' | 'SIXBID' | 'CATAWIKI' | 'MA_SHOPS' | 'OTHER'
+
+// 会場表示名マップ
+const HOUSE_LABEL = {
+  'EBAY': 'eBay', 'HERITAGE': 'Heritage', 'STACKS_BOWERS': "Stack's",
+  'NOBLE': 'Noble', 'SPINK': 'Spink', 'NOONANS': 'Noonans',
+  'GREATCOLLECTIONS': 'GreatCol.', 'SIXBID': 'Sixbid', 'CATAWIKI': 'Catawiki',
+  'MA_SHOPS': 'MA-Shops', 'OTHER': 'Other',
+};
+
+const BUCKET_ORDER = { 'BID':0, 'Top20':1, 'Top50':2, 'Top100':3, 'WATCH':4 };
+// ソースグループ順 (EBAY first)
+const SOURCE_ORDER = { 'EBAY': 0, 'WORLD': 1 };
+const REASON_CODES = [
+  ['PRICE_TOO_HIGH',    '価格上限超え'],
+  ['PROFIT_TOO_LOW',    '利益率不足'],
+  ['DB_NO_MATCH',       '相場不明'],
+  ['TYPE_MISMATCH',     'スコープ外'],
+  ['SIZE_MISMATCH',     'サイズ違い'],
+  ['CERT_NEEDS_CHECK',  '鑑定疑義'],
+  ['TOO_HOT_BIDDING',   '入札競争激しい'],
+  ['NOT_INTERESTING',   '優先度低'],
+  ['WATCH_ONLY',        'WATCH対象'],
+  ['NEED_MORE_EVIDENCE','情報不足'],
+];
+const TODAY = (() => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+})();
+
+function setCeoFilter(val, btn) {
+  _ceoDecisionFilter = val;
+  document.querySelectorAll('#ceo-decision-filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderCeoFiltered();
+}
+
+function setCeoBucket(val, btn) {
+  _ceoBucketFilter = val;
+  document.querySelectorAll('#ceo-bucket-filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderCeoFiltered();
+}
+
+function setCeoSourceGroup(val, btn) {
+  _ceoSourceGroupFilter = val;
+  _ceoAuctionHouseFilter = 'all';
+  document.querySelectorAll('#ceo-source-filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  // 世界オークション選択時のみ会場フィルター行を表示
+  const houseRow = document.getElementById('ceo-house-filters');
+  if (houseRow) {
+    houseRow.style.display = (val === 'WORLD') ? '' : 'none';
+    // 全会場ボタンをactiveに
+    houseRow.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', i === 0));
+  }
+  renderCeoFiltered();
+}
+
+function setCeoAuctionHouse(val, btn) {
+  _ceoAuctionHouseFilter = val;
+  document.querySelectorAll('#ceo-house-filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderCeoFiltered();
+}
+
+function _renderVenueCounts(items) {
+  const el = document.getElementById('ceo-venue-counts');
+  if (!el) return;
+  const counts = {};
+  items.forEach(i => {
+    const h = i.auction_house || (i.source_group === 'WORLD' ? 'OTHER' : 'EBAY');
+    counts[h] = (counts[h] || 0) + 1;
+  });
+  // Sort: EBAY first, then HERITAGE (★優先), then venue priority order
+  const order = ['EBAY','HERITAGE','NOBLE','SPINK','NOONANS','STACKS_BOWERS','GREATCOLLECTIONS','SIXBID','CATAWIKI','MA_SHOPS','OTHER'];
+  const known = new Set(order);
+  const extra = Object.keys(counts).filter(k => !known.has(k)).sort();
+  const sorted = [...order, ...extra].filter(k => counts[k]);
+  const chips = sorted.map(k => {
+    const isHeritage = k === 'HERITAGE';
+    const isWorld = k !== 'EBAY';
+    const bg  = isHeritage ? '#1c1200' : isWorld ? '#0c1a2e' : '#0d1a0d';
+    const col = isHeritage ? '#f59e0b' : isWorld ? '#93c5fd' : '#86efac';
+    const brd = isHeritage ? '#d97706' : isWorld ? '#1d4ed8' : '#166534';
+    const label = isHeritage ? `★ ${escH(HOUSE_LABEL[k] || k)}` : escH(HOUSE_LABEL[k] || k);
+    return `<span style="background:${bg};color:${col};border:1px solid ${brd};border-radius:10px;padding:2px 8px;white-space:nowrap;font-weight:${isHeritage?'bold':'normal'};">
+      ${label}: <strong>${counts[k]}</strong>
+    </span>`;
+  }).join('');
+  el.innerHTML = chips || '<span style="color:#6b7280;font-size:11px;">（本日データなし）</span>';
+}
 
 async function loadCeoPanel(offset, reset) {
-  offset = offset || 0;
-  if (reset || offset === 0) {
-    document.getElementById('ceo-list').innerHTML = '<div class="loading-state">読み込み中...</div>';
-    _ceoOffset = 0;
-  }
+  document.getElementById('ceo-list').innerHTML = '<div class="loading-state">読み込み中...</div>';
 
-  /* KPIカウント (3つ並列) */
+  /* KPI 6件並列 */
   try {
     const hdr = { ...SB_HDR, 'Prefer': 'count=exact' };
-    const getCount = async (filter) => {
-      const r = await fetch(`${SB_URL}/rest/v1/daily_candidates?${filter}&select=dedup_key&limit=1`, { headers: hdr });
+    const cnt = async (filter) => {
+      const r = await fetch(`${SB_URL}/rest/v1/ceo_review_log?${filter}&select=id&limit=1`, { headers: hdr });
       const cr = r.headers.get('content-range');
-      return cr ? (cr.split('/')[1] || '0') : '?';
+      return cr ? parseInt(cr.split('/')[1] || 0) : 0;
     };
-    const [pCnt, aCnt, rCnt] = await Promise.all([
-      getCount('or=(ceo_decision.eq.pending,ceo_decision.is.null)&is_active_auction=eq.true&judgment=in.(OK,CEO%E5%88%A4%E6%96%AD,REVIEW)'),
-      getCount('ceo_decision=eq.approved'),
-      getCount('ceo_decision=eq.rejected')
+    const [pCnt, okCnt, ngCnt, holdCnt, blockCnt, resubCnt] = await Promise.all([
+      cnt(`marketing_status=eq.MARKETING_APPROVED&ceo_decision=is.null`),
+      cnt(`marketing_status=eq.MARKETING_APPROVED&ceo_decision=eq.OK`),
+      cnt(`marketing_status=eq.MARKETING_APPROVED&ceo_decision=eq.NG`),
+      cnt(`marketing_status=eq.MARKETING_APPROVED&ceo_decision=eq.HOLD`),
+      cnt(`marketing_status=eq.MARKETING_APPROVED&duplicate_status=eq.DUPLICATE_BLOCKED`),
+      cnt(`marketing_status=eq.MARKETING_APPROVED&duplicate_status=eq.RESUBMITTED&ceo_decision=is.null`),
     ]);
-    document.getElementById('ceo-kpi-pending').textContent = pCnt;
-    document.getElementById('ceo-kpi-approved').textContent = aCnt;
-    document.getElementById('ceo-kpi-rejected').textContent = rCnt;
-    _ceoTotal = parseInt(pCnt) || 0;
+    document.getElementById('ceo-kpi-pending').textContent  = pCnt;
+    document.getElementById('ceo-kpi-ok').textContent       = okCnt;
+    document.getElementById('ceo-kpi-ng').textContent       = ngCnt;
+    document.getElementById('ceo-kpi-hold').textContent     = holdCnt;
+    document.getElementById('ceo-kpi-blocked').textContent  = blockCnt;
+    document.getElementById('ceo-kpi-resub').textContent    = resubCnt;
     const badge = document.getElementById('ceo-count-badge');
-    badge.textContent = _ceoTotal;
-    badge.style.display = _ceoTotal > 0 ? '' : 'none';
+    badge.textContent = pCnt; badge.style.display = pCnt > 0 ? '' : 'none';
   } catch(e) { console.error('CEO KPI:', e); }
 
-  /* 案件リスト */
+  /* 全件取得 (当日分 500件上限) */
   try {
-    const cols = 'dedup_key,lot_title,lot_url,auction_house,buy_limit_jpy,priority_score,lot_end_time,ceo_decision,notes,judgment,judgment_reason,ai_comment,current_price,estimated_sell_price,estimated_cost_jpy,expected_profit,ref1_buy_limit_20k_jpy,ref1_buy_limit_15pct_jpy,ref2_buy_limit_20k_jpy,ref2_buy_limit_15pct_jpy,management_no,fx_rate,currency,grading_company,cert_number';
-    /* cert_number=not.is.null フィルタを試みる（migration未適用時は fallback） */
-    /* is_active_auction=true: SOLD済みeBay案件を除外（P0 SOLD混入防止） */
-    /* judgment=in.(OK,CEO判断,REVIEW): 自動NG案件はパネルに出さない */
-    const baseFilter = `or=(ceo_decision.eq.pending,ceo_decision.is.null)&management_no=not.is.null&ref1_buy_limit_20k_jpy=not.is.null&is_active_auction=eq.true&judgment=in.(OK,CEO%E5%88%A4%E6%96%AD,REVIEW)`;
-    const certFilter = `${baseFilter}&cert_number=not.is.null`;
-    let resp = await fetch(
-      `${SB_URL}/rest/v1/daily_candidates?${certFilter}&order=expected_profit.desc.nullslast&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
+    const cols = 'id,marketplace,source_group,auction_house,item_id,url,title_snapshot,cert_company,cert_number,grade,country,year,denomination,material,bid_count_snapshot,price_snapshot_usd,price_snapshot_jpy,yahoo_ref_price,profit_estimate,db_similarity,db_ref_id,snapshot_score,scan_date,review_bucket,duplicate_status,resubmit_reason,submit_count,ceo_decision,reason_code,reason_text,first_seen_at,comparison_type,yahoo_ref_title,yahoo_ref_price_jpy,yahoo_ref_date,yahoo_ref_grade,cap_bid_limit_jpy,cap_bid_limit_usd,estimated_sell_price_jpy,expected_profit_jpy,expected_roi_pct,cap_judgment,cap_comment,image_url,evidence_status,category,marketing_status,marketing_comment';
+    const resp = await fetch(
+      `${SB_URL}/rest/v1/ceo_review_log?marketing_status=eq.MARKETING_APPROVED&select=${cols}&limit=500&order=snapshot_score.desc`,
       { headers: SB_HDR }
     );
-    /* migration 011 未適用（cert_number列がない）→ cert フィルタなしで再試行 */
-    if (!resp.ok && resp.status === 400) {
-      console.warn('[CEO] cert_number列未作成 → certフィルタなしで再取得 (migration 011 を適用してください)');
-      resp = await fetch(
-        `${SB_URL}/rest/v1/daily_candidates?${baseFilter}&order=expected_profit.desc.nullslast&limit=${CEO_PAGE}&offset=${offset}&select=${cols}`,
-        { headers: SB_HDR }
-      );
-    }
-    const items = await resp.json();
-    const list = document.getElementById('ceo-list');
-    if (offset === 0 || reset) list.innerHTML = '';
-
-    if (!Array.isArray(items) || items.length === 0) {
-      if (offset === 0) list.innerHTML = '<div class="empty-state">✅ 未判断の案件はありません</div>';
-      const old = document.getElementById('ceo-more-btn');
-      if (old) old.remove();
-      return;
-    }
-
-    items.forEach(item => list.insertAdjacentHTML('beforeend', renderCandCard(item)));
-    _ceoOffset = offset + items.length;
-
-    /* もっと見るボタン */
-    const old = document.getElementById('ceo-more-btn');
-    if (old) old.remove();
-    if (_ceoOffset < _ceoTotal) {
-      const btn = document.createElement('button');
-      btn.id = 'ceo-more-btn';
-      btn.className = 'load-more-btn';
-      btn.textContent = `もっと見る（残り ${_ceoTotal - _ceoOffset} 件）`;
-      btn.onclick = () => loadCeoPanel(_ceoOffset, false);
-      list.after(btn);
-    }
+    _ceoItems = await resp.json();
+    if (!Array.isArray(_ceoItems)) _ceoItems = [];
+    _renderVenueCounts(_ceoItems);
+    renderCeoFiltered();
   } catch(e) {
     console.error('CEO list:', e);
     document.getElementById('ceo-list').innerHTML = '<div class="empty-state" style="color:#f87171;">読み込みエラー。↺ 更新を押してください。</div>';
   }
 }
 
-function renderCandCard(item) {
+function renderCeoFiltered() {
+  let items = [..._ceoItems];
+  // --- 判断フィルター ---
+  if (_ceoDecisionFilter === 'pending') {
+    items = items.filter(i => !i.ceo_decision && i.duplicate_status !== 'DUPLICATE_BLOCKED');
+  } else if (_ceoDecisionFilter === 'hold') {
+    items = items.filter(i => i.ceo_decision === 'HOLD');
+  } else if (_ceoDecisionFilter === 'blocked') {
+    items = items.filter(i => i.duplicate_status === 'DUPLICATE_BLOCKED');
+  }
+  // --- ソースグループフィルター (eBay / 世界オークション) ---
+  if (_ceoSourceGroupFilter === 'EBAY') {
+    items = items.filter(i => (i.source_group || 'EBAY') === 'EBAY');
+  } else if (_ceoSourceGroupFilter === 'WORLD') {
+    items = items.filter(i => (i.source_group || 'EBAY') === 'WORLD');
+    // 会場別フィルター (世界オークション選択時のみ有効)
+    if (_ceoAuctionHouseFilter !== 'all') {
+      items = items.filter(i => (i.auction_house || 'OTHER') === _ceoAuctionHouseFilter);
+    }
+  }
+  // --- バケットフィルター ---
+  if (_ceoBucketFilter !== 'all') {
+    items = items.filter(i => i.review_bucket === _ceoBucketFilter);
+  }
+  // --- ソート ---
+  // 全件表示 → スコア優先（会場横断5分レビュー）
+  // 会場指定 → source_group → auction_house → bucket → profit↓ → bids↓
+  if (_ceoSourceGroupFilter === 'all') {
+    items.sort((a, b) => {
+      const sd = (b.snapshot_score || 0) - (a.snapshot_score || 0);
+      if (sd !== 0) return sd;
+      const bo = (BUCKET_ORDER[a.review_bucket] ?? 9) - (BUCKET_ORDER[b.review_bucket] ?? 9);
+      if (bo !== 0) return bo;
+      const pd = (b.profit_estimate || 0) - (a.profit_estimate || 0);
+      if (pd !== 0) return pd;
+      return (b.bid_count_snapshot || 0) - (a.bid_count_snapshot || 0);
+    });
+  } else {
+    items.sort((a, b) => {
+      const sg = (SOURCE_ORDER[a.source_group || 'EBAY'] ?? 0) - (SOURCE_ORDER[b.source_group || 'EBAY'] ?? 0);
+      if (sg !== 0) return sg;
+      const ah = (a.auction_house || 'EBAY').localeCompare(b.auction_house || 'EBAY');
+      if (ah !== 0) return ah;
+      const bo = (BUCKET_ORDER[a.review_bucket] ?? 9) - (BUCKET_ORDER[b.review_bucket] ?? 9);
+      if (bo !== 0) return bo;
+      const sd = (b.snapshot_score || 0) - (a.snapshot_score || 0);
+      if (sd !== 0) return sd;
+      const pd = (b.profit_estimate || 0) - (a.profit_estimate || 0);
+      if (pd !== 0) return pd;
+      return (b.bid_count_snapshot || 0) - (a.bid_count_snapshot || 0);
+    });
+  }
+  const list = document.getElementById('ceo-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">✅ 該当案件はありません</div>';
+    return;
+  }
+  const sortLabel = _ceoSourceGroupFilter === 'all'
+    ? `<div style="font-size:11px;color:#60a5fa;margin-bottom:6px;">📊 スコア順（会場横断）— ${items.length}件</div>`
+    : `<div style="font-size:11px;color:#888;margin-bottom:6px;">📋 会場別順 — ${items.length}件</div>`;
+  list.innerHTML = sortLabel + items.map((item, idx) => renderCrlCard(item, idx + 1)).join('');
+}
+
+function renderCrlCard(item, rank) {
+  const uuid   = item.id || '';
+  const safeId = uuid.replace(/-/g, '_');
+
+  /* Bucket badge */
+  const BUCKET_STYLE = {
+    'BID':    'background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;',
+    'Top20':  'background:#052e16;color:#4ade80;border:1px solid #4ade80;',
+    'Top50':  'background:#172554;color:#93c5fd;border:1px solid #3b82f6;',
+    'Top100': 'background:#1e1e2e;color:#9ca3af;border:1px solid #4b5563;',
+    'WATCH':  'background:#2d1a4a;color:#c4b5fd;border:1px solid #7c3aed;',
+  };
+  const bucket = item.review_bucket || '';
+  const bstyle = BUCKET_STYLE[bucket] || 'background:#1a1a2e;color:#9ca3af;border:1px solid #374151;';
+  const bucketBadge = `<span style="font-size:11px;padding:2px 8px;border-radius:10px;font-weight:bold;${bstyle}">${escH(bucket)}</span>`;
+
+  /* Auction house badge (世界オークションのみ表示) */
+  const srcGrp = item.source_group || 'EBAY';
+  const aHouse = item.auction_house || 'EBAY';
+  let houseBadge = '';
+  if (srcGrp === 'WORLD') {
+    if (aHouse === 'HERITAGE') {
+      houseBadge = `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#1c1200;color:#f59e0b;border:1px solid #d97706;font-weight:bold;">🌍 ★ Heritage</span>`;
+    } else {
+      houseBadge = `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#0c1a2e;color:#93c5fd;border:1px solid #1d4ed8;font-weight:bold;">🌍 ${escH(HOUSE_LABEL[aHouse] || aHouse)}</span>`;
+    }
+  }
+
+  /* Score (WORLD: max≈25, EBAY: max≈100) */
+  const score = item.snapshot_score;
+  const isWorld = (item.source_group || 'EBAY') === 'WORLD';
+  const scoreCls = isWorld
+    ? (score >= 23 ? 'score-hi' : score >= 20 ? 'score-md' : 'score-lo')
+    : (score >= 70 ? 'score-hi' : score >= 50 ? 'score-md' : 'score-lo');
+  const scoreBadge = score != null ? `<span class="c-score ${scoreCls}">Sc:${score}</span>` : '';
+
+  /* Duplicate status */
+  const DS = item.duplicate_status || 'NEW';
+  const dsBadge = DS === 'DUPLICATE_BLOCKED'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#111827;color:#6b7280;border:1px solid #374151;">&#x1F6AB; BLOCKED</span>`
+    : DS === 'RESUBMITTED'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#422006;color:#fbbf24;border:1px solid #d97706;">&#x1F504; 再提出</span>`
+    : '';
+
+  /* CEO decision badge */
+  const dec = item.ceo_decision;
+  const decBadge = dec === 'OK'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#052e16;color:#4ade80;border:1px solid #4ade80;">&#x2705; OK</span>`
+    : dec === 'NG'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#450a0a;color:#f87171;border:1px solid #f87171;">&#x274C; NG</span>`
+    : dec === 'HOLD'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#422006;color:#fbbf24;border:1px solid #d97706;">&#x23F8; HOLD</span>`
+    : '';
+
+  /* Cert link */
+  const gc   = (item.cert_company || '').toUpperCase();
+  const cert = item.cert_number || null;
+  let certHtml = '';
+  if (gc && cert) {
+    const certUrl = gc === 'NGC'
+      ? `https://www.ngccoin.com/certlookup/${encodeURIComponent(cert)}`
+      : `https://www.pcgs.com/cert/${encodeURIComponent(cert)}`;
+    certHtml = `<div style="background:#0f1e30;border:1px solid #2563eb;border-radius:6px;padding:5px 10px;margin:4px 0;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:12px;font-weight:bold;color:#93c5fd;">${escH(gc)}</span>
+      <span style="font-size:11px;color:#e2e8f0;">Cert:</span>
+      <a href="${escH(certUrl)}" target="_blank" onclick="event.stopPropagation()"
+         style="font-size:12px;font-weight:bold;color:#fbbf24;text-decoration:none;">${escH(cert)} &#x1F517;</a>
+    </div>`;
+  } else if (gc && !cert) {
+    certHtml = `<div style="background:#1a0f0f;border:1px solid #7f1d1d;border-radius:6px;padding:4px 10px;margin:4px 0;">
+      <span style="font-size:11px;color:#f87171;">&#x26A0;&#xFE0F; ${escH(gc)} 鑑定番号未取得</span>
+    </div>`;
+  }
+
+  /* URL */
+  const urlLabel = srcGrp === 'WORLD'
+    ? `&#x1F517; ${escH(HOUSE_LABEL[aHouse] || aHouse)}で見る`
+    : '&#x1F517; eBayで見る';
+  const urlHtml = item.url
+    ? `<a class="lot-link" href="${escH(item.url)}" target="_blank" onclick="event.stopPropagation()">${urlLabel}</a><br>`
+    : '';
+
+  /* CAP judgment badge */
+  const capJ = item.cap_judgment || '';
+  const capJBadge = capJ === 'CAP_BUY'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#052e16;color:#4ade80;border:1px solid #4ade80;font-weight:bold;">&#9989; CAP_BUY</span>`
+    : capJ === 'CAP_HOLD'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#422006;color:#fbbf24;border:1px solid #d97706;font-weight:bold;">&#9208; CAP_HOLD</span>`
+    : capJ === 'CAP_NG'
+    ? `<span style="font-size:11px;padding:2px 8px;border-radius:10px;background:#450a0a;color:#f87171;border:1px solid #f87171;font-weight:bold;">&#10060; CAP_NG</span>`
+    : '';
+
+  /* comparison_type badge */
+  const ctype = item.comparison_type || '';
+  const ctypeBadge = ctype ? `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#1e293b;color:#93c5fd;border:1px solid #334155;">${escH(ctype)}</span>` : '';
+
+  /* Price grid (CAP analysis版) */
+  const priceUsd = item.price_snapshot_usd ? `$${Number(item.price_snapshot_usd).toFixed(0)}` : '--';
+  const capLimit = item.cap_bid_limit_jpy ? `&#xA5;${Number(item.cap_bid_limit_jpy).toLocaleString('ja-JP')}` + (item.cap_bid_limit_usd ? `<br><span style="font-size:10px;color:#60a5fa;">$${Number(item.cap_bid_limit_usd).toFixed(0)}</span>` : '') : '--';
+  const sellEst  = item.estimated_sell_price_jpy ? `&#xA5;${Number(item.estimated_sell_price_jpy).toLocaleString('ja-JP')}` : '--';
+  const profit   = item.expected_profit_jpy;
+  const profitStr = profit != null
+    ? `<span style="color:${profit >= 20000 ? '#4ade80' : profit > 0 ? '#fbbf24' : '#f87171'};font-weight:bold;">&#xA5;${Number(profit).toLocaleString('ja-JP')}</span><br><span style="font-size:10px;color:#888;">${(item.expected_roi_pct||0).toFixed(1)}% ROI</span>`
+    : '<span style="color:#444;">--</span>';
+  const bids = item.bid_count_snapshot ?? 0;
+  const priceGrid = `<div class="ceo-price-grid">
+  <div class="ceo-pc"><div class="c-lbl">現在価格</div><div class="c-val vw">${priceUsd}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">仕入上限</div><div class="c-val" style="font-size:12px;">${capLimit}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">想定売価</div><div class="c-val vb" style="font-size:12px;">${sellEst}</div></div>
+  <div class="ceo-pc"><div class="c-lbl">想定利益</div><div class="c-val">${profitStr}</div></div>
+</div>`;
+
+  /* Yahoo reference section */
+  const yahooRefHtml = item.yahoo_ref_price_jpy ? `<div style="background:#0a1e30;border:1px solid #1e3a5f;border-radius:6px;padding:7px 10px;margin:5px 0;font-size:11px;">
+    <div style="color:#60a5fa;font-weight:bold;margin-bottom:3px;">&#x1F4CA; Yahoo参照 (${escH(ctype)})</div>
+    <div style="color:#e2e8f0;">${escH((item.yahoo_ref_title||'').slice(0,60))}${(item.yahoo_ref_title||'').length>60?'...':''}</div>
+    <div style="display:flex;gap:10px;margin-top:4px;flex-wrap:wrap;">
+      <span style="color:#4ade80;font-weight:bold;">&#xA5;${Number(item.yahoo_ref_price_jpy).toLocaleString('ja-JP')}</span>
+      <span style="color:#888;">${escH(item.yahoo_ref_date||'')}</span>
+      <span style="color:#fbbf24;">${escH(item.yahoo_ref_grade||'')}</span>
+    </div>
+  </div>` : `<div style="background:#1a0a0a;border:1px solid #7f1d1d;border-radius:6px;padding:6px 10px;margin:5px 0;font-size:11px;color:#f87171;">&#x26A0; Yahoo参照なし — 調査継続が必要</div>`;
+
+  /* CAP comment */
+  const capCommentHtml = item.cap_comment ? `<div style="background:#1e293b;border-radius:6px;padding:8px 10px;margin:5px 0;font-size:11px;color:#cbd5e1;line-height:1.6;white-space:pre-wrap;word-break:break-all;">&#x1F4AC; ${escH(item.cap_comment)}</div>` : '';
+
+  /* Coin image thumbnail (all sources) */
+  const imgHtml = item.image_url
+    ? `<div style="margin:5px 0;display:flex;align-items:center;gap:10px;">
+        <img src="${escH(item.image_url)}" alt="coin"
+          style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid #2a2a4a;background:#111;"
+          onerror="this.style.display='none'">
+        <div>
+          <a href="${escH(item.image_url)}" target="_blank" onclick="event.stopPropagation()"
+            style="display:inline-block;padding:4px 10px;background:#1c3a1c;border:1px solid #4ade80;border-radius:6px;color:#4ade80;text-decoration:none;font-size:12px;">&#x1F5BC; 画像確認</a>
+          <div style="font-size:10px;color:#888;margin-top:3px;">${escH(item.evidence_status||'')}</div>
+        </div>
+      </div>`
+    : (srcGrp === 'WORLD'
+        ? `<div style="background:#1a0a0a;border:1px solid #f59e0b;border-radius:6px;padding:5px 10px;margin:4px 0;font-size:11px;color:#f59e0b;">&#x26A0; 画像導線なし — スラブ未確認</div>`
+        : '');
+
+  /* Coin info / DB */
+  const coinInfo = [item.country, item.year, item.denomination, item.grade, item.material].filter(Boolean).join(' / ');
+  const dbColor  = item.db_similarity === 'あり' ? '#4ade80' : item.db_similarity === '近傍のみ' ? '#fbbf24' : '#6b7280';
+  const dbHtml   = item.db_similarity
+    ? `<div style="font-size:11px;margin:2px 0;">DB: <span style="color:${dbColor};font-weight:bold;">${escH(item.db_similarity)}</span>${item.db_ref_id ? ` <span style="color:#6b7280;font-size:10px;">#${escH(item.db_ref_id)}</span>` : ''}</div>`
+    : '';
+
+  /* Resubmit reason */
+  const resubBadge = item.resubmit_reason
+    ? `<span style="font-size:10px;color:#fbbf24;background:#2a1a00;padding:1px 5px;border-radius:4px;">${escH(item.resubmit_reason)}</span>`
+    : '';
+
+  /* Action area */
+  const rcOptions = REASON_CODES.map(([v,l]) => `<option value="${v}">${v} — ${l}</option>`).join('');
+  const isBlocked = DS === 'DUPLICATE_BLOCKED';
+  let actionHtml;
+  if (isBlocked) {
+    actionHtml = `<div style="padding:8px;background:#0a0a0a;border-radius:6px;font-size:12px;color:#6b7280;text-align:center;">&#x1F6AB; 7日重複ブロック中 — 再提出条件を満たすと自動解除</div>`;
+  } else if (dec) {
+    actionHtml = `<div style="padding:8px;background:#0a0a0a;border-radius:6px;font-size:12px;color:#9ca3af;text-align:center;">
+      判断済み: ${decBadge}
+      ${item.reason_code ? `<span style="color:#6b7280;font-size:11px;margin-left:4px;">${escH(item.reason_code)}</span>` : ''}
+      ${item.reason_text ? `<div style="font-size:11px;color:#6b7280;margin-top:4px;">${escH(item.reason_text)}</div>` : ''}
+    </div>`;
+  } else {
+    actionHtml = `
+    <div class="action-row">
+      <button class="btn-approve" onclick="event.stopPropagation(); doCeoOK('${uuid}','${safeId}',this)">&#x2705; OK</button>
+      <button style="flex:1;padding:12px;border:1px solid #d97706;border-radius:8px;background:#1c1000;color:#fbbf24;font-size:14px;font-weight:bold;cursor:pointer;"
+        onclick="event.stopPropagation(); doCeoHold('${uuid}','${safeId}',this)">&#x23F8; HOLD</button>
+      <button class="btn-ng" onclick="event.stopPropagation(); toggleNgArea('${safeId}')">&#x274C; NG</button>
+    </div>
+    <div class="ng-area" id="ng-area-${safeId}">
+      <select id="ng-code-${safeId}" style="width:100%;padding:8px;border:1px solid #444;border-radius:6px;background:#1e293b;color:#fff;font-size:12px;margin-bottom:6px;">
+        <option value="">-- 理由コード（任意）--</option>
+        ${rcOptions}
+      </select>
+      <textarea id="ng-text-${safeId}" placeholder="NGコメント（任意）" rows="2" style="width:100%;padding:8px;border:1px solid #444;border-radius:6px;background:#1e293b;color:#fff;font-size:12px;resize:vertical;min-height:56px;"></textarea>
+      <button class="ng-submit" onclick="event.stopPropagation(); doCeoNG('${uuid}','${safeId}',this)">&#x274C; NGとして確定する</button>
+    </div>`;
+  }
+
+  const title = escH(item.title_snapshot || '（タイトルなし）');
+  // Header thumbnail
+  const crlThumb = item.image_url
+    ? `<img src="${escH(item.image_url)}" alt="coin"
+        style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:1px solid #2a2a4a;background:#111;flex-shrink:0;"
+        onerror="this.style.display='none'">`
+    : `<div style="width:52px;height:52px;border-radius:6px;background:#1e1e2e;border:1px solid #333;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px;">&#x1FA99;</div>`;
+
+  const crlQuickProfit = item.expected_profit_jpy != null
+    ? `<span style="font-size:11px;font-weight:bold;color:${item.expected_profit_jpy>=20000?'#4ade80':item.expected_profit_jpy>0?'#fbbf24':'#f87171'};">
+        利益&#xA5;${Number(item.expected_profit_jpy).toLocaleString('ja-JP')}
+       </span>`
+    : '';
+  const crlQuickLimit = item.cap_bid_limit_usd
+    ? `<span style="font-size:10px;color:#94a3b8;">上限$${Number(item.cap_bid_limit_usd).toFixed(0)}</span>`
+    : '';
+
+  return `<div class="cand-card" id="crl-${safeId}">
+  <div class="cand-top" onclick="this.closest('.cand-card').classList.toggle('open')">
+    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:5px;">
+      ${crlThumb}
+      <div style="flex:1;min-width:0;">
+        <div class="cand-row" style="margin-bottom:4px;flex-wrap:wrap;">
+          ${bucketBadge} ${houseBadge}
+          <span style="font-size:11px;color:#6b7280;">#${rank}</span>
+          ${scoreBadge} ${capJBadge} ${ctypeBadge} ${dsBadge} ${decBadge} ${resubBadge}
+        </div>
+        <div class="cand-title" style="font-size:12px;">${title}</div>
+        ${certHtml}
+        <div style="font-size:11px;color:#9ca3af;margin:2px 0;">${escH(coinInfo)}</div>
+        <div style="margin-top:3px;display:flex;gap:8px;align-items:center;">${crlQuickProfit} ${crlQuickLimit}</div>
+        ${dbHtml}
+        ${urlHtml}
+      </div>
+    </div>
+    <button class="reason-toggle" onclick="event.stopPropagation(); this.closest('.cand-card').classList.toggle('open')">&#x25B6; CAP分析・価格・操作を見る</button>
+  </div>
+  <div class="cand-detail">
+    ${yahooRefHtml}
+    ${capCommentHtml}
+    ${imgHtml}
+    ${priceGrid}
+    ${actionHtml}
+  </div>
+</div>`;
+}
+
+/* 旧関数名 — 互換性のため残す */
+function renderCandCard(item) { return renderCrlCard(item, 0); }
+
+function toggleNgArea(safeId) {
+  const a = document.getElementById(`ng-area-${safeId}`);
+  if (!a) return;
+  a.style.display = a.style.display === 'block' ? 'none' : 'block';
+  if (a.style.display === 'block') document.getElementById(`ng-text-${safeId}`)?.focus();
+}
+
+async function doCeoOK(uuid, safeId, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const r1 = await fetch(`${SB_URL}/rest/v1/ceo_review_log?id=eq.${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ ceo_decision: 'OK', reviewed_at: new Date().toISOString(), reviewed_by: 'CEO' })
+    });
+    if (!r1.ok) throw new Error(`PATCH ceo_review_log: ${r1.status}`);
+
+    /* bid_history に追加 */
+    const item = _ceoItems.find(i => i.id === uuid);
+    if (item) {
+      await fetch(`${SB_URL}/rest/v1/bid_history`, {
+        method: 'POST',
+        headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+        body: JSON.stringify({
+          lot_title: item.title_snapshot || '',
+          auction_house: item.marketplace || 'eBay',
+          lot_url: item.url || null,
+          result: 'scheduled',
+          recommended_by: 'cap'
+        })
+      });
+    }
+
+    const idx = _ceoItems.findIndex(i => i.id === uuid);
+    if (idx >= 0) _ceoItems[idx].ceo_decision = 'OK';
+    _bidLoaded = false;
+    _ceoUpdateKpi();
+    renderCeoFiltered();
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = 'OK';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+async function doCeoHold(uuid, safeId, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/ceo_review_log?id=eq.${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ ceo_decision: 'HOLD', reviewed_at: new Date().toISOString(), reviewed_by: 'CEO' })
+    });
+    if (!r.ok) throw new Error(`PATCH ceo_review_log: ${r.status}`);
+    const idx = _ceoItems.findIndex(i => i.id === uuid);
+    if (idx >= 0) _ceoItems[idx].ceo_decision = 'HOLD';
+    _ceoUpdateKpi();
+    renderCeoFiltered();
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = 'HOLD';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+async function doCeoNG(uuid, safeId, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  const reason_code = document.getElementById(`ng-code-${safeId}`)?.value || null;
+  const reason_text = (document.getElementById(`ng-text-${safeId}`)?.value || '').trim() || null;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/ceo_review_log?id=eq.${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({ ceo_decision: 'NG', reason_code: reason_code || null, reason_text: reason_text || null, reviewed_at: new Date().toISOString(), reviewed_by: 'CEO' })
+    });
+    if (!r.ok) throw new Error(`PATCH ceo_review_log: ${r.status}`);
+    const idx = _ceoItems.findIndex(i => i.id === uuid);
+    if (idx >= 0) { _ceoItems[idx].ceo_decision = 'NG'; _ceoItems[idx].reason_code = reason_code; _ceoItems[idx].reason_text = reason_text; }
+    _ceoUpdateKpi();
+    renderCeoFiltered();
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = 'NGとして確定する';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+/* 旧関数名互換 */
+function doCeoApprove(key, btn) { return doCeoOK(key, key.replace(/-/g,'_'), btn); }
+
+function _ceoUpdateKpi() {
+  const items    = _ceoItems;
+  const pending  = items.filter(i => !i.ceo_decision && i.duplicate_status !== 'DUPLICATE_BLOCKED').length;
+  const ok       = items.filter(i => i.ceo_decision === 'OK').length;
+  const ng       = items.filter(i => i.ceo_decision === 'NG').length;
+  const hold     = items.filter(i => i.ceo_decision === 'HOLD').length;
+  const blocked  = items.filter(i => i.duplicate_status === 'DUPLICATE_BLOCKED').length;
+  const resub    = items.filter(i => i.duplicate_status === 'RESUBMITTED' && !i.ceo_decision).length;
+  document.getElementById('ceo-kpi-pending').textContent  = pending;
+  document.getElementById('ceo-kpi-ok').textContent       = ok;
+  document.getElementById('ceo-kpi-ng').textContent       = ng;
+  document.getElementById('ceo-kpi-hold').textContent     = hold;
+  document.getElementById('ceo-kpi-blocked').textContent  = blocked;
+  document.getElementById('ceo-kpi-resub').textContent    = resub;
+  const badge = document.getElementById('ceo-count-badge');
+  badge.textContent = pending; badge.style.display = pending > 0 ? '' : 'none';
+}
+
+/* 旧 _ceoAdjustKpi 互換ラッパー */
+function _ceoAdjustKpi() { _ceoUpdateKpi(); }
+
+/* ---- 旧 renderCandCard 本体 (無効化) ---- */
+function _renderCandCardOLD_DISABLED(item) {
   const score = item.priority_score;
   const scoreClass = score >= 70 ? 'score-hi' : score >= 50 ? 'score-md' : 'score-lo';
   const scoreText = score != null ? score : '?';
@@ -1049,84 +1588,6 @@ function renderCandCard(item) {
 </div>`;
 }
 
-function toggleNgArea(key) {
-  const a = document.getElementById(`ng-area-${key}`);
-  a.style.display = a.style.display === 'block' ? 'none' : 'block';
-  if (a.style.display === 'block') document.getElementById(`ng-text-${key}`)?.focus();
-}
-
-async function doCeoApprove(key, btn) {
-  btn.disabled = true; btn.textContent = '保存中...';
-  try {
-    /* 1. daily_candidates を承認済みに更新 */
-    const r1 = await fetch(`${SB_URL}/rest/v1/daily_candidates?dedup_key=eq.${encodeURIComponent(key)}`, {
-      method: 'PATCH',
-      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ ceo_decision: 'approved', ceo_decided_at: new Date().toISOString() })
-    });
-    if (!r1.ok) throw new Error(`PATCH daily_candidates: ${r1.status}`);
-
-    /* 2. 案件情報を取得して bid_history に新規追加 */
-    const r2 = await fetch(
-      `${SB_URL}/rest/v1/daily_candidates?dedup_key=eq.${encodeURIComponent(key)}&select=lot_title,auction_house,lot_url,lot_end_time,buy_limit_jpy`,
-      { headers: SB_HDR }
-    );
-    const cands = await r2.json();
-    if (Array.isArray(cands) && cands.length > 0) {
-      const c = cands[0];
-      await fetch(`${SB_URL}/rest/v1/bid_history`, {
-        method: 'POST',
-        headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
-        body: JSON.stringify({
-          lot_title: c.lot_title,
-          auction_house: c.auction_house,
-          lot_url: c.lot_url,
-          auction_end_at: c.lot_end_time || null,
-          result: 'scheduled',
-          recommended_by: 'cap'
-        })
-      });
-    }
-
-    /* 3. カードをフェードアウト → KPI 更新 */
-    const card = document.getElementById(`cand-${key}`);
-    if (card) { card.style.transition = 'opacity 0.3s'; card.style.opacity = '0'; setTimeout(() => { card.remove(); _ceoAdjustKpi(-1,1,0); }, 300); }
-    _bidLoaded = false; // 入札予定タブを次回リロード対象に
-
-  } catch(e) {
-    console.error(e); btn.disabled = false; btn.textContent = '✅ 承認';
-    alert('保存エラー: ' + e.message);
-  }
-}
-
-async function doCeoNG(key, btn) {
-  btn.disabled = true; btn.textContent = '保存中...';
-  const reason = (document.getElementById(`ng-text-${key}`)?.value || '').trim();
-  try {
-    const r = await fetch(`${SB_URL}/rest/v1/daily_candidates?dedup_key=eq.${encodeURIComponent(key)}`, {
-      method: 'PATCH',
-      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
-      body: JSON.stringify({ ceo_decision: 'rejected', ceo_ng_reason: reason || null, ceo_decided_at: new Date().toISOString() })
-    });
-    if (!r.ok) throw new Error(`PATCH daily_candidates: ${r.status}`);
-    const card = document.getElementById(`cand-${key}`);
-    if (card) { card.style.transition = 'opacity 0.3s'; card.style.opacity = '0'; setTimeout(() => { card.remove(); _ceoAdjustKpi(-1,0,1); }, 300); }
-  } catch(e) {
-    console.error(e); btn.disabled = false; btn.textContent = '❌ NGとして確定する';
-    alert('保存エラー: ' + e.message);
-  }
-}
-
-function _ceoAdjustKpi(pendDelta, appDelta, rejDelta) {
-  const p = v => Math.max(0, (parseInt(document.getElementById(v).textContent) || 0));
-  document.getElementById('ceo-kpi-pending').textContent  = p('ceo-kpi-pending')  + pendDelta;
-  document.getElementById('ceo-kpi-approved').textContent = p('ceo-kpi-approved') + appDelta;
-  document.getElementById('ceo-kpi-rejected').textContent = p('ceo-kpi-rejected') + rejDelta;
-  const n = p('ceo-kpi-pending') + pendDelta;
-  const badge = document.getElementById('ceo-count-badge');
-  badge.textContent = n; badge.style.display = n > 0 ? '' : 'none';
-}
-
 /* =====================================================
    入札予定パネル
    ===================================================== */
@@ -1373,6 +1834,286 @@ async function uploadScreenshot(file, bidId) {
     console.warn('Screenshot upload failed:', r.status);
   } catch(e) { console.warn('Screenshot upload error:', e); }
   return null;
+}
+
+/* =====================================================
+   マーケ確認パネル — marketing_status ベース
+   ===================================================== */
+let _mktItems = [];
+let _mktLoaded = false;
+let _mktSourceFilter = 'all';
+let _mktStatusFilter = 'MARKETING_REVIEW';
+
+function setMktSourceGroup(val, btn) {
+  _mktSourceFilter = val;
+  document.querySelectorAll('#mkt-source-filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderMktFiltered();
+}
+function setMktStatusFilter(val, btn) {
+  _mktStatusFilter = val;
+  document.querySelectorAll('#mkt-status-filters button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderMktFiltered();
+}
+
+async function loadMktPanel(reset) {
+  if (reset) _mktLoaded = true;
+  document.getElementById('mkt-list').innerHTML = '<div class="loading-state">読み込み中...</div>';
+  try {
+    const hdr = { ...SB_HDR, 'Prefer': 'count=exact' };
+    const cnt = async (filter) => {
+      const r = await fetch(`${SB_URL}/rest/v1/ceo_review_log?${filter}&select=id&limit=1`, { headers: hdr });
+      const cr = r.headers.get('content-range');
+      return cr ? parseInt(cr.split('/')[1] || 0) : 0;
+    };
+    const [rCnt, aCnt, rtCnt] = await Promise.all([
+      cnt('marketing_status=eq.MARKETING_REVIEW'),
+      cnt('marketing_status=eq.MARKETING_APPROVED'),
+      cnt('marketing_status=eq.MARKETING_RETURNED'),
+    ]);
+    document.getElementById('mkt-kpi-review').textContent   = rCnt;
+    document.getElementById('mkt-kpi-approved').textContent = aCnt;
+    document.getElementById('mkt-kpi-returned').textContent = rtCnt;
+    const badge = document.getElementById('mkt-count-badge');
+    badge.textContent = rCnt; badge.style.display = rCnt > 0 ? '' : 'none';
+  } catch(e) { console.error('Mkt KPI:', e); }
+
+  try {
+    const cols = 'id,source_group,auction_house,url,title_snapshot,cert_company,cert_number,grade,country,year,denomination,material,price_snapshot_usd,price_snapshot_jpy,snapshot_score,review_bucket,ceo_decision,comparison_type,yahoo_ref_title,yahoo_ref_price_jpy,yahoo_ref_date,yahoo_ref_grade,cap_bid_limit_jpy,cap_bid_limit_usd,estimated_sell_price_jpy,expected_profit_jpy,expected_roi_pct,cap_judgment,cap_comment,image_url,evidence_status,category,marketing_status,marketing_comment';
+    const resp = await fetch(
+      `${SB_URL}/rest/v1/ceo_review_log?select=${cols}&limit=500&order=snapshot_score.desc`,
+      { headers: SB_HDR }
+    );
+    _mktItems = await resp.json();
+    if (!Array.isArray(_mktItems)) _mktItems = [];
+    renderMktFiltered();
+  } catch(e) {
+    console.error('Mkt list:', e);
+    document.getElementById('mkt-list').innerHTML = '<div class="empty-state" style="color:#f87171;">読み込みエラー</div>';
+  }
+}
+
+function renderMktFiltered() {
+  let items = [..._mktItems];
+  if (_mktStatusFilter !== 'all') {
+    items = items.filter(i => i.marketing_status === _mktStatusFilter);
+  }
+  if (_mktSourceFilter !== 'all') {
+    items = items.filter(i => (i.source_group || 'EBAY') === _mktSourceFilter);
+  }
+  const list = document.getElementById('mkt-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state">該当案件はありません</div>';
+    return;
+  }
+  list.innerHTML = `<div style="font-size:11px;color:#888;margin-bottom:6px;">${items.length}件</div>` +
+    items.map((item, idx) => renderMktCard(item, idx + 1)).join('');
+}
+
+function renderMktCard(item, rank) {
+  const uuid   = item.id || '';
+  const safeId = uuid.replace(/-/g, '_');
+  const srcGrp = item.source_group || 'EBAY';
+  const aHouse = item.auction_house || 'EBAY';
+  const title  = escH(item.title_snapshot || '（タイトルなし）');
+  const score  = item.snapshot_score;
+  const bucket = item.review_bucket || '';
+  const capJ   = item.cap_judgment || '';
+  const ms     = item.marketing_status || '';
+
+  const capJBadge = capJ === 'CAP_BUY'
+    ? `<span style="font-size:11px;padding:2px 7px;border-radius:10px;background:#052e16;color:#4ade80;border:1px solid #4ade80;font-weight:bold;">&#9989; CAP_BUY</span>`
+    : capJ === 'CAP_HOLD'
+    ? `<span style="font-size:11px;padding:2px 7px;border-radius:10px;background:#422006;color:#fbbf24;border:1px solid #d97706;font-weight:bold;">&#9208; CAP_HOLD</span>`
+    : capJ === 'CAP_NG'
+    ? `<span style="font-size:11px;padding:2px 7px;border-radius:10px;background:#450a0a;color:#f87171;border:1px solid #f87171;font-weight:bold;">&#10060; CAP_NG</span>`
+    : '';
+  const msBadge = ms === 'MARKETING_REVIEW'
+    ? `<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:#422006;color:#fbbf24;">確認待ち</span>`
+    : ms === 'MARKETING_APPROVED'
+    ? `<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:#052e16;color:#4ade80;">承認済</span>`
+    : ms === 'MARKETING_RETURNED'
+    ? `<span style="font-size:10px;padding:2px 7px;border-radius:8px;background:#450a0a;color:#f87171;">差し戻し</span>`
+    : `<span style="font-size:10px;color:#666;">${escH(ms)}</span>`;
+
+  const houseBadge = srcGrp === 'WORLD'
+    ? `<span style="font-size:11px;padding:2px 7px;border-radius:10px;background:#0c1a2e;color:#93c5fd;border:1px solid #1d4ed8;">&#127758; ${escH(HOUSE_LABEL[aHouse]||aHouse)}</span>`
+    : '';
+  const bucketBadge = bucket ? `<span style="font-size:10px;padding:1px 6px;border-radius:8px;background:#1e1e2e;color:#9ca3af;border:1px solid #4b5563;">${escH(bucket)}</span>` : '';
+
+  // Yahoo ref
+  const yahooHtml = item.yahoo_ref_price_jpy
+    ? `<div style="background:#0a1e30;border:1px solid #1e3a5f;border-radius:6px;padding:6px 10px;margin:5px 0;font-size:11px;">
+        <span style="color:#60a5fa;font-weight:bold;">Yahoo参照 (${escH(item.comparison_type||'')})</span>
+        <span style="color:#4ade80;font-weight:bold;margin-left:8px;">&#xA5;${Number(item.yahoo_ref_price_jpy).toLocaleString('ja-JP')}</span>
+        <span style="color:#888;margin-left:6px;">${escH(item.yahoo_ref_date||'')} ${escH(item.yahoo_ref_grade||'')}</span>
+        <div style="color:#94a3b8;margin-top:2px;">${escH((item.yahoo_ref_title||'').slice(0,55))}${(item.yahoo_ref_title||'').length>55?'...':''}</div>
+      </div>`
+    : `<div style="background:#1a0a0a;border:1px solid #7f1d1d;border-radius:6px;padding:5px 10px;margin:4px 0;font-size:11px;color:#f87171;">&#x26A0; Yahoo参照なし</div>`;
+
+  // Profit grid
+  const capLimit = item.cap_bid_limit_jpy ? `&#xA5;${Number(item.cap_bid_limit_jpy).toLocaleString('ja-JP')}` + (item.cap_bid_limit_usd ? ` ($${Number(item.cap_bid_limit_usd).toFixed(0)})` : '') : '--';
+  const profit   = item.expected_profit_jpy;
+  const profitStr = profit != null
+    ? `<span style="color:${profit >= 20000 ? '#4ade80' : profit > 0 ? '#fbbf24' : '#f87171'};font-weight:bold;">&#xA5;${Number(profit).toLocaleString('ja-JP')}</span>`
+    : '--';
+  const roi = item.expected_roi_pct != null ? `ROI ${Number(item.expected_roi_pct).toFixed(1)}%` : '';
+  const profitGrid = `<div class="ceo-price-grid">
+    <div class="ceo-pc"><div class="c-lbl">仕入上限</div><div class="c-val" style="font-size:12px;">${capLimit}</div></div>
+    <div class="ceo-pc"><div class="c-lbl">想定売価</div><div class="c-val vb" style="font-size:12px;">${item.estimated_sell_price_jpy ? `&#xA5;${Number(item.estimated_sell_price_jpy).toLocaleString('ja-JP')}` : '--'}</div></div>
+    <div class="ceo-pc"><div class="c-lbl">想定利益</div><div class="c-val">${profitStr}<br><span style="font-size:10px;color:#888;">${roi}</span></div></div>
+  </div>`;
+
+  // CAP comment
+  const capComHtml = item.cap_comment ? `<div style="background:#1e293b;border-radius:6px;padding:8px;margin:5px 0;font-size:11px;color:#cbd5e1;line-height:1.6;white-space:pre-wrap;word-break:break-all;">&#x1F4AC; ${escH(item.cap_comment)}</div>` : '';
+
+  // Coin image thumbnail (all sources)
+  const imgHtml = item.image_url
+    ? `<div style="margin:5px 0;display:flex;align-items:center;gap:10px;">
+        <img src="${escH(item.image_url)}" alt="coin"
+          style="width:72px;height:72px;object-fit:cover;border-radius:6px;border:1px solid #2a2a4a;background:#111;"
+          onerror="this.style.display='none'">
+        <div>
+          <a href="${escH(item.image_url)}" target="_blank" onclick="event.stopPropagation()"
+            style="display:inline-block;padding:4px 10px;background:#1c3a1c;border:1px solid #4ade80;border-radius:6px;color:#4ade80;text-decoration:none;font-size:12px;">&#x1F5BC; 画像確認</a>
+          <div style="font-size:10px;color:#888;margin-top:3px;">${escH(item.evidence_status||'')}</div>
+        </div>
+      </div>`
+    : (srcGrp === 'WORLD'
+        ? `<div style="background:#1a1000;border:1px solid #f59e0b;border-radius:6px;padding:5px 10px;margin:4px 0;font-size:11px;color:#f59e0b;">&#x26A0; 画像導線なし — 差し戻し条件</div>`
+        : '');
+
+  // URL link
+  const urlHtml = item.url ? `<a class="lot-link" href="${escH(item.url)}" target="_blank" onclick="event.stopPropagation()">&#x1F517; 商品を見る</a><br>` : '';
+
+  // Marketing action
+  let mktActionHtml = '';
+  if (ms === 'MARKETING_REVIEW') {
+    mktActionHtml = `
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button style="flex:1;padding:11px;border:none;border-radius:8px;background:#ffd700;color:#000;font-size:13px;font-weight:bold;cursor:pointer;"
+        onclick="event.stopPropagation();doMktApprove('${uuid}','${safeId}',this)">&#9989; 承認→CEO確認へ</button>
+      <button style="flex:1;padding:11px;border:1px solid #7f1d1d;border-radius:8px;background:#1e1010;color:#fca5a5;font-size:13px;font-weight:bold;cursor:pointer;"
+        onclick="event.stopPropagation();toggleMktReturnArea('${safeId}')">&#10060; 差し戻す</button>
+    </div>
+    <div id="mkt-return-${safeId}" style="display:none;margin-top:6px;">
+      <textarea id="mkt-rtext-${safeId}" placeholder="差し戻し理由（必須）" rows="3"
+        style="width:100%;padding:8px;border:1px solid #444;border-radius:6px;background:#1e293b;color:#fff;font-size:12px;resize:vertical;"></textarea>
+      <button style="width:100%;margin-top:5px;padding:10px;border:none;border-radius:6px;background:#7f1d1d;color:#fca5a5;font-weight:bold;font-size:13px;cursor:pointer;"
+        onclick="event.stopPropagation();doMktReturn('${uuid}','${safeId}',this)">差し戻し確定</button>
+    </div>`;
+  } else if (ms === 'MARKETING_APPROVED') {
+    mktActionHtml = `<div style="padding:8px;background:#0a1a0a;border-radius:6px;font-size:12px;color:#4ade80;text-align:center;">&#9989; 承認済 — CEO確認タブへ転送済み</div>`;
+  } else if (ms === 'MARKETING_RETURNED') {
+    mktActionHtml = `
+    <div style="background:#1a0a0a;border-radius:6px;padding:8px;font-size:12px;color:#f87171;margin-top:6px;">&#10060; 差し戻し済み${item.marketing_comment ? `<br><span style="color:#fca5a5;">${escH(item.marketing_comment)}</span>` : ''}</div>
+    <button style="width:100%;margin-top:6px;padding:10px;border:1px solid #4ade80;border-radius:6px;background:#0a1a0a;color:#4ade80;font-size:12px;cursor:pointer;"
+      onclick="event.stopPropagation();doMktApprove('${uuid}','${safeId}',this)">&#9989; 再承認→CEO確認へ</button>`;
+  }
+
+  // Header thumbnail + quick summary
+  const thumbHtml = item.image_url
+    ? `<img src="${escH(item.image_url)}" alt="coin"
+        style="width:52px;height:52px;object-fit:cover;border-radius:6px;border:1px solid #2a2a4a;background:#111;flex-shrink:0;"
+        onerror="this.style.display='none'">`
+    : `<div style="width:52px;height:52px;border-radius:6px;background:#1e1e2e;border:1px solid #333;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px;">&#x1FA99;</div>`;
+
+  const quickProfit = item.expected_profit_jpy != null
+    ? `<span style="font-size:11px;font-weight:bold;color:${item.expected_profit_jpy>=20000?'#4ade80':item.expected_profit_jpy>0?'#fbbf24':'#f87171'};">
+        &#xA5;${Number(item.expected_profit_jpy).toLocaleString('ja-JP')}
+       </span>`
+    : '';
+  const quickLimit = item.cap_bid_limit_usd
+    ? `<span style="font-size:10px;color:#94a3b8;">上限$${Number(item.cap_bid_limit_usd).toFixed(0)}</span>`
+    : '';
+
+  return `<div class="cand-card" id="mkt-${safeId}" style="border-color:${ms==='MARKETING_APPROVED'?'#166534':ms==='MARKETING_RETURNED'?'#7f1d1d':'#2a2a4a'};">
+  <div class="cand-top" onclick="this.closest('.cand-card').classList.toggle('open')">
+    <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:5px;">
+      ${thumbHtml}
+      <div style="flex:1;min-width:0;">
+        <div class="cand-row" style="margin-bottom:4px;flex-wrap:wrap;">
+          ${bucketBadge} ${houseBadge} <span style="font-size:11px;color:#6b7280;">#${rank}</span>
+          <span style="font-size:11px;color:#888;">Sc:${score||'?'}</span>
+          ${capJBadge} ${msBadge}
+        </div>
+        <div class="cand-title" style="font-size:12px;">${title}</div>
+        <div style="margin-top:3px;display:flex;gap:8px;align-items:center;">${quickProfit} ${quickLimit}</div>
+        ${urlHtml}
+      </div>
+    </div>
+    <button class="reason-toggle" onclick="event.stopPropagation();this.closest('.cand-card').classList.toggle('open')">&#x25B6; CAP分析・審査操作を見る</button>
+  </div>
+  <div class="cand-detail">
+    ${yahooHtml}
+    ${capComHtml}
+    ${imgHtml}
+    ${profitGrid}
+    ${mktActionHtml}
+  </div>
+</div>`;
+}
+
+function toggleMktReturnArea(safeId) {
+  const el = document.getElementById(`mkt-return-${safeId}`);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function doMktApprove(uuid, safeId, btn) {
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/ceo_review_log?id=eq.${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        marketing_status: 'MARKETING_APPROVED',
+        marketing_reviewed_at: new Date().toISOString(),
+        marketing_reviewed_by: 'marketing',
+        updated_at: new Date().toISOString()
+      })
+    });
+    if (!r.ok) throw new Error(`PATCH: ${r.status}`);
+    const idx = _mktItems.findIndex(i => i.id === uuid);
+    if (idx >= 0) _mktItems[idx].marketing_status = 'MARKETING_APPROVED';
+    _mktLoaded = false; // force CEO tab reload
+    _ceoItems  = [];
+    renderMktFiltered();
+    // update KPI badges
+    const cnt = _mktItems.filter(i => i.marketing_status === 'MARKETING_REVIEW').length;
+    const badge = document.getElementById('mkt-count-badge');
+    badge.textContent = cnt; badge.style.display = cnt > 0 ? '' : 'none';
+    document.getElementById('mkt-kpi-review').textContent = cnt;
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = '&#9989; 承認→CEO確認へ';
+    alert('保存エラー: ' + e.message);
+  }
+}
+
+async function doMktReturn(uuid, safeId, btn) {
+  const comment = document.getElementById(`mkt-rtext-${safeId}`)?.value.trim();
+  if (!comment) { alert('差し戻し理由を入力してください'); return; }
+  btn.disabled = true; btn.textContent = '保存中...';
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/ceo_review_log?id=eq.${encodeURIComponent(uuid)}`, {
+      method: 'PATCH',
+      headers: { ...SB_HDR, 'Prefer': 'return=minimal' },
+      body: JSON.stringify({
+        marketing_status: 'MARKETING_RETURNED',
+        marketing_comment: comment,
+        marketing_reviewed_at: new Date().toISOString(),
+        marketing_reviewed_by: 'marketing',
+        updated_at: new Date().toISOString()
+      })
+    });
+    if (!r.ok) throw new Error(`PATCH: ${r.status}`);
+    const idx = _mktItems.findIndex(i => i.id === uuid);
+    if (idx >= 0) { _mktItems[idx].marketing_status = 'MARKETING_RETURNED'; _mktItems[idx].marketing_comment = comment; }
+    renderMktFiltered();
+  } catch(e) {
+    console.error(e); btn.disabled = false; btn.textContent = '差し戻し確定';
+    alert('保存エラー: ' + e.message);
+  }
 }
 
 /* ===== 初期化 ===== */
