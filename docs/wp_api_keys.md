@@ -8,13 +8,15 @@
 
 ## サイト一覧
 
-| # | サイト | URL | USER | APP_PASS |
-|---|--------|-----|------|----------|
-| 1 | taiyou-denryoku-hikaku | https://taiyou-denryoku-hikaku.com/ | taiyoukou | oSjq DkNq 1hA5 pS8Q 8L6g pWaV |
-| 2 | solarpower-baikyaku | https://solarpower-baikyaku.info | adminadmin | TeCz ab6v oLr3 2G3n dfSw mWQi |
-| 3 | eneuru | https://eneuru.com | eneuru_admin | rUTf cv8T GFBu usDY x23U bTgI |
-| 4 | solar-kaitori | https://solar-kaitori.com | kVZvFbFV88dJ | LEli 9AXt aMCO djME trqg h9hI |
-| 5 | （未取得） | - | - | - |
+| # | サイト | URL | USER | APP_PASS（サイバー） | APP_PASS（CAP） |
+|---|--------|-----|------|----------------------|-----------------|
+| 1 | taiyou-denryoku-hikaku | https://taiyou-denryoku-hikaku.com/ | taiyoukou | oSjq DkNq 1hA5 pS8Q 8L6g pWaV | — |
+| 2 | solarpower-baikyaku | https://solarpower-baikyaku.info | adminadmin | TeCz ab6v oLr3 2G3n dfSw mWQi | sfT3 Kqp8 6Wf3 3LzS igmE 3B17 |
+| 3 | eneuru | https://eneuru.com | eneuru_admin | rUTf cv8T GFBu usDY x23U bTgI | — |
+| 4 | solar-kaitori | https://solar-kaitori.com | kVZvFbFV88dJ | LEli 9AXt aMCO djME trqg h9hI | — |
+| 5 | kimete | https://www.kimete.app/ | kimete2026 | r1uz VsCd x4aR Jm1q Mj0R C5PU | — |
+
+> CAP用APP_PASSは各サイト管理画面でユーザーごとに発行。「—」は未発行。
 
 ---
 
