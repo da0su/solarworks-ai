@@ -65,7 +65,7 @@ DB_PATH = REPO_ROOT / "rakuten-room" / "bot" / "data" / "room_bot_v5.db"
 HEARTBEAT_PATH = REPO_ROOT / "rakuten-room" / "bot" / "data" / "state" / "heartbeat.json"
 PREFLIGHT_SCRIPT = REPO_ROOT / "ops" / "scheduler" / "preflight_v5.py"
 
-VALID_ACTIONS = {"follow", "follow_host", "post", "like", "followback", "preflight"}
+VALID_ACTIONS = {"follow", "follow_host", "post", "like", "followback", "replenish", "preflight"}
 
 # ---- heartbeat ---------------------------------------------------------------
 
@@ -199,6 +199,32 @@ def runner_follow_host(limit: int) -> tuple[int, str, dict]:
                 pass
             break
     return (rc, stop_reason, {"stdout_tail": out[-600:], "stderr_tail": err[-500:]})
+
+
+def runner_replenish(limit: int) -> tuple[int, str, dict]:
+    """Dispatch to商品プール補充。
+
+    2026-05-05 Phase B-1: replenish 責任を orchestrator_v5 に明確化。
+        従来は run.py auto の Step 2 で内部呼び出し（Post Batch1/2/3 起動時のみ）
+        だったが、本 action で独立実行可能に。Windows Task Scheduler に
+        毎日 06:00 で登録すれば daily replenish が確実に走る。
+
+    呼び出し: rakuten-room/bot/run.py replenish (legacy・既存実装) を使用。
+    timeout=1200 (20分) — 楽天API レート制限考慮で大きめ。
+    """
+    script = REPO_ROOT / "rakuten-room" / "bot" / "run.py"
+    cmd = [sys.executable, str(script), "replenish"]
+    # limit は replenish では target_max として転用可能だが、現行 run.py replenish は
+    # config の POOL_MIN/MAX を使うので transparent。
+    rc, out, err = _run_sub(cmd, timeout=1200)
+    stop_reason = "ok" if rc == 0 else "replenish_fail"
+    # 終了行から「N件追加」抽出を試みる
+    detail = {"stdout_tail": out[-800:], "stderr_tail": err[-500:]}
+    for line in reversed((out or "").splitlines()):
+        if "件追加" in line or "プール" in line:
+            detail["last_line"] = line.strip()
+            break
+    return (rc, stop_reason, detail)
 
 
 def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
@@ -370,6 +396,10 @@ def main(argv=None):
     try:
         if action in ("follow", "followback"):
             lock_ctx = VbLock(action, wait_sec=args.lock_wait)
+        elif action == "replenish":
+            # replenish は API 取得のみ（Chrome 不要）なので post lock を共有
+            # Phase A-2 で profile分離済のため Chrome competition は無関係
+            lock_ctx = Lock("post", wait_sec=args.lock_wait)
         else:
             lock_ctx = Lock(action, wait_sec=args.lock_wait)
         lock_held = lock_ctx.__enter__()
@@ -396,6 +426,8 @@ def main(argv=None):
             rc, stop_reason, detail = runner_like(args.limit)
         elif action == "followback":
             rc, stop_reason, detail = runner_followback(args.limit)
+        elif action == "replenish":
+            rc, stop_reason, detail = runner_replenish(args.limit)
         else:
             rc, stop_reason, detail = (5, "invalid_action", {})
     finally:

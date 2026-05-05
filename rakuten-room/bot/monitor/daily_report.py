@@ -20,13 +20,20 @@ def generate_report(queue_date: str = None, report_type: str = "morning") -> str
     """日次レポートを生成する
 
     Args:
-        queue_date: 対象日（省略時は今日）
-        report_type: "morning"（9時レポート）or "night"（23時日報+計画）
+        queue_date: 対象日（省略時は morning=前日, night=今日）
+        report_type: "morning"（9時レポート: 前日実績）or "night"（23時日報+計画: 今日実績）
 
     Returns:
         str: レポートテキスト
     """
-    date = queue_date or datetime.now().strftime("%Y-%m-%d")
+    if queue_date:
+        date = queue_date
+    elif report_type == "morning":
+        # 朝レポートは「前日の実績」を集計する
+        date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    else:
+        # 夜レポートは「今日の実績」
+        date = datetime.now().strftime("%Y-%m-%d")
 
     if report_type == "night":
         return _generate_night_report(date)
@@ -145,8 +152,8 @@ def _generate_night_report(date: str) -> str:
 
 
 def generate_slack_morning(date: str = None) -> str:
-    """Slack用朝レポート（簡潔版）"""
-    date = date or datetime.now().strftime("%Y-%m-%d")
+    """Slack用朝レポート（簡潔版）- 対象は前日の実績"""
+    date = date or (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     stats = _get_queue_stats(date)
     pool = _get_pool_info()
     health = _get_health_status(date)
@@ -242,7 +249,7 @@ def _get_queue_stats(date: str) -> dict:
 
 
 def _get_pool_info() -> dict:
-    """プール情報取得"""
+    """プール情報取得 + 監査 metrics（Phase B-2）"""
     try:
         from planner.pool_manager import get_pool_stats
         stats = get_pool_stats()
@@ -250,7 +257,33 @@ def _get_pool_info() -> dict:
         mode = config.get_operation_mode()
         daily = mode.get("safe_limit", 20) if mode["mode"] == "SAFE" else config.POST_DAILY_MAX
         days = total // daily if daily > 0 else 999
-        return {"total": total, "depletion_days": days, "by_genre": stats.get("by_genre", {})}
+        info = {"total": total, "depletion_days": days, "by_genre": stats.get("by_genre", {})}
+        # Phase B-2: audit_results.json から audit 比率を追加（pool健全性の早期警告）
+        try:
+            import json as _json
+            audit_path = config.AUDIT_RESULTS_PATH
+            if audit_path.exists():
+                audit_data = _json.loads(audit_path.read_text(encoding="utf-8"))
+                if isinstance(audit_data, list) and audit_data:
+                    counts = {"pass": 0, "review": 0, "fail": 0}
+                    for d in audit_data:
+                        r = d.get("audit_result", "unknown")
+                        if r in counts:
+                            counts[r] += 1
+                    total_audited = sum(counts.values())
+                    if total_audited > 0:
+                        info["audit"] = {
+                            "total": total_audited,
+                            "pass": counts["pass"],
+                            "review": counts["review"],
+                            "fail": counts["fail"],
+                            "pass_pct": round(counts["pass"] * 100 / total_audited, 1),
+                            "review_pct": round(counts["review"] * 100 / total_audited, 1),
+                            "fail_pct": round(counts["fail"] * 100 / total_audited, 1),
+                        }
+        except Exception:
+            pass
+        return info
     except Exception:
         return {"total": 0, "depletion_days": 0, "by_genre": {}}
 

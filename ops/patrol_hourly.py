@@ -13,7 +13,7 @@
   - follow:      log_age>180min(VM専用・3h間隔) or delta=0 AND age>120min → problem
   - post:        (今日posted=0 AND JST時刻>=08:00) → problem (scheduler停止疑い)
   - like:        (今日liked=0 AND JST時刻>=15:00) → problem
-  - followback:  未実装中は status=pending_impl / 実装後 (今日0件 AND >=19:00) → problem
+  - followback:  operational (152件/日実績、2026-05-05 Phase B-3 で integrated)。今日0件 AND >=19:00 → problem
 
 Usage:
     python ops/patrol_hourly.py           # 観測のみ
@@ -285,6 +285,23 @@ def check_post() -> dict:
     if info.get("last_posted_age_days") is not None and info["last_posted_age_days"] >= 2:
         info["problem"] = True
         info["reasons"].append(f"last_post_{info['last_posted_age_days']:.0f}d_ago")
+
+    # 5. Phase B-1: 商品プール件数監視（POOL_MIN=700 を割ったら警告、200未満で critical）
+    try:
+        source_items = ROOT / "rakuten-room" / "bot" / "data" / "source_items.json"
+        if source_items.exists():
+            pool_data = json.loads(source_items.read_text(encoding="utf-8"))
+            pool_count = len(pool_data) if isinstance(pool_data, list) else 0
+            info["pool_count"] = pool_count
+            # POOL_MIN=700 (config.py)。CRITICAL=200未満、WARN=700未満
+            if pool_count < 200:
+                info["problem"] = True
+                info["reasons"].append(f"pool_critical({pool_count}<200)")
+            elif pool_count < 700:
+                info["problem"] = True
+                info["reasons"].append(f"pool_low({pool_count}<700)")
+    except Exception as e:
+        info["pool_count_error"] = str(e)
     return info
 
 
@@ -394,17 +411,23 @@ def check_followback() -> dict:
     info["today_followback"] = today_fb
     info["last_followback_at"] = last_fb
 
-    # 実装判定: follow_log に action='followback' 実績 0 かつ pending 0 → 未実装
-    if today_fb == 0 and pending == 0 and last_fb is None:
-        info["status"] = "pending_impl"
-        # 未実装中は problem=False（判定対象外）
-        return info
-
+    # 2026-05-05 Phase B-3: followback は operational 確定（152件/日の運用実績）
+    # 旧 pending_impl 判定は削除。pending=0 でも operational 扱いとする
     info["status"] = "operational"
-    # 判定: JST 19:00 以降で today_fb==0 AND pending>0 → problem
+    # 判定1: JST 19:00 以降で today_fb==0 AND pending>0 → problem
     if now.hour >= 19 and today_fb == 0 and pending > 0:
         info["problem"] = True
         info["reasons"].append(f"pending_{pending}_not_processed_after_1900")
+    # 判定2: last_fb から3日以上 → problem (followback 機能が止まっている可能性)
+    if last_fb:
+        try:
+            dt = datetime.fromisoformat(str(last_fb).replace("Z", ""))
+            age_days = (now - dt).total_seconds() / 86400
+            if age_days >= 3.0:
+                info["problem"] = True
+                info["reasons"].append(f"last_followback_{age_days:.1f}d_ago")
+        except Exception:
+            pass
     return info
 
 
