@@ -154,7 +154,7 @@ class FollowExecutor:
         logger.info(f"=== フォローBOT 開始 (目標: {self.limit}件) ===")
         logger.info("=" * 60)
 
-        bm = BrowserManager()
+        bm = BrowserManager(action="follow")
         abort_reason = None
 
         try:
@@ -174,8 +174,31 @@ class FollowExecutor:
 
             logger.info(f"ログイン確認OK ({login_status['method']})")
 
-            # おすすめユーザーページに遷移
-            abort_reason = self._follow_from_recommend(bm)
+            # フェーズ1: フォロワー返しページ（自分のフォロワーで未返しのユーザー）
+            if self.followed_count < self.limit:
+                abort_reason = self._follow_from_page(
+                    bm, config.FOLLOWERS_URL, "フォロワー返し"
+                )
+
+            # フェーズ2: おすすめユーザーページ
+            if self.followed_count < self.limit and not abort_reason:
+                abort_reason = self._follow_from_page(
+                    bm, config.RECOMMEND_USERS_URL, "おすすめユーザー"
+                )
+
+            # フェーズ3: follow_candidates.db の pending を消化（Phase 1-3）
+            # recommendUsers/フォロワー返しは既フォロー多数で枯渇しがちなので、
+            # 1,000件超の在庫がある candidates DB を主供給源として使う。
+            if self.followed_count < self.limit and not abort_reason:
+                logger.info(f"フォロー源枯渇 ({self.followed_count}/{self.limit}件)。"
+                            f"follow_candidates.db の pending を消化します...")
+                abort_reason = self._follow_from_candidates_db(bm)
+
+            # フェーズ4: それでも未達ならアイテムフィードから新規ユーザーを発見
+            if self.followed_count < self.limit and not abort_reason:
+                logger.info(f"DB候補不足 ({self.followed_count}/{self.limit}件)。"
+                            f"アイテムフィードから新規ユーザーを探します...")
+                abort_reason = self._follow_from_items_feed(bm)
 
         except Exception as e:
             abort_reason = f"予期しないエラー: {e}"
@@ -185,8 +208,10 @@ class FollowExecutor:
 
         return self._make_summary(abort_reason is not None, abort_reason)
 
-    def _follow_from_recommend(self, bm: BrowserManager) -> str | None:
-        """おすすめユーザーページからフォローする
+    def _follow_from_page(self, bm: BrowserManager, url: str, label: str) -> str | None:
+        """指定ページ（フォロワー返し / おすすめユーザー）からフォローする
+
+        Angular border-button 形式のページに対応。
 
         Returns:
             中断理由（正常完了ならNone）
@@ -194,11 +219,11 @@ class FollowExecutor:
         page = bm.page
 
         try:
-            page.goto(config.RECOMMEND_USERS_URL, wait_until="domcontentloaded")
+            page.goto(url, wait_until="domcontentloaded")
             self._human_delay(3.0, 5.0)
         except Exception as e:
-            logger.error(f"おすすめユーザーページ遷移エラー: {e}")
-            return f"ページ遷移エラー: {e}"
+            logger.error(f"{label}ページ遷移エラー: {e}")
+            return None  # このソースをスキップして次へ
 
         # ログインリダイレクトチェック
         if "grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url:
@@ -206,11 +231,11 @@ class FollowExecutor:
 
         # 404チェック
         if self._is_404_page(page):
-            logger.error(f"404ページ: {page.url}")
-            return f"404ページ: {page.url}"
+            logger.warning(f"404ページ（スキップ）: {page.url}")
+            return None
 
-        logger.info(f"おすすめユーザーページ表示: {page.url}")
-        bm.take_screenshot("follow_recommend_start")
+        logger.info(f"{label}ページ表示: {page.url}")
+        bm.take_screenshot(f"follow_{label}_start")
 
         # AngularJS レンダリング待機
         self._wait_for_angular(page)
@@ -241,6 +266,300 @@ class FollowExecutor:
                     self._human_delay(3.0, 6.0)
             elif result == "clicked":
                 scroll_count = 0  # クリックできたらスクロールカウントリセット
+
+        return None
+
+    # ================================================================
+    # follow_candidates.db からプロフィール直行フォロー（Phase 1-3）
+    # ================================================================
+
+    def _follow_from_candidates_db(self, bm: BrowserManager) -> str | None:
+        """follow_candidates.db の pending 候補をプロフィールページで消化する。
+
+        - score 降順 + discovered_at 昇順で取り出す
+        - 既に follow_history.json にある userName/user_id はスキップして 'skipped' マーク
+        - 成功時は 'followed' / 失敗時は 'failed' でDBを更新
+        - LIMIT は self.limit の3倍（フォロー済み含むので余裕を持たせる）
+
+        Returns:
+            中断理由（正常完了ならNone）
+        """
+        try:
+            from planner.follow_candidates import (
+                init_db,
+                get_pending_candidates,
+                mark_followed,
+                mark_skipped,
+                mark_failed,
+            )
+        except Exception as e:
+            logger.warning(f"follow_candidates モジュール読み込み失敗: {e}")
+            return None
+
+        page = bm.page
+
+        # DB接続を1セッション内で使い回す
+        try:
+            conn = init_db()
+        except Exception as e:
+            logger.error(f"follow_candidates.db 接続エラー: {e}")
+            return None
+
+        try:
+            need = max(self.limit - self.followed_count, 0)
+            if need <= 0:
+                return None
+
+            # 既フォロー含めて余裕を持って取得
+            fetch_limit = need * 3
+            candidates = get_pending_candidates(limit=fetch_limit, conn=conn)
+            logger.info(f"DB候補取得: {len(candidates)}件 (need={need})")
+
+            if not candidates:
+                logger.warning("follow_candidates.db に pending 候補がありません")
+                return None
+
+            for cand in candidates:
+                if self.followed_count >= self.limit:
+                    break
+                if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    return f"{MAX_CONSECUTIVE_FAILURES}件連続失敗で自動停止"
+
+                user_id = cand.get("user_id", "")
+                user_name = cand.get("userName", "")
+                if not user_name:
+                    continue
+
+                # 既フォロー判定（follow_history.json と DB の整合性ズレ対策）
+                if user_id and user_id in self.followed_users:
+                    self.skipped_count += 1
+                    try:
+                        mark_skipped(user_id, "already_in_history", conn=conn)
+                    except Exception:
+                        pass
+                    continue
+                if user_name in self.followed_users:
+                    self.skipped_count += 1
+                    try:
+                        mark_skipped(user_id, "already_in_history", conn=conn)
+                    except Exception:
+                        pass
+                    continue
+
+                profile_url = cand.get("room_url") or f"https://room.rakuten.co.jp/{user_name}"
+                if not profile_url.endswith("/items"):
+                    profile_url = profile_url.rstrip("/") + "/items"
+
+                try:
+                    page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+                    self._human_delay(2.0, 4.0)
+
+                    # 404 / リダイレクトチェック
+                    if "grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url:
+                        logger.warning(f"ログインリダイレクト: {user_name}")
+                        try:
+                            mark_failed(user_id, "login_redirect", conn=conn)
+                        except Exception:
+                            pass
+                        continue
+                    if self._is_404_page(page):
+                        logger.debug(f"404 (退会?): {user_name}")
+                        try:
+                            mark_failed(user_id, "404", conn=conn)
+                        except Exception:
+                            pass
+                        continue
+
+                    # フォローボタンを探す（React実装: aria-label="フォロー"）
+                    follow_btn = page.locator('button[aria-label="フォロー"]').first
+
+                    if follow_btn.count() == 0 or not follow_btn.is_visible(timeout=2000):
+                        # フォロー済み or ボタンなし
+                        logger.debug(f"フォローボタンなし: {user_name}")
+                        try:
+                            mark_skipped(user_id, "no_follow_button", conn=conn)
+                        except Exception:
+                            pass
+                        self.skipped_count += 1
+                        continue
+
+                    follow_btn.click(timeout=3000)
+                    self._human_delay(0.5, 1.5)
+
+                    # 成功判定: aria-label が "フォロー中" に変化
+                    try:
+                        page.wait_for_selector(
+                            'button[aria-label="フォロー中"]', timeout=3000
+                        )
+                        success = True
+                    except Exception:
+                        success = False
+
+                    self.followed_count += 1
+                    self.consecutive_failures = 0
+                    if user_id:
+                        self.followed_users.add(user_id)
+                    self.followed_users.add(user_name)
+                    self._save_history_entry(user_id or user_name, user_name)
+
+                    try:
+                        mark_followed(user_id or user_name, conn=conn)
+                    except Exception:
+                        pass
+
+                    status = "成功" if success else "クリック(状態未確認)"
+                    logger.info(
+                        f"[{self.followed_count}/{self.limit}] "
+                        f"DB候補フォロー{status}: {user_name} (score={cand.get('score')})"
+                    )
+                    self._follow_interval()
+
+                except Exception as e:
+                    self.failed_count += 1
+                    self.consecutive_failures += 1
+                    try:
+                        mark_failed(user_id or user_name, str(e)[:200], conn=conn)
+                    except Exception:
+                        pass
+                    logger.warning(
+                        f"DB候補フォロー失敗 {user_name}: {e} "
+                        f"(連続失敗: {self.consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})"
+                    )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        return None
+
+    # ================================================================
+    # アイテムフィードからユーザー発見 → プロフィールページでフォロー
+    # ================================================================
+
+    def _follow_from_items_feed(self, bm: BrowserManager) -> str | None:
+        """/items フィードから新規ユーザーを発見してフォローする
+
+        戦略:
+          1. room.rakuten.co.jp/items をスクロールしてユーザーリンクを収集
+          2. フォロー履歴にない user_nickname を抽出
+          3. 各ユーザーのプロフィールページに遷移してフォローボタンをクリック
+
+        フォローボタン（プロフィールページ、React実装 2026-04-02 診断結果）:
+          <button aria-label="フォロー" class="button--xxxx ...">
+          ※フォロー済みは aria-label="フォロー中"
+        """
+        page = bm.page
+        ITEMS_URL = "https://room.rakuten.co.jp/items"
+        MAX_FEED_SCROLLS = 15
+        collected_nicknames: list[str] = []
+
+        # --- フィードをスクロールしてユーザーニックネームを収集 ---
+        try:
+            page.goto(ITEMS_URL, wait_until="domcontentloaded")
+            self._human_delay(3.0, 5.0)
+            self._wait_for_angular(page)
+        except Exception as e:
+            logger.error(f"アイテムフィード遷移エラー: {e}")
+            return None
+
+        for scroll_i in range(MAX_FEED_SCROLLS):
+            if len(collected_nicknames) >= self.limit * 3:
+                break  # 十分な候補を確保したら停止
+
+            # プロフィールリンクからニックネームを抽出
+            new_names = page.evaluate("""() => {
+                const links = [...document.querySelectorAll('a[href*="/room_"]')];
+                return [...new Set(
+                    links.map(a => {
+                        const parts = a.href.split('/');
+                        const idx = parts.findIndex(p => p.startsWith('room_'));
+                        return idx >= 0 ? parts[idx] : null;
+                    }).filter(Boolean)
+                )];
+            }""")
+            for name in (new_names or []):
+                if name not in collected_nicknames:
+                    collected_nicknames.append(name)
+
+            page.evaluate("window.scrollBy(0, 800)")
+            self._human_delay(1.5, 3.0)
+            if scroll_i % 3 == 2:
+                self._wait_for_angular(page)
+
+        logger.info(f"フィードから候補ユーザー: {len(collected_nicknames)}件収集")
+
+        # --- 未フォローユーザーを抽出 ---
+        already_followed_names = set()
+        try:
+            if FOLLOW_HISTORY_PATH.exists():
+                import json as _json
+                with open(FOLLOW_HISTORY_PATH, "r", encoding="utf-8") as f:
+                    hist = _json.load(f)
+                already_followed_names = {
+                    e.get("user_name", "") for e in hist if e.get("user_name")
+                }
+        except Exception:
+            pass
+
+        candidates = [n for n in collected_nicknames if n not in already_followed_names]
+        logger.info(f"未フォロー候補: {len(candidates)}件")
+
+        # --- 各ユーザーのプロフィールページでフォロー ---
+        for nickname in candidates:
+            if self.followed_count >= self.limit:
+                break
+            if self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                return f"{MAX_CONSECUTIVE_FAILURES}件連続失敗で自動停止"
+
+            profile_url = f"https://room.rakuten.co.jp/{nickname}/items"
+            try:
+                page.goto(profile_url, wait_until="domcontentloaded")
+                self._human_delay(2.0, 4.0)
+
+                # フォローボタンを探す（React実装: aria-label="フォロー"）
+                follow_btn = page.locator(
+                    'button[aria-label="フォロー"]'
+                ).first
+
+                if follow_btn.count() == 0:
+                    # フォロー済み or ボタンなし
+                    logger.debug(f"フォローボタンなし: {nickname}")
+                    continue
+
+                if not follow_btn.is_visible(timeout=2000):
+                    continue
+
+                follow_btn.click(timeout=3000)
+                self._human_delay(0.5, 1.5)
+
+                # 成功判定: aria-label が "フォロー中" に変化
+                try:
+                    page.wait_for_selector(
+                        'button[aria-label="フォロー中"]', timeout=3000
+                    )
+                    success = True
+                except Exception:
+                    success = False
+
+                self.followed_count += 1
+                self.consecutive_failures = 0
+                self._save_history_entry(nickname, nickname)
+
+                status = "成功" if success else "クリック(状態未確認)"
+                logger.info(
+                    f"[{self.followed_count}/{self.limit}] "
+                    f"プロフィールフォロー{status}: {nickname}"
+                )
+                self._follow_interval()
+
+            except Exception as e:
+                self.failed_count += 1
+                self.consecutive_failures += 1
+                logger.warning(
+                    f"プロフィールフォロー失敗 {nickname}: {e} "
+                    f"(連続失敗: {self.consecutive_failures}/{MAX_CONSECUTIVE_FAILURES})"
+                )
 
         return None
 

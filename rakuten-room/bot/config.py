@@ -34,13 +34,72 @@ POST_LOG_PATH = COMPANY_ROOT / "05_CONTENT" / "rakuten_room" / "history" / "POST
 FOLLOW_LOG_PATH = COMPANY_ROOT / "05_CONTENT" / "rakuten_room" / "history" / "FOLLOW_LOG.json"
 DAILY_LOG_DIR = COMPANY_ROOT / "05_CONTENT" / "rakuten_room" / "history" / "daily"
 
+# 月間スケジュールファイルパス（daily_schedule.py から参照）
+# monthly_planner.py と同じパスに統一（DATA_DIR / "monthly_schedule.json"）
+MONTHLY_SCHEDULE_PATH = DATA_DIR / "monthly_schedule.json"
+
 # Playwright設定
 BROWSER_HEADLESS = False
 BROWSER_SLOW_MO = 100
 CHROME_EXECUTABLE_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 
 # Persistent context用のユーザーデータ保存先（通常Chromeからcookieをコピーして使用）
-CHROME_USER_DATA_DIR = DATA_DIR / "chrome_profile"
+# 2026-05-05 Phase A-2: Chrome profile を機能別に分離
+#   POST / LIKE / FOLLOWBACK が同一 profile を共有していた結果、Playwright が
+#   "Target page, context or browser has been closed" 衝突を起こしていた
+#   （実例: 2026-03-25 scheduler.log で 52082件の同種エラー、
+#    2026-05-05 09:00 Post Batch1 が runner_fail rc=1 で失敗）
+# 解決: 機能別 profile + 同一 cookie を3つに複製で並列実行可能化
+CHROME_USER_DATA_DIR_POST       = DATA_DIR / "chrome_profile_post"
+CHROME_USER_DATA_DIR_LIKE       = DATA_DIR / "chrome_profile_like"
+CHROME_USER_DATA_DIR_FOLLOWBACK = DATA_DIR / "chrome_profile_followback"
+CHROME_USER_DATA_DIR_FOLLOW     = DATA_DIR / "chrome_profile_follow"  # HOST follow_executor 用 fallback
+
+# action 名 → profile path のマッピング（BrowserManager で使用）
+CHROME_PROFILE_BY_ACTION = {
+    "post":       CHROME_USER_DATA_DIR_POST,
+    "like":       CHROME_USER_DATA_DIR_LIKE,
+    "followback": CHROME_USER_DATA_DIR_FOLLOWBACK,
+    "follow":     CHROME_USER_DATA_DIR_FOLLOW,
+}
+
+# Backward compat alias - 既存コード（diagnose系・debug系）が直接参照しているため残す
+# 新規コードでは CHROME_PROFILE_BY_ACTION[action] を使うこと
+CHROME_USER_DATA_DIR = CHROME_USER_DATA_DIR_POST
+
+
+def get_chrome_profile(action: str = "post") -> Path:
+    """機能別 Chrome profile path を返す。
+
+    2026-05-05 Phase A-2 migration safety:
+        新規 profile (chrome_profile_post/like/followback/follow) が作られるまでの
+        移行期間中、profile dir が無ければ legacy chrome_profile を fallback として返す。
+        Bookmarks / Cookies の存在で「真の profile」かを判定する。
+
+    Args:
+        action: "post", "like", "followback", "follow" のいずれか
+    Returns:
+        対応する Chrome profile の Path
+    """
+    target = CHROME_PROFILE_BY_ACTION.get(action, CHROME_USER_DATA_DIR_POST)
+    # Migration safety: 新 profile が未作成なら legacy chrome_profile にfallback
+    # 「真の profile」判定: Bookmarks / Cookies / Network/Cookies (modern Chrome) のいずれかが存在
+    legacy = DATA_DIR / "chrome_profile"
+    has_real_profile = (
+        (target / "Default" / "Bookmarks").exists() or
+        (target / "Default" / "Cookies").exists() or
+        (target / "Default" / "Network" / "Cookies").exists()
+    )
+    legacy_has_profile = (
+        legacy.exists() and (
+            (legacy / "Default" / "Bookmarks").exists() or
+            (legacy / "Default" / "Network" / "Cookies").exists()
+        )
+    )
+    if not has_real_profile and legacy_has_profile:
+        # Migration 未完了: legacy profile を使う（fallback）
+        return legacy
+    return target
 
 # セッション
 SESSION_STATE_PATH = DATA_DIR / "state" / "storage_state.json"
@@ -49,6 +108,7 @@ SESSION_STATE_PATH = DATA_DIR / "state" / "storage_state.json"
 ROOM_BASE_URL = "https://room.rakuten.co.jp"
 RAKUTEN_BASE_URL = "https://www.rakuten.co.jp"
 RECOMMEND_USERS_URL = "https://room.rakuten.co.jp/discover/recommendUsers"
+FOLLOWERS_URL = "https://room.rakuten.co.jp/discover/followers"  # フォロワー返し用（2026-04-02 追加）
 
 # アカウント
 ACCOUNT_NAME = "カピバラ癒し"
@@ -70,8 +130,13 @@ TYPE_DELAY_MAX = 0.12
 # ============================================================
 
 # 日次投稿数（BOT対策: 日によって変動させる）
+# 2026-04-24 Marketing 08:42 指示: POST cap=100/day 厳格適用
+# 2026-04-25 Marketing 指示: 暫定cap200へ変更（楽天実上限観測のため）
 POST_DAILY_MIN = 90
-POST_DAILY_MAX = 100
+POST_DAILY_MAX = 200
+# ハード上限: queue_executor が daily_cap_reached で停止する絶対値
+# 旧: cap100 (〜2026-04-25 13:10) / 新: cap200 (2026-04-25 13:10〜)
+POST_DAILY_CAP = 200
 
 # バッチ分割
 POST_BATCH_1_COUNT = 50              # バッチ1: 固定50件
@@ -96,13 +161,71 @@ POST_INTERVAL_MAX = 15               # 最大間隔（秒）
 # 制限
 POST_MAX_SAME_GENRE = 3              # 同ジャンル連続投稿の上限
 
+# バッチ設定（daily_schedule.py から参照）
+DAILY_JITTER_MIN = 0    # 日次ジッター最小（分）
+DAILY_JITTER_MAX = 30   # 日次ジッター最大（分）
+POST_BATCHES = {
+    "night": {
+        "start_hour": POST_BATCH_1_START_HOUR,
+        "start_minute_min": 35,                   # 00:35〜 (フォロー00:00とずらす)
+        "start_minute_max": 50,
+        "count_min": POST_BATCH_1_COUNT,
+        "count_max": POST_BATCH_1_COUNT,
+        "interval_min": POST_INTERVAL_MIN,
+        "interval_max": POST_INTERVAL_MAX,
+    },
+    "lunch": {
+        "start_hour": 12,
+        "start_minute_min": 35,                   # 12:35〜 (フォロー12:00とずらす)
+        "start_minute_max": 50,
+        "count_min": 20,
+        "count_max": 30,
+        "interval_min": POST_INTERVAL_MIN,
+        "interval_max": POST_INTERVAL_MAX,
+    },
+    "evening": {
+        "start_hour": 19,
+        "start_minute_min": 35,                   # 19:35〜 (フォロー19:00とずらす)
+        "start_minute_max": 50,
+        "count_min": None,  # 残り全件
+        "count_max": None,
+        "interval_min": POST_INTERVAL_MIN,
+        "interval_max": POST_INTERVAL_MAX,
+    },
+}
+
 # ============================================================
 # フォローBOT設定
 # ============================================================
 
 # 日次フォロー数（BOT対策: 日によって変動させる）
-FOLLOW_DAILY_MIN = 150
-FOLLOW_DAILY_MAX = 250
+FOLLOW_DAILY_MIN = 450
+FOLLOW_DAILY_MAX = 500
+
+# ============================================================
+# いいねBOT設定
+# ============================================================
+
+# 日次いいね数
+# 2026-04-09 Phase 1-4 修正: 実運用レンジ (350-450/日) に config を合わせる
+# 旧値 150/250 は monthly_schedule.json (504/日) に上書きされていたが、整合性のため正規化
+LIKE_DAILY_MIN = 450
+LIKE_DAILY_MAX = 500
+
+# フォローバック 日次目標（CEO指示 2026-05-01: 固定30件）
+FOLLOWBACK_DAILY_TARGET = 30
+
+# いいね履歴ファイル
+LIKE_HISTORY_PATH = DATA_DIR / "like_history.json"
+
+# いいねするフィードURL（/items がメイン。いいねボタン実在確認済み 2026-04-02）
+LIKE_FEED_URLS = [
+    "https://room.rakuten.co.jp/items",
+    "https://room.rakuten.co.jp/timeline/followings",
+]
+
+# 連続失敗で停止する閾値
+LIKE_MAX_CONSECUTIVE_FAILURES = 5
 
 # セッション分割
 FOLLOW_SESSION_MAX = 50              # 1セッション = 最大50件
@@ -130,9 +253,30 @@ def get_daily_post_target():
     """今日の投稿目標件数をランダムに決定する（90〜100）"""
     return random.randint(POST_DAILY_MIN, POST_DAILY_MAX)
 
+def get_day_type_targets(day_type: str) -> dict:
+    """day_type に応じた目標件数を返す（daily_schedule.py から参照）"""
+    if day_type == "off":
+        return {"post": 0, "like": 0, "follow": 0}
+    elif day_type == "light":
+        return {
+            "post": random.randint(POST_DAILY_MIN // 2, POST_DAILY_MAX // 2),
+            "like": random.randint(FOLLOW_DAILY_MIN // 2, FOLLOW_DAILY_MAX // 2),
+            "follow": 0,
+        }
+    else:  # normal
+        return {
+            "post": random.randint(POST_DAILY_MIN, POST_DAILY_MAX),
+            "like": random.randint(FOLLOW_DAILY_MIN, FOLLOW_DAILY_MAX),
+            "follow": 0,
+        }
+
 def get_daily_follow_target():
     """今日のフォロー目標件数をランダムに決定する（150〜250）"""
     return random.randint(FOLLOW_DAILY_MIN, FOLLOW_DAILY_MAX)
+
+def get_daily_like_target():
+    """今日のいいね目標件数をランダムに決定する（150〜250）"""
+    return random.randint(LIKE_DAILY_MIN, LIKE_DAILY_MAX)
 
 def get_batch1_start_minute():
     """バッチ1の開始分をランダムに決定する（0〜30分）"""
@@ -169,6 +313,26 @@ def get_session_rest_duration():
     """セッション間休憩時間をランダムに決定する（秒）"""
     return random.uniform(FOLLOW_SESSION_REST_MIN, FOLLOW_SESSION_REST_MAX)
 
+# いいね間隔設定
+LIKE_INTERVAL_MIN = 2.0
+LIKE_INTERVAL_MAX = 6.0
+LIKE_REST_EVERY_MIN = 15
+LIKE_REST_EVERY_MAX = 25
+LIKE_REST_DURATION_MIN = 10.0
+LIKE_REST_DURATION_MAX = 30.0
+
+def get_like_interval():
+    """いいね間隔をランダムに決定する（秒）"""
+    return random.uniform(LIKE_INTERVAL_MIN, LIKE_INTERVAL_MAX)
+
+def get_like_rest_interval():
+    """いいね中の休憩を入れる件数をランダムに決定する"""
+    return random.randint(LIKE_REST_EVERY_MIN, LIKE_REST_EVERY_MAX)
+
+def get_like_rest_duration():
+    """いいね中の休憩時間をランダムに決定する（秒）"""
+    return random.uniform(LIKE_REST_DURATION_MIN, LIKE_REST_DURATION_MAX)
+
 # ============================================================
 # 段階テスト設定（テスト時はこちらの値で上書きする）
 # ============================================================
@@ -181,8 +345,8 @@ def get_session_rest_duration():
 # ============================================================
 
 # 初期は高品質重視で小規模運用（安定後に拡張）
-POOL_MIN = 300                    # 最低維持件数
-POOL_MAX = 600                    # 最大件数（超過時はscore低い順に削除）
+POOL_MIN = 700                    # 最低維持件数（700件下回ったら補充）
+POOL_MAX = 1000                   # 最大件数（超過時はscore低い順に削除）
 POOL_REPLENISH_BUFFER = 50        # 補充時のバッファ
 
 # 監査設定
@@ -196,19 +360,68 @@ REPORT_DIR = DATA_DIR / "reports"
 OPERATION_MODE_FILE = DATA_DIR / "operation_mode.json"
 
 # ============================================================
+# パトロール / 監視設定 (Phase 2 追加)
+# ============================================================
+
+# 裏パトロール (background_patrol.py) の実行間隔（分）
+BACKGROUND_PATROL_INTERVAL_MIN = 60
+
+# 表パトロール (auto_monitor.py) の実施時刻
+PATROL_TIMES = ['09:00', '15:00', '21:00']
+
+# 補填キュー（remediation_queue.json）処理閾値
+REMEDIATION_POST_GAP_THRESHOLD = 5      # post 遅れがこの件数を超えたら補填
+REMEDIATION_FOLLOW_GAP_THRESHOLD = 10   # follow 遅れがこの件数を超えたら補填
+REMEDIATION_LIKE_GAP_THRESHOLD = 10     # like 遅れがこの件数を超えたら補填
+
+# 投稿停滞アラート（連続停止検知）
+POST_STALL_ALERT_HOURS = 2              # posted=0 がこの時間続いたら CRITICAL
+PATROL_HALFWAY_HOUR = 15                # この時刻に達成率<50% なら自動再実行
+PATROL_HALFWAY_RATIO = 0.5
+
+# ============================================================
 # ジャンル別検索キーワード（楽天API商品取得用）
 # ============================================================
 
 GENRE_SEARCH_KEYWORDS = {
-    "kitchen":   ["フライパン セット", "保存容器 耐熱", "水切りラック", "キッチンツール セット", "包丁 ステンレス"],
-    "beauty":    ["スキンケア セット", "ヘアオイル 人気", "日焼け止め", "コスメ ポーチ", "ハンドクリーム"],
-    "living":    ["今治タオル セット", "収納ボックス おしゃれ", "マグカップ 北欧", "クッション カバー", "ルームウェア"],
-    "fashion":   ["バッグ レディース 軽量", "スニーカー 白", "ストール UV", "帽子 レディース", "ワンピース 春"],
-    "appliance": ["モバイルバッテリー 軽量", "ワイヤレスイヤホン", "加湿器 卓上", "LEDライト デスク", "充電器 USB"],
-    "food":      ["コーヒー ドリップ", "ナッツ 素焼き", "お菓子 詰め合わせ", "紅茶 ギフト", "スイーツ お取り寄せ"],
-    "kids":      ["知育玩具", "水筒 キッズ", "お弁当箱 子供", "入学準備", "絵本 人気"],
-    "book":      ["自己啓発 ベストセラー", "レシピ本", "ビジネス書 ランキング", "絵本 セット", "参考書"],
-    "pet":       ["ペットベッド", "猫 おもちゃ", "犬 おやつ 無添加", "ペット 食器", "猫 爪とぎ"],
+    "kitchen":   ["フライパン セット", "保存容器 耐熱", "水切りラック", "キッチンツール セット", "包丁 ステンレス",
+                  "まな板 抗菌", "鍋 IH対応", "計量カップ", "弁当箱 保温", "エプロン おしゃれ"],
+    "beauty":    ["スキンケア セット", "ヘアオイル 人気", "日焼け止め", "コスメ ポーチ", "ハンドクリーム",
+                  "リップバーム", "洗顔 泡", "化粧水 保湿", "アイシャドウ パレット", "ボディクリーム"],
+    "living":    ["今治タオル セット", "収納ボックス おしゃれ", "マグカップ 北欧", "クッション カバー", "ルームウェア",
+                  "アロマ ディフューザー", "スリッパ 洗える", "時計 壁掛け", "ブランケット 夏", "除湿剤"],
+    "fashion":   ["バッグ レディース 軽量", "スニーカー 白", "ストール UV", "帽子 レディース", "ワンピース 春",
+                  "サンダル レディース", "Tシャツ メンズ", "財布 コンパクト", "日傘 折りたたみ", "ベルト 本革"],
+    "appliance": ["モバイルバッテリー 軽量", "ワイヤレスイヤホン", "加湿器 卓上", "LEDライト デスク", "充電器 USB",
+                  "扇風機 首掛け", "電動歯ブラシ", "体重計 スマホ連携", "ドライヤー 速乾", "延長コード タワー"],
+    "food":      ["コーヒー ドリップ", "ナッツ 素焼き", "お菓子 詰め合わせ", "紅茶 ギフト", "スイーツ お取り寄せ",
+                  "プロテイン おすすめ", "グラノーラ", "はちみつ 国産", "ドライフルーツ", "お茶 ティーバッグ"],
+    "kids":      ["知育玩具", "水筒 キッズ", "お弁当箱 子供", "入学準備", "絵本 人気",
+                  "レゴ ブロック", "色鉛筆 セット", "リュック 子供", "プール バッグ", "夏休み 工作"],
+    "book":      ["自己啓発 ベストセラー", "レシピ本", "ビジネス書 ランキング", "絵本 セット", "参考書",
+                  "小説 2026", "マンガ 全巻", "英語 学習", "資格 テキスト", "図鑑 子供"],
+    "pet":       ["ペットベッド", "猫 おもちゃ", "犬 おやつ 無添加", "ペット 食器", "猫 爪とぎ",
+                  "犬 ハーネス", "猫 トイレ", "ペット キャリー", "犬 シャンプー", "猫 おやつ"],
+    "health":    ["サプリメント マルチビタミン", "プロテイン ホエイ", "マッサージガン", "青汁 国産",
+                  "体温計 非接触", "血圧計 手首", "アイマスク ホット", "ストレッチポール", "入浴剤 ギフト", "湿布 温感"],
+    "outdoor":   ["キャンプ チェア", "レジャーシート 防水", "クーラーボックス 小型", "焚き火台 ソロ",
+                  "ランタン LED", "テント ワンタッチ", "アウトドア テーブル", "虫除け スプレー", "登山 リュック", "釣り ルアー"],
+    "interior":  ["カーテン 遮光", "ラグ 洗える", "照明 ペンダント", "観葉植物 フェイク",
+                  "壁掛け フック", "ミラー 全身", "キャンドル アロマ", "ティッシュケース おしゃれ", "トイレマット", "玄関マット"],
+    "stationery":["手帳 2026", "ペンケース 大容量", "付箋 かわいい", "ボールペン 高級",
+                  "ノート A5", "ファイル クリア", "電卓 おしゃれ", "マーカー 蛍光", "シール デコ", "名刺入れ 革"],
+    "baby":      ["ベビー服 新生児", "おむつ パンパース", "抱っこ紐 軽量", "哺乳瓶 ガラス",
+                  "ベビーカー コンパクト", "離乳食 食器", "おしりふき", "ベビーモニター", "チャイルドシート", "ガーゼ タオル"],
+    "sports":    ["ヨガマット 厚手", "ランニングシューズ メンズ", "ダンベル 可変式", "スポーツタオル",
+                  "水着 レディース", "プロテインシェイカー", "サイクリング グローブ", "テニスラケット", "ゴルフボール", "トレーニングウェア"],
+    "car":       ["車載充電器 急速", "ドライブレコーダー", "車用芳香剤", "シートカバー",
+                  "スマホホルダー 車", "サンシェード 車", "洗車 スポンジ", "タイヤ空気入れ", "車内収納", "LEDバルブ 車"],
+    "garden":    ["プランター おしゃれ", "園芸 土", "ガーデニング 手袋", "じょうろ ステンレス",
+                  "種 野菜", "ハーブ 苗", "人工芝 ベランダ", "物干し台 ステンレス", "防草シート", "ソーラーライト 庭"],
+    "travel":    ["スーツケース 機内持込", "トラベルポーチ セット", "ネックピロー 低反発", "パスポートケース",
+                  "圧縮袋 衣類", "変換プラグ 海外", "折りたたみ ボストンバッグ", "アイマスク 旅行", "携帯スリッパ", "セキュリティポーチ"],
+    "seasonal":  ["扇風機 ハンディ", "冷感タオル", "日焼け止め スプレー", "制汗剤",
+                  "アイスリング", "保冷バッグ ランチ", "麦茶 パック", "蚊取り線香", "かき氷機 家庭用", "ビニールプール"],
 }
 
 # ============================================================
@@ -246,3 +459,18 @@ def set_operation_mode(mode: str, safe_limit: int = 20, notes: str = "") -> dict
 for d in [LOG_DIR, SCREENSHOT_DIR, DATA_DIR / "state", DAILY_LOG_DIR,
           AUDIT_DIR, REPORT_DIR]:
     d.mkdir(parents=True, exist_ok=True)
+
+# ======================================================
+# レート制限ルール (実データ分析確定 2026-05-01)
+# ratelimit_micro_analyzer.py が自動導出
+# ======================================================
+FOLLOW_RL_COOLDOWN_MIN   = 69   # RL後の最小待機時間(分) ← 確定・bot適用済
+#
+# !! 注意: 以下2定数はbot未組込み（情報収集フェーズ中）!!
+# 現在は情報収集フェーズ。組み込むと708件以上の観測データが取れなくなり
+# 真の上限値（833件超の可能性）の検証を永久に妨げる。
+# 仮説テストフェーズ移行後（追加50件のRL事例取得後）に再評価する。
+FOLLOW_SAFE_HOURLY_MAX   = 80   # [仮説値・未組込] 1時間あたり安全上限
+FOLLOW_SAFE_24H_MAX      = 708  # [仮説値・未組込] 24hローリング安全上限
+# 日次ハードキャップ: 実データで確認されず。設定しない。
+# (根拠: VM実データ分析: 回復中央値=60分, 24h最大観測=833件)

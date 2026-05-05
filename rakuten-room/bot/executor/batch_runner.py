@@ -52,7 +52,7 @@ class BatchRunner:
         logger.info(f"バッチ投稿開始: {total}件")
         logger.info("=" * 60)
 
-        bm = BrowserManager()
+        bm = BrowserManager(action="post")
         consecutive_failures = 0
 
         try:

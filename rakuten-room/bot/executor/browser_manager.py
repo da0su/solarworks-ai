@@ -20,12 +20,26 @@ logger = setup_logger()
 
 
 class BrowserManager:
-    """Playwright ブラウザ管理（persistent context版）"""
+    """Playwright ブラウザ管理（persistent context版）
 
-    def __init__(self):
+    2026-05-05 Phase A-2: action ベースで profile を分離
+        POST / LIKE / FOLLOWBACK が同じ profile を共有していたため SingletonLock
+        衝突が発生していた問題を修正。BrowserManager(action="like") のように指定する。
+        action 未指定時は backward compat で "post" の profile を使う。
+    """
+
+    def __init__(self, action: str = "post"):
+        """
+        Args:
+            action: "post", "like", "followback" のいずれか
+                    未指定時は "post" の profile を使用 (backward compat)
+        """
         self._playwright = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._action = action
+        self._profile_dir = config.get_chrome_profile(action)
+        logger.info(f"BrowserManager 初期化: action={action} profile={self._profile_dir.name}")
 
     @property
     def page(self) -> Page:
@@ -34,25 +48,25 @@ class BrowserManager:
         return self._page
 
     def _cleanup_profile_locks(self) -> None:
-        """プロファイルのロックファイルを削除する"""
+        """プロファイルのロックファイルを削除する（自分の profile のみ）"""
         lock_files = ["SingletonLock", "SingletonSocket", "SingletonCookie"]
         for lock_name in lock_files:
-            lock_path = config.CHROME_USER_DATA_DIR / lock_name
+            lock_path = self._profile_dir / lock_name
             if lock_path.exists():
                 try:
                     lock_path.unlink()
-                    logger.info(f"ロックファイル削除: {lock_name}")
+                    logger.info(f"ロックファイル削除 [{self._action}]: {lock_name}")
                 except Exception as e:
-                    logger.warning(f"ロックファイル削除失敗 {lock_name}: {e}")
+                    logger.warning(f"ロックファイル削除失敗 [{self._action}] {lock_name}: {e}")
 
     def start(self) -> None:
         """実機Chromeを persistent context で起動する。"""
-        logger.info("ブラウザを起動中...")
+        logger.info(f"ブラウザを起動中... [action={self._action}]")
 
         self._playwright = sync_playwright().start()
 
-        user_data_dir = str(config.CHROME_USER_DATA_DIR)
-        config.CHROME_USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        user_data_dir = str(self._profile_dir)
+        self._profile_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Chrome プロファイル: {user_data_dir}")
 
         chrome_path = config.CHROME_EXECUTABLE_PATH
@@ -244,11 +258,14 @@ class BrowserManager:
                 logger.warning(f"セッション保存スキップ: {e}")
 
     def take_screenshot(self, label: str) -> Path:
-        """スクリーンショットを保存"""
+        """スクリーンショットを保存。ブラウザクラッシュ時は例外を握りつぶしてパスのみ返す"""
         path = get_screenshot_path(label)
         if self._page:
-            self._page.screenshot(path=str(path), full_page=False)
-            logger.debug(f"スクリーンショット保存: {path}")
+            try:
+                self._page.screenshot(path=str(path), full_page=False)
+                logger.debug(f"スクリーンショット保存: {path}")
+            except Exception as e:
+                logger.warning(f"スクリーンショット取得失敗 ({label}): {e}")
         return path
 
     def stop(self) -> None:

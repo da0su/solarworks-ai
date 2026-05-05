@@ -104,7 +104,7 @@ class LikeExecutor:
         logger.info(f"=== いいねBOT 開始 (目標: {self.limit}件) ===")
         logger.info("=" * 60)
 
-        bm = BrowserManager()
+        bm = BrowserManager(action="like")
         abort_reason = None
 
         try:

@@ -26,6 +26,29 @@ from logger.logger import setup_logger, save_post_result
 POST_HISTORY_PATH = config.DATA_DIR / "post_history.json"
 
 
+def _today_posted_count(queue_date: str) -> int:
+    """当日の posted 件数を post_queue から取得（正本=room_bot.db / post_queue）
+
+    2026-04-24 Marketing cap100 指示対応: scheduler / force-run / patrol 再投入 全経路で
+    起動ごとに当日実績を確認し、POST_DAILY_CAP を超えないよう制御する。
+    """
+    import sqlite3
+    db_path = config.DATA_DIR / "room_bot.db"
+    if not db_path.exists():
+        return 0
+    try:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)
+        r = conn.execute(
+            "SELECT COUNT(*) FROM post_queue "
+            "WHERE status='posted' AND DATE(posted_at,'localtime')=?",
+            (queue_date,),
+        ).fetchone()
+        conn.close()
+        return int(r[0]) if r else 0
+    except Exception:
+        return 0
+
+
 def _append_post_history(item_code: str, url: str, title: str,
                          genre: str, comment: str, score: int,
                          room_url: str = ""):
@@ -88,8 +111,29 @@ class QueueExecutor:
         if reset_count > 0:
             logger.info(f"前回異常終了の {reset_count}件 を queued に戻しました")
 
+        # --- POST cap100 事前チェック（2026-04-24 Marketing 指示） ---
+        # 正本: room_bot.db / post_queue status='posted'
+        cap = getattr(config, "POST_DAILY_CAP", 100)
+        today_posted_before = _today_posted_count(self.queue_date)
+        logger.info(f"[cap_check] today_posted_before={today_posted_before} cap={cap}")
+        if today_posted_before >= cap:
+            msg = f"daily_cap_reached (today={today_posted_before} >= cap={cap})"
+            logger.warning(f"[cap_check] {msg} - 実行中止")
+            print(f"\n[cap_check] {msg}")
+            qm.close()
+            return self._make_summary(0, 0, 0, 0, {}, 0, True, msg)
+        # cap まで残り枠
+        cap_remaining = cap - today_posted_before
+
         # 実行対象件数を確認
         target_count = self.limit  # 目標成功件数
+        # cap 残量で target_count を絞り込み（force-run/手動再投入でも超過させない）
+        if target_count is None or target_count > cap_remaining:
+            logger.info(f"[cap_check] target_count {target_count} -> {cap_remaining} (cap remain)")
+            target_count = cap_remaining
+        self._cap = cap
+        self._cap_remaining_at_start = cap_remaining
+        self._today_posted_before = today_posted_before
         pending_snapshot = qm.get_pending(self.queue_date)
         total_available = len(pending_snapshot)
 
@@ -103,7 +147,7 @@ class QueueExecutor:
         logger.info(f"=== キュー実行開始: {self.queue_date} (目標: {target_count or total_available}件成功) ===")
         logger.info(f"  待機キュー: {total_available}件 | 投稿間隔: {self.min_wait:.0f}〜{self.max_wait:.0f}秒")
 
-        bm = BrowserManager()
+        bm = BrowserManager(action="post")
         consecutive_failures = 0
         posted_count = 0
         failed_count = 0
@@ -134,6 +178,13 @@ class QueueExecutor:
                 # 目標達成チェック
                 if target_count and posted_count >= target_count:
                     logger.info(f"目標 {target_count}件 達成!")
+                    break
+
+                # POST cap100 ランタイム再確認（並行実行対策）
+                live_total = self._today_posted_before + posted_count
+                if live_total >= self._cap:
+                    abort_reason = f"daily_cap_reached (runtime total={live_total} >= cap={self._cap})"
+                    logger.warning(f"[cap_check:runtime] {abort_reason}")
                     break
 
                 # 補填上限チェック
@@ -251,9 +302,7 @@ class QueueExecutor:
                     logger.error(f"  ❌ 例外: {error_msg}")
 
                 # 次の投稿まで待機（スキップ時は短く、成功時は通常間隔）
-                has_next = (target_count and posted_count < target_count and
-                            item_index < total_available) or \
-                           (not target_count and item_index < total_available)
+                has_next = (not target_count) or (posted_count < target_count)
 
                 if has_next and abort_reason is None:
                     if result and not result.get("success") and \

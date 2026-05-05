@@ -994,10 +994,16 @@ def is_pink(r, g, b=0):
     return r > PINK_R_MIN and g < PINK_G_MAX and (r - g) > 50
 
 
-def verify_follow_success(ss_after, click_x, click_y, dx=50, dy=15):
+def verify_follow_success(ss_after, click_x, click_y, dx=30, dy=8):
     """
     多点サンプリングによるフォロー成功判定（verify再設計）
-    bbox内の中央+左寄り+右寄りの3点でピンク率を確認。
+
+    2026-05-05 Phase A-3 修正: dx=50→30, dy=15→8 に縮小し、9点→5点に削減。
+        旧設定では sampling 点が button bounds (typical width ~120px, height ~30px)
+        の外に出てしまい、白領域 (white_area) や ボタン外 (out_of_button) と判定される
+        失敗が58% (verify_sample_out_of_button 32% + verify_sample_on_white_area 25%)
+        を占めていた。サンプリング集中度を上げて button 内部にしっかり当てる。
+
     1点でもピンクならTrue。全点白ならFalse。
 
     Returns: (is_success, pink_ratio, detail)
@@ -1005,17 +1011,14 @@ def verify_follow_success(ss_after, click_x, click_y, dx=50, dy=15):
     arr = np.array(ss_after)
     h, w = arr.shape[:2]
 
-    # サンプリング点: bbox内の左/中央/右 × 上/中/下 = 最大9点
+    # サンプリング点: button内部 5点 (中央 + 上下左右の半径dx/dy)
+    # 旧 9 点(dx=50/dy=15)はboundsを外す問題があったため、5点(dx=30/dy=8)に削減
     sample_points = [
-        (click_x - dx//2, click_y),        # 左
-        (click_x, click_y),                 # 中央
+        (click_x, click_y),                 # 中央 (最重要)
+        (click_x - dx//2, click_y),         # 左
         (click_x + dx//2, click_y),         # 右
-        (click_x - dx//2, click_y - dy//2), # 左上
-        (click_x, click_y - dy//2),         # 中央上
-        (click_x + dx//2, click_y - dy//2), # 右上
-        (click_x - dx//2, click_y + dy//2), # 左下
-        (click_x, click_y + dy//2),         # 中央下
-        (click_x + dx//2, click_y + dy//2), # 右下
+        (click_x, click_y - dy//2),         # 上
+        (click_x, click_y + dy//2),         # 下
     ]
 
     pink_count = 0
@@ -1512,24 +1515,26 @@ def follow_on_current_page(limit_remaining, dry_run, fail_stats=None):
                     reason = "ui_mismatch"
 
                 # ⑮ verify失敗種類別retry (re-click不要・re-verifyのみ)
+                # 2026-05-05 Phase A-3: white_area retry も detect_buttons ベースに強化
+                #   旧実装は 0.8s wait + verify_follow_success のみだったが、
+                #   sampling点が button bounds 外なら何度待っても white のまま。
+                #   detect_buttons で「same row が following 状態か」を判定する方が信頼度高い
                 _retry_ok = False
-                if reason == "verify_sample_on_white_area":
-                    # UI描画遅延: 0.8s待機後に再verify
-                    time.sleep(0.8)
-                    _ss_r = pyautogui.screenshot()
-                    _rv_ok, _, _ = verify_follow_success(_ss_r, click_x, btn["y"])
-                    if _rv_ok:
-                        _retry_ok = True
-                        logger.info(f"  [⑮RETRY-WA] re-verify OK after wait (was white_area)")
-                elif reason == "verify_sample_out_of_button":
-                    # centroid再計算: 最近傍ボタンがfollowingなら成功と判定
-                    time.sleep(0.3)
+                if reason in ("verify_sample_on_white_area", "verify_sample_out_of_button"):
+                    # 共通retry: detect_buttons で「same row が following 状態か」を判定
+                    time.sleep(0.5)  # UI 描画安定化
                     _ss_r = pyautogui.screenshot()
                     _btns_r = detect_buttons(_ss_r)
                     _near = min(_btns_r, key=lambda b: abs(b["y"] - btn["y"]), default=None)
                     if _near and _near.get("status") == "following" and abs(_near["y"] - btn["y"]) < 30:
                         _retry_ok = True
-                        logger.info(f"  [⑮RETRY-OOB] nearest=following dy={_near['y']-btn['y']}")
+                        logger.info(f"  [⑮RETRY-{reason[15:18].upper()}] nearest=following dy={_near['y']-btn['y']}")
+                    else:
+                        # detect_buttons で確認できない場合の fallback: 旧 verify_follow_success
+                        _rv_ok, _, _ = verify_follow_success(_ss_r, click_x, btn["y"])
+                        if _rv_ok:
+                            _retry_ok = True
+                            logger.info(f"  [⑮RETRY-FALLBACK] re-verify OK ({reason})")
 
                 if _retry_ok:
                     fail -= 1; success += 1; seed_success += 1

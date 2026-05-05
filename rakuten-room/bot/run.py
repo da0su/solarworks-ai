@@ -51,10 +51,15 @@ from logger.logger import setup_logger, save_post_result
 logger = setup_logger()
 
 
-def cmd_login():
-    """CEOの手動ログイン → セッション保存"""
-    logger.info("=== ログインモード ===")
-    bm = BrowserManager()
+def cmd_login(action: str = "post"):
+    """CEOの手動ログイン → セッション保存
+
+    Args:
+        action: "post" / "like" / "followback" (2026-05-05 Phase A-2)
+                profile が機能別に分離したため、各 profile で個別にログインが必要
+    """
+    logger.info(f"=== ログインモード [action={action}] ===")
+    bm = BrowserManager(action=action)
     try:
         bm.start()
         bm.login_manual()
@@ -92,7 +97,7 @@ def cmd_post(product_url: str, review_text: str):
     logger.info(f"商品URL: {product_url}")
     logger.info(f"投稿文: {review_text[:50]}...")
 
-    bm = BrowserManager()
+    bm = BrowserManager(action="post")
     try:
         # ブラウザ起動
         bm.start()
@@ -248,7 +253,7 @@ def cmd_check_collect(file_path: str | None, use_stdin: bool, count: int | None)
     print(f"collect対応チェック - {len(target_posts)}件")
     print("=" * 60)
 
-    bm = BrowserManager()
+    bm = BrowserManager(action="post")
     ok_list = []
     ng_list = []
 
@@ -341,7 +346,7 @@ def cmd_investigate(file_path: str | None, use_stdin: bool, count: int | None):
     print("ROOM投稿導線 調査モード")
     print("=" * 70)
 
-    bm = BrowserManager()
+    bm = BrowserManager(action="post")
     all_reports = []
 
     try:
@@ -566,16 +571,95 @@ def cmd_mode(mode: str | None, safe_limit: int | None, notes: str):
         print(f"  更新日時: {result['updated_at']}")
 
 
-def cmd_auto(batch: int | None, queue_date: str | None):
-    """完全自動運用（replenish → plan → execute → report）
+def cmd_startup_recovery():
+    """PC再起動後の自動復旧: ゾンビリセット + 遅れ分即時キャッチアップ
+
+    ログオン時に自動実行される。
+    1. running状態で止まったゾンビアイテムをqueuedに戻す
+    2. 本日のキューに残件があれば即時実行して遅れを解消する
+    3. Slackで復旧状況を通知する
+    """
+    from planner.queue_manager import QueueManager
+    from monitor.slack_notifier import send_alert
+
+    date = datetime.now().strftime("%Y-%m-%d")
+    logger.info(f"=== スタートアップ復旧チェック開始: {date} ===")
+
+    # --- Step 1: モードチェック ---
+    mode_data = config.get_operation_mode()
+    if mode_data["mode"] == "STOP":
+        logger.info("モード: STOP → 復旧スキップ")
+        print("[startup-recovery] モード STOP のためスキップ")
+        return
+
+    qm = QueueManager()
+
+    # --- Step 2: ゾンビリセット（running → queued）---
+    reset_count = qm.reset_running(date)
+    if reset_count > 0:
+        msg = f"[復旧] ゾンビアイテム {reset_count}件をキューに戻しました"
+        logger.info(msg)
+        print(msg)
+
+    # --- Step 3: 本日のキュー残件確認 ---
+    stats = qm.get_status_summary(date)
+    queued = stats.get("queued", 0)
+    posted = stats.get("posted", 0)
+    skipped = stats.get("skipped", 0)
+    total = stats.get("total", 0)
+    qm.close()
+
+    logger.info(f"  キュー状態: 投稿済={posted}, スキップ={skipped}, 残={queued}, 合計={total}")
+
+    if queued == 0:
+        msg = f"[startup-recovery] 遅れなし。投稿済み: {posted}件 / {total}件"
+        logger.info(msg)
+        print(msg)
+        return
+
+    # --- Step 4: 遅れあり → 即時キャッチアップ実行 ---
+    msg = (f"[PC起動 自動復旧] 遅れ検出: 投稿済={posted}件, 残={queued}件"
+           f" → 即時キャッチアップ開始")
+    logger.info(msg)
+    print(msg)
+    send_alert(msg)
+
+    cmd_execute(date, limit=None, min_wait=None, max_wait=None)
+
+    # --- Step 5: 復旧完了通知 ---
+    qm2 = QueueManager()
+    stats_after = qm2.get_status_summary(date)
+    qm2.close()
+    newly_posted = stats_after.get("posted", 0) - posted
+    result_msg = (f"[復旧完了] 追加投稿: {newly_posted}件"
+                  f" | 本日合計: {stats_after.get('posted', 0)}件 / {total}件")
+    logger.info(result_msg)
+    print(result_msg)
+    send_alert(result_msg)
+
+    logger.info(f"=== スタートアップ復旧チェック完了: {date} ===")
+
+
+def cmd_auto(batch: int | None, queue_date: str | None, limit: int | None = None):
+    """完全自動運用（remove_posted → replenish → health → plan → execute → report）
+
+    修正版フロー（2026-04-02）:
+      1. 投稿済み商品を先に除去してからプール補充する
+         （除去前に「プール十分」と判定されると、除去後に枯渇してCRITICALになる）
+      2. 補充後にヘルスチェックし、CRITICALなら replenish を再試行してから続行
+         （即時停止ではなく「補充リトライ→続行/停止」の判断）
 
     --batch 1: 補充 + 計画 + 実行(50件)
     --batch 2: 残り実行
+    --batch 3: 残り実行 (batch 2と同等。21:00 Batch3スケジュール用)
     省略時: batch 1 + batch 2 を連続実行
+
+    2026-04-23 マーケ加速指示: `--limit N` 追加
+        短サイクル検証(L1=1/L2=3/L3=5/L4=10)のため、指定時は batch ごとの execute
+        上限を N で上書き。省略時は従来挙動(Batch1=config, Batch2=残り全件)。
     """
-    import time as _time
     from planner.product_fetcher import replenish_pool, format_replenish_report
-    from planner.pool_manager import remove_posted_items
+    from planner.pool_manager import remove_posted_items, get_pool_stats
     from monitor.health_checker import check_health, should_stop
     from monitor.slack_notifier import send_alert
 
@@ -591,30 +675,49 @@ def cmd_auto(batch: int | None, queue_date: str | None):
         print(f"  → python run.py mode AUTO  で再開してください。")
         return
 
-    # --- Step 1: ヘルスチェック ---
-    logger.info("[Step 1] ヘルスチェック")
-    stop, reason = should_stop(date)
-    if stop:
-        msg = f"CRITICAL検知 - 自動停止: {reason}"
-        logger.error(msg)
-        print(f"\n{msg}")
-        send_alert(msg)
-        return
-
     run_batch_1 = batch is None or batch == 1
-    run_batch_2 = batch is None or batch == 2
+    run_batch_2 = batch is None or batch == 2 or batch == 3  # batch 3 = 残り実行 (batch 2と同等)
 
     if run_batch_1:
-        # --- Step 2: プール補充 ---
+        # --- Step 1: 投稿済み商品を先に除去（補充判定前に行う） ---
+        logger.info("[Step 1] 投稿済み商品除去（補充前に実施）")
+        removed = remove_posted_items()
+        if removed > 0:
+            logger.info(f"  投稿済み商品 {removed}件をプールから除去")
+            print(f"  投稿済み商品 {removed}件をプールから除去")
+
+        pool_stats = get_pool_stats()
+        logger.info(f"  除去後プール残: {pool_stats['total']}件")
+
+        # --- Step 2: プール補充（除去後の実残量を見て判断） ---
         logger.info("[Step 2] プール補充")
         replenish_result = replenish_pool()
         print(format_replenish_report(replenish_result))
 
-        # --- Step 3: 投稿済み商品除去 ---
-        logger.info("[Step 3] 投稿済み商品除去")
-        removed = remove_posted_items()
-        if removed > 0:
-            print(f"  投稿済み商品 {removed}件をプールから除去")
+        # --- Step 3: 補充後ヘルスチェック（CRITICALなら補充リトライ→続行判断） ---
+        logger.info("[Step 3] ヘルスチェック（補充後）")
+        stop, reason = should_stop(date)
+        if stop:
+            logger.warning(f"補充後もCRITICAL: {reason} → 補充リトライ")
+            print(f"\n  [警告] 補充後もCRITICAL: {reason}")
+            print("  → 補充をリトライします...")
+            replenish_result2 = replenish_pool(target_min=config.POOL_MIN, target_max=config.POOL_MAX)
+            print(format_replenish_report(replenish_result2))
+            stop2, reason2 = should_stop(date)
+            if stop2:
+                # プール枯渇CRITICALのみ停止（連続失敗等は続行）
+                from planner.pool_manager import get_pool_stats as _gps
+                ps = _gps()
+                if ps["total"] < 50:
+                    msg = f"プール枯渇のため停止 (残{ps['total']}件): {reason2}"
+                    logger.error(msg)
+                    print(f"\n{msg}")
+                    send_alert(msg)
+                    return
+                else:
+                    logger.warning(f"CRITICAL継続だがプール残{ps['total']}件 → 投稿続行")
+                    print(f"  [警告] CRITICAL継続（プール残{ps['total']}件）→ 投稿を続行します")
+                    send_alert(f"AUTO警告: {reason2} → 投稿続行")
 
         # --- Step 4: 計画生成 ---
         logger.info("[Step 4] 計画生成")
@@ -628,23 +731,35 @@ def cmd_auto(batch: int | None, queue_date: str | None):
         # --- Step 5: Batch 1 実行 ---
         logger.info("[Step 5] Batch 1 実行")
         if mode == "SAFE":
-            limit = max_items
+            exec_limit = max_items
         else:
-            limit = config.POST_BATCH_1_COUNT
-        cmd_execute(date, limit, min_wait=None, max_wait=None)
+            exec_limit = config.POST_BATCH_1_COUNT
+        # 2026-04-23 短サイクル検証用 --limit 優先 (orchestrator_v5 経由)
+        if limit is not None:
+            exec_limit = min(exec_limit, limit)
+            logger.info(f"  [--limit override] exec_limit={exec_limit}")
+        cmd_execute(date, exec_limit, min_wait=None, max_wait=None)
 
     if run_batch_2:
         # --- Step 6: Batch 2 実行（残り全件） ---
         logger.info("[Step 6] Batch 2 実行")
-        # 再度ヘルスチェック
+        # 再度ヘルスチェック（プール枯渇のみ停止、他のCRITICALは警告して続行）
         stop, reason = should_stop(date)
         if stop:
-            msg = f"Batch 2前にCRITICAL検知: {reason}"
-            logger.error(msg)
-            print(f"\n{msg}")
-            send_alert(msg)
-            return
-        cmd_execute(date, limit=None, min_wait=None, max_wait=None)
+            from planner.pool_manager import get_pool_stats as _gps
+            ps = _gps()
+            if ps["total"] < 50:
+                msg = f"Batch 2前: プール枯渇のため停止 (残{ps['total']}件): {reason}"
+                logger.error(msg)
+                print(f"\n{msg}")
+                send_alert(msg)
+                return
+            else:
+                logger.warning(f"Batch 2前CRITICAL（プール残{ps['total']}件）→ 続行")
+                print(f"  [警告] Batch2前CRITICAL: {reason} → 続行します")
+                send_alert(f"AUTO警告（Batch2前）: {reason} → 続行")
+        # 2026-04-23 Batch2 にも --limit 反映
+        cmd_execute(date, limit=limit, min_wait=None, max_wait=None)
 
     # --- Step 7: 最終ヘルスチェック ---
     logger.info("[Step 7] 最終ヘルスチェック")
@@ -653,6 +768,23 @@ def cmd_auto(batch: int | None, queue_date: str | None):
         send_alert(f"実行後CRITICAL: {'; '.join(final_health['warnings'])}")
 
     logger.info(f"=== AUTO実行完了: {date} ===")
+
+    # --- Step 8: スプシ即時更新（CEO指示 2026-05-01: BOT実行のたびに都度記入） ---
+    try:
+        import subprocess as _sp, sys as _sys
+        _script = Path(__file__).resolve().parents[2] / "ops" / "sheets" / "daily_log_writer.py"
+        if _script.exists():
+            _r = _sp.run(
+                [_sys.executable, str(_script)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=60, cwd=str(_script.parent.parent.parent),
+            )
+            for _line in (_r.stdout or "").splitlines():
+                if "[OK]" in _line or "DONE" in _line:
+                    logger.info(f"[sheet_sync] {_line.strip()}")
+                    break
+    except Exception as _e:
+        logger.warning(f"[sheet_sync] skip: {_e}")
 
 
 def cmd_preview(file_path: str | None, use_stdin: bool, count: int | None):
@@ -763,8 +895,10 @@ def main():
     )
     subparsers = parser.add_subparsers(dest="command", help="実行コマンド")
 
-    # login コマンド
-    subparsers.add_parser("login", help="楽天ROOMに手動ログインしてセッションを保存する")
+    # login コマンド (2026-05-05 Phase A-2: profile 別ログイン対応)
+    login_parser = subparsers.add_parser("login", help="楽天ROOMに手動ログインしてセッションを保存する")
+    login_parser.add_argument("--action", choices=["post", "like", "followback", "follow"], default="post",
+                              help="ログインする profile を指定（既定: post）")
 
     # post コマンド
     post_parser = subparsers.add_parser("post", help="1件の投稿を自動実行する")
@@ -854,15 +988,29 @@ def main():
     mode_parser.add_argument("--limit", type=int, default=None, help="SAFE時の件数制限")
     mode_parser.add_argument("--notes", default="", help="備考")
 
+    # startup-recovery コマンド
+    subparsers.add_parser("startup-recovery",
+                          help="PC再起動後の自動復旧 (ゾンビリセット + 遅れ分即時実行)")
+
     # auto コマンド
     auto_parser = subparsers.add_parser("auto", help="完全自動運用 (replenish→plan→execute→report)")
-    auto_parser.add_argument("--batch", type=int, default=None, choices=[1, 2], help="バッチ番号 (1 or 2, 省略時は両方)")
+    auto_parser.add_argument("--batch", type=int, default=None, choices=[1, 2, 3], help="バッチ番号 (1/2/3, 省略時は全バッチ。3=残り実行=2と同等)")
     auto_parser.add_argument("--date", default=None, help="対象日 (YYYY-MM-DD)")
+    auto_parser.add_argument("--limit", type=int, default=None,
+                             help="短サイクル検証用の件数上限 (2026-04-23 マーケ加速指示)")
+
+    # follow コマンド
+    follow_parser = subparsers.add_parser("follow", help="楽天ROOMでフォローを実行する")
+    follow_parser.add_argument("--limit", type=int, default=None, help="フォロー件数の上限（省略時はconfig値）")
+
+    # like コマンド
+    like_parser = subparsers.add_parser("like", help="楽天ROOMでいいねを実行する")
+    like_parser.add_argument("--limit", type=int, default=None, help="いいね件数の上限（省略時はconfig値）")
 
     args = parser.parse_args()
 
     if args.command == "login":
-        cmd_login()
+        cmd_login(action=args.action)
     elif args.command == "post":
         # 投稿文の取得
         if args.file:
@@ -906,8 +1054,56 @@ def main():
         cmd_health(args.date)
     elif args.command == "mode":
         cmd_mode(args.set_mode, args.limit, args.notes)
+    elif args.command == "startup-recovery":
+        cmd_startup_recovery()
     elif args.command == "auto":
-        cmd_auto(args.batch, args.date)
+        cmd_auto(args.batch, args.date, getattr(args, "limit", None))
+    elif args.command == "follow":
+        # 2026-04-21 #279: FollowExecutor (v6.2旧実装) → FollowOrchestratorWrapper
+        # 新 morning_orchestrator._follow_loop_stage 経由で Angular.js DOM 対応 & natural-fire
+        # 2026-04-21 #280: emergency_stop.flag 事前チェック (scheduler 兼用の最終防壁)
+        from executor.safe_stop import (
+            emergency_flag_exists as _flag_exists,
+            read_emergency_flag as _read_flag,
+        )
+        if _flag_exists():
+            fd = _read_flag()
+            print(
+                f"[SAFE-STOP] emergency_stop.flag 検知 (set_at={fd.get('set_at')}, "
+                f"reason={fd.get('reason')}) → follow 実行を中止します。"
+            )
+            print(
+                "回復確認後: python -m executor.safe_stop clear --confirm yes-recovery-confirmed"
+            )
+            sys.exit(3)  # exit 3 = emergency_flag_active
+        from executor.follow_orchestrator_wrapper import FollowOrchestratorWrapper
+        executor = FollowOrchestratorWrapper(limit=args.limit, source="cli")
+        summary = executor.run()
+        print(
+            f"\nフォロー完了: {summary.get('followed', 0)}件成功 / "
+            f"{summary.get('failed', 0)}件失敗 "
+            f"(ok={summary.get('ok')}, stop_reason={summary.get('stop_reason')})"
+        )
+        # 2026-04-21 #280: daily_limit_reached 発火 → exit 2 (BAN_STOP)
+        if summary.get("stop_reason") == "daily_limit_reached":
+            ss = summary.get("safe_stop") or {}
+            print(
+                f"[SAFE-STOP] daily_limit_reached 発火済 "
+                f"(fire_at={ss.get('fire_at')}, chain_ok={ss.get('ok_chain')}, "
+                f"evidence={ss.get('evidence', {}).get('screenshot', '?')})"
+            )
+            sys.exit(2)
+        if summary.get("stop_reason") == "emergency_stop_flag_active":
+            sys.exit(3)
+        if not summary.get("ok") and summary.get("stop_reason"):
+            sys.exit(1)
+    elif args.command == "like":
+        from executor.like_executor import LikeExecutor
+        executor = LikeExecutor(limit=args.limit, source="cli")
+        summary = executor.run()
+        print(f"\nいいね完了: {summary.get('liked', 0)}件成功 / {summary.get('skipped', 0)}件スキップ / {summary.get('failed', 0)}件失敗")
+        if summary.get("aborted"):
+            sys.exit(1)
     else:
         parser.print_help()
         print("\n使用例:")
