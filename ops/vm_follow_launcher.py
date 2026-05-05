@@ -94,26 +94,33 @@ def vm_running() -> bool:
 
 
 def wait_vm_ready(timeout: int = 90) -> bool:
-    """VM 起動後 share folder アクセス可能になるまで待機.
+    """VM 起動後 GuestAdditionsRunLevel=3 になり IME 切替が完了するまで待機.
 
     2026-05-05 礎: VM reset 直後 GuestAdditionsRunLevel=3 になっても、
-    IME 切替が完了しないと keystroke が文字化けする。
-    share folder 接続を確認することで IME も整っていると推定できる。
-    また接続後 +10秒の cushion を入れて IME 完全切替を待つ。
+    IME 切替が完了しないと keystroke が文字化けする (16:43 launch fail 実例)。
+    GuestAdditionsRunLevel=3 を確認後 +30秒 cushion で IME 完全切替を待つ。
+
+    Note: \\\\VBOXSVR\\share は VM 内専用 path で HOST から見えないため、
+    VBoxManage showvminfo でVM側の起動段階を判定する.
     """
-    share_canary = Path(r"\\VBOXSVR\share\follow_rpa_vm.py")
     deadline = time.time() + timeout
+    started_at = time.time()
     while time.time() < deadline:
-        try:
-            if share_canary.exists():
-                log(f"  [wait_vm_ready] share folder OK after {int(time.time()+timeout-deadline)}s")
-                # IME 完全切替の cushion (+10秒)
-                time.sleep(10)
-                return True
-        except Exception:
-            pass
+        rc, out = run_vbox("showvminfo", VM_NAME, "--machinereadable")
+        if rc == 0:
+            for line in (out or "").splitlines():
+                if line.startswith("GuestAdditionsRunLevel="):
+                    level = line.split("=", 1)[1].strip().strip('"')
+                    if level == "3":
+                        elapsed = int(time.time() - started_at)
+                        log(f"  [wait_vm_ready] GuestAdditionsRunLevel=3 達成 ({elapsed}s)")
+                        # IME 完全切替の cushion (+30秒)
+                        log(f"  [wait_vm_ready] IME切替待機 +30s")
+                        time.sleep(30)
+                        return True
+                    break
         time.sleep(3)
-    log(f"  [wait_vm_ready] TIMEOUT {timeout}s — share folder unreachable")
+    log(f"  [wait_vm_ready] TIMEOUT {timeout}s — RunLevel<3 (VM起動異常)")
     return False
 
 
