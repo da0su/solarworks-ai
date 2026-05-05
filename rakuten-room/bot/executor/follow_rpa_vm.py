@@ -632,6 +632,77 @@ def check_page_signature(expected_url_fragment):
         return False, f"error:{e}"
 
 
+# ============================================================
+# 2026-05-05 Phase 2-1: ログイン状態検知
+# ============================================================
+
+def check_login_status() -> tuple[bool, str]:
+    """楽天ROOMログイン状態を判定。
+    /feed（ログイン必須URL）にnavigate → リダイレクト先URLを判定。
+
+    Returns: (is_logged_in: bool, detail: str)
+    """
+    try:
+        # /feed はログイン状態で /feed/items にリダイレクト、未ログインで login pageへ
+        navigate_to_url("https://room.rakuten.co.jp/feed")
+        time.sleep(3)
+        # URL bar 直接読取（check_page_signature と同じ機構）
+        ok, actual = check_page_signature("/feed")
+        if not ok:
+            actual = actual if isinstance(actual, str) else str(actual)
+        # ログイン済み判定: /feed/items または /feed/ にいる
+        if "room.rakuten.co.jp/feed" in actual:
+            return True, f"logged_in (url={actual[:120]})"
+        # ログアウト判定: 楽天IDログインページにリダイレクト
+        if any(k in actual.lower() for k in ["login.rakuten.co.jp", "/nid/", "rms.rakuten", "myinfo"]):
+            return False, f"redirected_to_login (url={actual[:120]})"
+        # 不明
+        return False, f"unexpected_url (url={actual[:120]})"
+    except Exception as e:
+        return False, f"check_error: {e}"
+
+
+# ============================================================
+# 2026-05-05 Phase 2-2: heartbeat 同期 (VM→HOST)
+# ============================================================
+
+HEARTBEAT_PATH_LOCAL = BOT_DIR / "follow_heartbeat.json"
+HEARTBEAT_PATH_SHARE = Path(r"\\VBOXSVR\share\follow_heartbeat.json")
+_HEARTBEAT_LAST_WRITE = 0.0
+_HEARTBEAT_INTERVAL = 30.0  # 30秒以上経過していれば書込む（連打防止）
+
+
+def write_heartbeat(phase: str, current_seed: str = "", success: int = 0, fail: int = 0, extra: dict = None, force: bool = False):
+    """heartbeat を local + shared folder に atomic write。
+
+    phase: 'startup' | 'navigate' | 'detect' | 'click' | 'verify' | 'cooldown' | 'shutdown'
+    force=True なら interval を無視
+    """
+    global _HEARTBEAT_LAST_WRITE
+    now = time.time()
+    if not force and (now - _HEARTBEAT_LAST_WRITE) < _HEARTBEAT_INTERVAL:
+        return
+    _HEARTBEAT_LAST_WRITE = now
+    data = {
+        "ts": datetime.now().isoformat(),
+        "pid": os.getpid(),
+        "phase": phase,
+        "current_seed": current_seed,
+        "success_count": success,
+        "fail_count": fail,
+        "extra": extra or {},
+    }
+    content = json.dumps(data, ensure_ascii=False)
+    for p in [HEARTBEAT_PATH_LOCAL, HEARTBEAT_PATH_SHARE]:
+        try:
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(p)
+        except Exception as e:
+            # share 書込失敗は debug only（patrol が age で検知）
+            logger.debug(f"[heartbeat] {p} write failed: {e}")
+
+
 def preflight_check(expected_url_fragment=None):
     """navigate/click 実行前の 5 点前提チェック。
     戻り値: (ok_bool, stop_reason_str_or_None, detail_str)
@@ -1537,12 +1608,16 @@ def follow_on_current_page(limit_remaining, dry_run, fail_stats=None):
     return success, fail, skip, "done", fail_stats
 
 
-def _bot_check_dead_zone() -> tuple[bool, str]:
+def _bot_check_dead_zone(force: bool = False) -> tuple[bool, str]:
     """
     ⑦ Bot内Dead Zone早期脱出チェック (2026-05-03 実装)
     VM内でrun_follow()が呼ばれた際に、dead zoneパターンを検知して即リターン。
     HOST側のcheck_dead_zone()と同ロジック。c24ロールオフbypass付き。
+
+    force=True: dead zone判定を無条件にスキップ（CEO手動 / launcher --force経由）
     """
+    if force:
+        return False, "force override (--force)"
     from datetime import datetime, timedelta as _td
     C24_RECOVERY_DROP = 80
     try:
@@ -1595,13 +1670,13 @@ def _bot_check_dead_zone() -> tuple[bool, str]:
         return False, f"dead_zone check err: {e}"
 
 
-def run_follow(limit, dry_run=False):
+def run_follow(limit, dry_run=False, force=False):
     """Full auto follow using seed users (genre order)."""
     clear_stop_flag()
     state = load_state()
 
     # ⑦ Dead Zone早期脱出 (2026-05-03): Chromeを起動する前にチェック
-    _dz, _dz_reason = _bot_check_dead_zone()
+    _dz, _dz_reason = _bot_check_dead_zone(force=force)
     if _dz:
         logger.warning(f"[DEAD_ZONE] early exit: {_dz_reason}")
         logger.warning(f"[DEAD_ZONE] c24ロールオフまで待機。--force は --no-session-cap を指定して上書き可能")
@@ -1661,6 +1736,30 @@ def run_follow(limit, dry_run=False):
         # Launch Chrome automatically
         launch_chrome()
         time.sleep(3)
+        # heartbeat startup
+        write_heartbeat("startup", force=True)
+
+        # 2026-05-05 Phase 2-1: ログイン状態を Chrome起動直後にチェック
+        login_ok, login_detail = check_login_status()
+        logger.info(f"[LOGIN_CHECK] ok={login_ok} {login_detail}")
+        state["login_status"] = "ok" if login_ok else "expired"
+        state["login_check_at"] = datetime.now().isoformat()
+        save_state(state)
+        if not login_ok:
+            logger.error(f"[LOGIN_EXPIRED] ROOM session lost. Aborting run.")
+            # Slack通知（HOST側経由・shared folder のフラグファイルで通知要求）
+            try:
+                flag_path = Path(r"\\VBOXSVR\share\login_expired_flag.json")
+                flag_path.write_text(json.dumps({
+                    "ts": datetime.now().isoformat(),
+                    "detail": login_detail,
+                }, ensure_ascii=False), encoding="utf-8")
+            except Exception as e:
+                logger.warning(f"[LOGIN_EXPIRED] flag write failed: {e}")
+            close_chrome()
+            state["stop_reason"] = "login_expired"
+            save_state(state)
+            return
 
     # E'' 計測基盤: セッション全体のfail_stats
     session_fail_stats = FailStats()
@@ -1679,6 +1778,9 @@ def run_follow(limit, dry_run=False):
             seed = ordered_seeds[idx]
 
             logger.info(f"\n--- [{seed['genre']}] {seed['user']} (#{idx}) ---")
+            # 2026-05-05 Phase 2-2: heartbeat更新（30秒スロットル）
+            write_heartbeat("navigate", current_seed=seed["user"],
+                            success=total_success, fail=total_fail)
 
             if not dry_run:
                 nav_ok, nav_reason = navigate_to_seed_user(seed["user"])
@@ -1728,6 +1830,9 @@ def run_follow(limit, dry_run=False):
             stop_reason = "target_reached" if total_success >= limit else "all_seeds_done"
 
     finally:
+        # 2026-05-05 Phase 2-2: shutdown heartbeat
+        write_heartbeat("shutdown", success=total_success, fail=total_fail, force=True,
+                        extra={"stop_reason": stop_reason})
         # C. Chrome close は必ずここ1箇所のみ
         if not dry_run:
             close_chrome()
@@ -2215,6 +2320,8 @@ def main():
                         help="--test-3seed 時の seed カンマ区切り (省略時は seed_users.json sweets 先頭3)")
     parser.add_argument("--no-session-cap", action="store_true",
                         help="2026-04-21 CEO 上限検知テスト: SESSION_MIN/MAX cap を無視して --limit をそのまま使う")
+    parser.add_argument("--force", action="store_true",
+                        help="2026-05-05 Dead Zone check を無視して強制起動（launcher --force から伝達）")
     args = parser.parse_args()
 
     if args.stop:
@@ -2261,7 +2368,7 @@ def main():
             if effective_limit > _morning_limit:
                 print(f"[③ 朝抑制] {_hour:02d}時台 → limit {effective_limit} -> {_morning_limit} (c24温存)")
                 effective_limit = _morning_limit
-    run_follow(effective_limit, dry_run=args.dry_run)
+    run_follow(effective_limit, dry_run=args.dry_run, force=args.force)
 
 
 if __name__ == "__main__":

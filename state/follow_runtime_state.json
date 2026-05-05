@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-05-05 12:45:01",
+  "follow": {
+    "vm_running": true,
+    "login_status": "ok",
+    "heartbeat_age_sec": 33.5,
+    "heartbeat_phase": "startup",
+    "heartbeat_seed": "",
+    "log_age_min": 1351.0,
+    "last_12h": {
+      "runs": 0,
+      "success_total": 0,
+      "stop_reasons": {}
+    },
+    "last_entry": {
+      "ts": "2026-05-04T14:13:59.731467",
+      "success": 0,
+      "stop_reason": "all_seeds_done"
+    },
+    "delta_vs_last_patrol": 0,
+    "problem": true,
+    "reasons": [
+      "log_stale(1351min)"
+    ]
+  },
+  "post": {
+    "today_posted": 0,
+    "last_posted_at": "2026-05-04 21:13:49",
+    "last_posted_age_days": 0.6,
+    "heartbeat_age_min": 21.3,
+    "heartbeat_job": "like",
+    "today_plan": {
+      "planned": 151,
+      "posted": 0,
+      "failed": 0,
+      "skipped": 0
+    },
+    "problem": true,
+    "reasons": [
+      "no_post_today_after_0800"
+    ]
+  },
+  "like": {
+    "today_liked": 650,
+    "last_liked_at": "2026-05-05T12:23:33.005174",
+    "last_liked_age_days": 0.0,
+    "history_entries": 5044,
+    "problem": false,
+    "reasons": []
+  },
+  "followback": {
+    "status": "operational",
+    "pending_count": 0,
+    "today_followback": 152,
+    "last_followback_at": "2026-05-05T07:59:42.153631",
+    "problem": false,
+    "reasons": []
+  },
+  "patrol_meta": {
+    "any_problem": true,
+    "last_vm_alert": "2026-05-05 11:09:06",
+    "last_vm_recovery": "2026-05-05 11:09:06",
+    "last_login_alert": null,
+    "last_stuck_recover": null
+  }
+}

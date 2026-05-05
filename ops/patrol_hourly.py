@@ -42,6 +42,14 @@ SS_DIR = ROOT / "ops" / "patrol_screenshots"
 PATROL_STATE = ROOT / "ops" / "_patrol_state.json"
 PATROL_LOG = ROOT / "ops" / "patrol_log.txt"
 
+# 2026-05-05 Phase 2-2: heartbeat 同期 (VM→HOST)
+# VirtualBox shared folder 'share' は rakuten-room/bot/executor にマップ:
+#   `VBoxManage list -l vms`で確認: Host path C:\Users\infoa\Documents\solarworks-ai\rakuten-room\bot\executor
+SHARE_DIR = ROOT / "rakuten-room" / "bot" / "executor"
+HEARTBEAT_SHARE = SHARE_DIR / "follow_heartbeat.json"
+LOGIN_EXPIRED_FLAG = SHARE_DIR / "login_expired_flag.json"
+HEARTBEAT_STALE_SEC = 180   # 180秒（3分）heartbeat 更新がなければ stuck と判定
+
 DATA_DIR = ROOT / "rakuten-room" / "bot" / "data"
 DB_LEGACY = DATA_DIR / "room_bot.db"
 DB_V5 = DATA_DIR / "room_bot_v5.db"
@@ -155,6 +163,42 @@ def check_follow() -> dict:
     if age_min > 180:
         info["problem"] = True
         info["reasons"].append(f"log_stale({age_min:.0f}min)")
+
+    # 2026-05-05 Phase 2-2: heartbeat 検知（VM稼働中だがbot 進行不能を3分で検知）
+    if HEARTBEAT_SHARE.exists():
+        try:
+            hb = json.loads(HEARTBEAT_SHARE.read_text(encoding="utf-8"))
+            hb_ts = datetime.fromisoformat(hb.get("ts", ""))
+            hb_age = (datetime.now() - hb_ts).total_seconds()
+            info["heartbeat_age_sec"] = round(hb_age, 1)
+            info["heartbeat_phase"] = hb.get("phase", "?")
+            info["heartbeat_seed"] = hb.get("current_seed", "")
+            info["heartbeat_success"] = hb.get("success_count", 0)
+            # VM稼働中 かつ heartbeat が古い → bot stuck
+            if info["vm_running"] and hb_age > HEARTBEAT_STALE_SEC:
+                # shutdown phase なら正常終了済み
+                if hb.get("phase") not in ("shutdown",):
+                    info["problem"] = True
+                    info["reasons"].append(f"vm_internal_stuck(hb_age={hb_age:.0f}s phase={hb.get('phase')})")
+        except Exception as e:
+            info["heartbeat_age_sec"] = None
+            info["heartbeat_error"] = str(e)[:80]
+    else:
+        info["heartbeat_age_sec"] = None
+
+    # 2026-05-05 Phase 2-1: login_expired_flag 検知
+    if LOGIN_EXPIRED_FLAG.exists():
+        try:
+            flag = json.loads(LOGIN_EXPIRED_FLAG.read_text(encoding="utf-8"))
+            flag_ts = datetime.fromisoformat(flag.get("ts", ""))
+            flag_age_min = (datetime.now() - flag_ts).total_seconds() / 60
+            # 60分以内のフラグは有効
+            if flag_age_min < 60:
+                info["problem"] = True
+                info["reasons"].append("login_expired")
+                info["login_expired_detail"] = flag.get("detail", "")
+        except Exception:
+            pass
     return info
 
 
@@ -442,6 +486,75 @@ def _vm_auto_recover(state: dict, stamp: str, now: datetime) -> None:
 
 
 # ============================================================
+# SSOT — 4機能の現状を統合JSON出力（patrol が唯一の書込側）
+# ============================================================
+
+SSOT_PATH = ROOT / "state" / "follow_runtime_state.json"
+
+
+def _write_ssot_state(stamp: str, follow_info: dict, post_info: dict, like_info: dict, fb_info: dict, patrol_state: dict) -> None:
+    """4機能の現状を state/follow_runtime_state.json に atomic write。
+
+    用途: 下流ツール（CEOダッシュボード・slack_reporter等）はこのファイル1つだけ読めばよい。
+    既存の heartbeat / follow_rpa_state / _patrol_state はVM bot側 / patrol側のローカル更新源として温存。
+    """
+    payload = {
+        "schema_version": 1,
+        "updated_at": stamp,
+        "follow": {
+            "vm_running": follow_info.get("vm_running"),
+            "login_status": "expired" if "login_expired" in follow_info.get("reasons", []) else "ok",
+            "heartbeat_age_sec": follow_info.get("heartbeat_age_sec"),
+            "heartbeat_phase": follow_info.get("heartbeat_phase"),
+            "heartbeat_seed": follow_info.get("heartbeat_seed"),
+            "log_age_min": follow_info.get("log_age_min"),
+            "last_12h": follow_info.get("last_12h"),
+            "last_entry": follow_info.get("last_entry"),
+            "delta_vs_last_patrol": follow_info.get("delta_vs_last_patrol"),
+            "problem": follow_info.get("problem"),
+            "reasons": follow_info.get("reasons"),
+        },
+        "post": {
+            "today_posted": post_info.get("today_posted"),
+            "last_posted_at": post_info.get("last_posted_at"),
+            "last_posted_age_days": post_info.get("last_posted_age_days"),
+            "heartbeat_age_min": post_info.get("heartbeat_age_min"),
+            "heartbeat_job": post_info.get("heartbeat_job"),
+            "today_plan": post_info.get("today_plan"),
+            "problem": post_info.get("problem"),
+            "reasons": post_info.get("reasons"),
+        },
+        "like": {
+            "today_liked": like_info.get("today_liked"),
+            "last_liked_at": like_info.get("last_liked_at"),
+            "last_liked_age_days": like_info.get("last_liked_age_days"),
+            "history_entries": like_info.get("history_entries"),
+            "problem": like_info.get("problem"),
+            "reasons": like_info.get("reasons"),
+        },
+        "followback": {
+            "status": fb_info.get("status"),
+            "pending_count": fb_info.get("pending_count"),
+            "today_followback": fb_info.get("today_followback"),
+            "last_followback_at": fb_info.get("last_followback_at"),
+            "problem": fb_info.get("problem"),
+            "reasons": fb_info.get("reasons"),
+        },
+        "patrol_meta": {
+            "any_problem": patrol_state.get("any_problem"),
+            "last_vm_alert": patrol_state.get("last_vm_alert"),
+            "last_vm_recovery": patrol_state.get("last_vm_recovery"),
+            "last_login_alert": patrol_state.get("last_login_alert"),
+            "last_stuck_recover": patrol_state.get("last_stuck_recover"),
+        },
+    }
+    SSOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SSOT_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    tmp.replace(SSOT_PATH)
+
+
+# ============================================================
 # main
 # ============================================================
 
@@ -492,10 +605,68 @@ def main():
     })
     save_state(state)
 
+    # 2026-05-05 Phase 2-5: SSOT — 4機能の現状を state/follow_runtime_state.json に統合出力
+    _write_ssot_state(stamp, follow_info, post_info, like_info, fb_info, state)
+
     # VM停止時: 自動復旧 + Slack通知（--recover フラグ不要、常時有効）
     if "vm_not_running" in follow_info.get("reasons", []):
         _vm_auto_recover(state, stamp, now)
         save_state(state)  # last_vm_alert / last_vm_recovery を永続化
+
+    # 2026-05-05 Phase 2-1: ログイン失効検知時のCEO通知（2hスロットル）
+    if "login_expired" in follow_info.get("reasons", []):
+        last_login_alert = state.get("last_login_alert")
+        login_alert_needed = True
+        if last_login_alert:
+            try:
+                if (now - datetime.fromisoformat(last_login_alert)).total_seconds() < 7200:
+                    login_alert_needed = False
+            except Exception:
+                pass
+        if login_alert_needed:
+            detail = follow_info.get("login_expired_detail", "")
+            msg = (
+                f"<!channel> 【パトロール緊急】楽天ROOMログイン失効を検知 ({stamp})\n"
+                f"VM ChromeのROOMセッションが切れています。CEO手動再ログインが必要です。\n"
+                f"手順: docs/vm_chrome_relogin_runbook.md\n"
+                f"詳細: {detail}"
+            )
+            run(sys.executable, str(SLACK_REPORTER), msg, timeout=30)
+            state["last_login_alert"] = stamp
+            append_patrol_log(f"[LOGIN-EXPIRED] CEO Slack通知送信")
+            save_state(state)
+
+    # 2026-05-05 Phase 2-2: VM稼働中stuck検知時の自動復旧（heartbeat 3分以上停止）
+    if any(r.startswith("vm_internal_stuck") for r in follow_info.get("reasons", [])):
+        last_stuck_recover = state.get("last_stuck_recover")
+        stuck_recover_needed = True
+        if last_stuck_recover:
+            try:
+                if (now - datetime.fromisoformat(last_stuck_recover)).total_seconds() < 1800:  # 30分スロットル
+                    stuck_recover_needed = False
+            except Exception:
+                pass
+        if stuck_recover_needed:
+            msg = (
+                f"<!here> 【パトロール】VM内bot stuck検知・自動復旧試行 ({stamp})\n"
+                f"heartbeat age={follow_info.get('heartbeat_age_sec')}s phase={follow_info.get('heartbeat_phase')}\n"
+                f"既存セッションをkill して launcher 再投入します。"
+            )
+            run(sys.executable, str(SLACK_REPORTER), msg, timeout=30)
+            # vm_kill_all + launcher --force
+            rc1, _ = run(sys.executable, str(ROOT / "ops" / "vm_kill_all.py"), timeout=120)
+            append_patrol_log(f"[STUCK-RECOVER] vm_kill_all rc={rc1}")
+            launcher = ROOT / "ops" / "vm_follow_launcher.py"
+            try:
+                subprocess.Popen(
+                    [sys.executable, str(launcher), "--force", "--limit", "100"],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+                append_patrol_log("[STUCK-RECOVER] launcher 再投入完了")
+            except Exception as e:
+                append_patrol_log(f"[STUCK-RECOVER] launcher 起動失敗: {e}")
+            state["last_stuck_recover"] = stamp
+            save_state(state)
 
     # 出力
     report = {
@@ -515,6 +686,8 @@ def main():
         lines.append("")
         lines.append(f"[FOLLOW  ] vm={follow_info['vm_running']} "
                      f"log_age={follow_info.get('log_age_min','?')}min "
+                     f"hb_age={follow_info.get('heartbeat_age_sec','?')}s "
+                     f"hb_phase={follow_info.get('heartbeat_phase','?')} "
                      f"entries={follow_info.get('log_entries','?')} "
                      f"delta={delta} "
                      f"12h_runs={follow_info.get('last_12h',{}).get('runs',0)}/"
