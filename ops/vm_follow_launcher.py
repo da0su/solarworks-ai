@@ -93,6 +93,30 @@ def vm_running() -> bool:
     return rc == 0 and f'"{VM_NAME}"' in out
 
 
+def wait_vm_ready(timeout: int = 90) -> bool:
+    """VM 起動後 share folder アクセス可能になるまで待機.
+
+    2026-05-05 礎: VM reset 直後 GuestAdditionsRunLevel=3 になっても、
+    IME 切替が完了しないと keystroke が文字化けする。
+    share folder 接続を確認することで IME も整っていると推定できる。
+    また接続後 +10秒の cushion を入れて IME 完全切替を待つ。
+    """
+    share_canary = Path(r"\\VBOXSVR\share\follow_rpa_vm.py")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            if share_canary.exists():
+                log(f"  [wait_vm_ready] share folder OK after {int(time.time()+timeout-deadline)}s")
+                # IME 完全切替の cushion (+10秒)
+                time.sleep(10)
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    log(f"  [wait_vm_ready] TIMEOUT {timeout}s — share folder unreachable")
+    return False
+
+
 def last_launch_recent() -> bool:
     """前回のlauncher起動から40分以内なら True（= まだ前回実行中の可能性）"""
     if not LAST_LAUNCH_MARKER.exists():
@@ -380,6 +404,13 @@ def launch(force: bool = False, limit: int | None = None):
     if not vm_running():
         log("ABORT: VM not running")
         return 2
+
+    # 2026-05-05 礎: VM 起動直後 GuestAdditionsRunLevel=3 でも IME 切替が間に合わず
+    # keystroke 文字化け → python 起動失敗のケースあり (16:43 launcher fail 実例)
+    # share folder 接続を確認することで VM 完全起動を判定し、+10秒 cushion で IME 切替も待つ
+    if not wait_vm_ready(timeout=90):
+        log("ABORT: VM share folder unreachable (IME 切替未完 or VM起動異常)")
+        return 5
 
     # ⑦ Dead Zone自動検知 (2026-05-03): --force で bypass
     if not force:
