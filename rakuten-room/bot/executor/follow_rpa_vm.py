@@ -55,6 +55,9 @@ _minimize_console_window()
 BOT_DIR = Path(__file__).resolve().parent
 STATE_PATH = BOT_DIR / "follow_rpa_state.json"
 STOP_FLAG_PATH = BOT_DIR / "stop_flag.json"
+# 2026-05-05 礎: HOST から VM bot を止める手段。share folder 経由の stop_flag
+# HOST が \\VBOXSVR\share\stop_flag_share.json を作ると VM bot が次の navigate iteration で graceful 終了
+STOP_FLAG_PATH_SHARE = Path(r"\\VBOXSVR\share\stop_flag_share.json")
 LOG_PATH = BOT_DIR / "follow_rpa_log.json"
 SEED_USERS_PATH = BOT_DIR / "seed_users.json"
 EVIDENCE_DIR = BOT_DIR / "evidence"  # fail証跡保存先
@@ -152,7 +155,18 @@ logger = logging.getLogger("follow_rpa")
 # ==================== Utility ====================
 
 def should_stop():
-    return STOP_FLAG_PATH.exists()
+    """VM bot の graceful stop 判定.
+    local stop_flag.json (VM内) または share folder stop_flag_share.json (HOST 経由) のいずれかで終了."""
+    if STOP_FLAG_PATH.exists():
+        return True
+    # 2026-05-05 礎: HOST 経由の share folder stop_flag (確実な remote stop 手段)
+    try:
+        if STOP_FLAG_PATH_SHARE.exists():
+            return True
+    except Exception:
+        # share folder 接続失敗時は無視 (VM 内 stop_flag が primary)
+        pass
+    return False
 
 def create_stop_flag():
     STOP_FLAG_PATH.write_text(json.dumps({"created_at": datetime.now().isoformat()}), encoding="utf-8")
