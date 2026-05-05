@@ -245,7 +245,7 @@ def main():
     try:
         sys.path.insert(0, str(REPO_ROOT / "ops" / "notifications"))
         import slack_reporter
-        slack_reporter.send_to_slack(report)
+        slack_reporter.post_message(report)
         print("\n[OK] sent to Slack")
     except Exception as e:
         print(f"\n[ERR] slack send failed: {e}", file=sys.stderr)

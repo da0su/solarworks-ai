@@ -97,7 +97,7 @@ def slack_alert(missing_critical: list[str], missing_optional: list[str]) -> Non
     msg_lines.append("対応: ops/scheduler/setup_scheduler.ps1 を再実行 or 該当の set_*.ps1 で個別登録")
 
     try:
-        slack_reporter.send_to_slack("\n".join(msg_lines))
+        slack_reporter.post_message("\n".join(msg_lines))
         print("[healthcheck_tasks] Slack alert sent")
     except Exception as e:
         print(f"[healthcheck_tasks] slack send failed: {e}", file=sys.stderr)
