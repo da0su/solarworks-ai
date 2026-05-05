@@ -137,6 +137,10 @@ def execution_log_insert(action: str, status: str, detail: dict) -> int:
         return 0
 
 
+# 2026-05-05 礎: cmd window flash 抑制
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+
 # ---- preflight ---------------------------------------------------------------
 
 def run_preflight() -> tuple[bool, str]:
@@ -147,6 +151,7 @@ def run_preflight() -> tuple[bool, str]:
         r = subprocess.run(
             [sys.executable, str(PREFLIGHT_SCRIPT), "--verbose"],
             capture_output=True, text=True, timeout=60,
+            creationflags=_NO_WINDOW,
         )
         tail = "\n".join(r.stdout.splitlines()[-15:])
         return (r.returncode == 0, tail)
@@ -158,8 +163,9 @@ def run_preflight() -> tuple[bool, str]:
 
 def _run_sub(cmd, timeout):
     """subprocess.run wrapper that forces utf-8 decoding with errors=replace.
-    Windows default cp932 chokes on Japanese stdout — this is the fix."""
-    r = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    Windows default cp932 chokes on Japanese stdout — this is the fix.
+    2026-05-05: CREATE_NO_WINDOW で cmd window flash 抑制."""
+    r = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=_NO_WINDOW)
     def _dec(b):
         if b is None:
             return ""

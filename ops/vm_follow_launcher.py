@@ -70,9 +70,19 @@ def log(msg: str):
         pass
 
 
+# 2026-05-05 礎: HOST 上で subprocess を呼ぶ時、cmd window が一瞬 flash する現象 (CEO 目視) を完全抑制。
+# 1 launch につき VBoxManage が 100-300 回 call されるため、CREATE_NO_WINDOW なしでは
+# 連続で cmd window が立ち上がっては閉じる現象が CEO 視野に入る。
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+
 def run_vbox(*args) -> tuple[int, str]:
     try:
-        r = subprocess.run([VBOXMANAGE, *args], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(
+            [VBOXMANAGE, *args],
+            capture_output=True, text=True, timeout=30,
+            creationflags=_NO_WINDOW,
+        )
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     except Exception as e:
         return -1, str(e)
@@ -233,7 +243,7 @@ def notify_previous_rate_limit():
     try:
         script = Path(__file__).parent / "notify_rate_limit.py"
         if script.exists():
-            r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30)
+            r = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW)
             if r.stdout:
                 log(f"notify_rate_limit: {r.stdout.strip().splitlines()[-1] if r.stdout.strip() else 'no output'}")
             if r.returncode != 0 and r.stderr:
@@ -630,7 +640,7 @@ def _verify_launch_via_heartbeat(timeout_sec: int = 90) -> None:
     ss_path = Path(r"C:\Users\infoa\Documents\solarworks-ai\ops\patrol_screenshots") / f"_launch_fail_{launch_start.strftime('%Y%m%d_%H%M%S')}.png"
     ss_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run([VBOXMANAGE, "controlvm", "RoomBot", "screenshotpng", str(ss_path)], capture_output=True, timeout=20)
+        subprocess.run([VBOXMANAGE, "controlvm", "RoomBot", "screenshotpng", str(ss_path)], capture_output=True, timeout=20, creationflags=_NO_WINDOW)
     except Exception:
         pass
     # Slack通知
@@ -642,7 +652,7 @@ def _verify_launch_via_heartbeat(timeout_sec: int = 90) -> None:
             f"スクショ: {ss_path}\n"
             f"次の対応: cmd窓内エラー確認 / VM再起動 / login確認"
         )
-        subprocess.run([sys.executable, str(slack), msg], capture_output=True, timeout=30)
+        subprocess.run([sys.executable, str(slack), msg], capture_output=True, timeout=30, creationflags=_NO_WINDOW)
     except Exception as e:
         log(f"  [verify] Slack notify failed: {e}")
 

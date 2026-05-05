@@ -57,9 +57,13 @@ LIKE_HISTORY = DATA_DIR / "like_history.json"
 HEARTBEAT = DATA_DIR / "state" / "heartbeat.json"
 
 
+# 2026-05-05 礎: Windows console subprocess の cmd window flash 抑制
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+
+
 def run(*args, timeout=30):
     try:
-        r = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout, creationflags=_NO_WINDOW)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     except Exception as e:
         return -1, str(e)
@@ -524,9 +528,9 @@ def _vm_auto_recover(state: dict, stamp: str, now: datetime) -> None:
     try:
         subprocess.Popen(
             [sys.executable, str(launcher), "--limit", "100"],
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | _NO_WINDOW,
         )
-        append_patrol_log("[VM-RECOVER] launcher起動完了 (非同期)")
+        append_patrol_log("[VM-RECOVER] launcher起動完了 (非同期・no_window)")
     except Exception as e:
         append_patrol_log(f"[VM-RECOVER] launcher起動失敗: {e}")
 
@@ -706,9 +710,9 @@ def main():
             try:
                 subprocess.Popen(
                     [sys.executable, str(launcher), "--force", "--limit", "100"],
-                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | _NO_WINDOW,
                 )
-                append_patrol_log("[STUCK-RECOVER] launcher 再投入完了")
+                append_patrol_log("[STUCK-RECOVER] launcher 再投入完了 (no_window)")
             except Exception as e:
                 append_patrol_log(f"[STUCK-RECOVER] launcher 起動失敗: {e}")
             state["last_stuck_recover"] = stamp

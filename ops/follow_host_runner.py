@@ -228,11 +228,12 @@ def kill_orphan_chrome():
     ※ taskkill /f /im chrome.exe は POST/LIKE/FB bot の Chrome も殺すため使わない。
     WMI で chrome_profile を CommandLine に持つプロセスだけを選択 kill する。"""
     import subprocess
+    _NO_WIN = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
     try:
         r = subprocess.run(
             ["powershell", "-Command",
              "Get-WmiObject Win32_Process -Filter \"name='chrome.exe'\" | Where-Object { $_.CommandLine -like '*chrome_profile*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15, creationflags=_NO_WIN
         )
         print(f"[cleanup] WMI selective kill chrome_profile: rc={r.returncode}")
     except Exception as e:
