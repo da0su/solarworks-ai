@@ -29,7 +29,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BOT_DIR = REPO_ROOT / "rakuten-room" / "bot"
 EXECUTOR_DIR = BOT_DIR / "executor"
 CHROME = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-PROFILE = str(BOT_DIR / "data" / "chrome_profile")
+
+# 2026-05-05 P1 (Plan v3): Phase A-2 profile 分離に対応。
+# config.get_chrome_profile("follow") で chrome_profile_follow を使う。
+# legacy chrome_profile (POST/LIKE/Followback と共有) との衝突を排除。
+sys.path.insert(0, str(BOT_DIR))
+import config  # type: ignore  # noqa: E402
+PROFILE = str(config.get_chrome_profile("follow"))
 # Use a SEPARATE log file to avoid being overwritten by the VM bot.
 # follow_rpa_vm.py writes \\VBOXSVR\share\follow_rpa_log.json (= executor/follow_rpa_log.json)
 # via a replace-write, which would clobber any host-runner entries in that file.
