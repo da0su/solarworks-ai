@@ -143,6 +143,7 @@ def check_follow() -> dict:
     runs = 0
     total = 0
     reasons: dict[str, int] = {}
+    fail_aggregate: dict[str, int] = {}  # Phase C-1: fail_reason 集計
     for e in data:
         try:
             dt = datetime.fromisoformat(str(e.get("timestamp", "")).replace("Z", ""))
@@ -154,7 +155,29 @@ def check_follow() -> dict:
         total += int(e.get("success", 0) or 0)
         r = e.get("stop_reason", "unknown")
         reasons[r] = reasons.get(r, 0) + 1
+        # Phase C-1: fail_stats を group別 SLO 違反検知用に集約
+        for fr, fc in (e.get("fail_stats") or {}).items():
+            if not isinstance(fc, int):
+                continue
+            fail_aggregate[fr] = fail_aggregate.get(fr, 0) + fc
     info["last_12h"] = {"runs": runs, "success_total": total, "stop_reasons": reasons}
+
+    # Phase C-1: fail_reason taxonomy で group SLO 違反検知
+    try:
+        sys.path.insert(0, str(ROOT))
+        from shared.fail_reason_taxonomy import aggregate_by_group, evaluate_slo
+        if fail_aggregate:
+            info["fail_by_group"] = aggregate_by_group(fail_aggregate)
+            slo_violations = evaluate_slo(fail_aggregate, duration_hours=12.0)
+            if slo_violations:
+                info["slo_violations"] = slo_violations
+                # CRITICAL を problem 化
+                critical_groups = [v["group"] for v in slo_violations if v["level"] == "CRITICAL"]
+                if critical_groups:
+                    info["problem"] = True
+                    info["reasons"].append(f"slo_critical:{','.join(critical_groups)}")
+    except Exception as _e:
+        info["taxonomy_error"] = str(_e)
 
     if not info["vm_running"]:
         info["problem"] = True
