@@ -2,6 +2,101 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 作業完了フロー（必須・毎回実行）
+
+**重要タスクに着手するとき（最初に実行）:**
+```bash
+python ops/notifications/slack_reporter.py --mark-pending "タスク概要"
+```
+
+**タスクが完了したら（最後に必ず実行）:**
+```bash
+# 1. Slack報告送信（自動で未報告フラグも解除される）
+python ops/notifications/slack_reporter.py "【サイバー報告 #NNN】..."
+
+# 2. report_numbering.md を更新
+#    memory/report_numbering.md の採番テーブルに追記する
+```
+
+**ルール:**
+- CEO向け提出レポートには `【サイバー報告 #NNN】` 番号を付ける（report_numbering.md参照）
+- 送信先デフォルト: `#web-cyber_marke_clow` (C0AQASABVL7)
+- 重要タスク（実装・調査・報告）は必ず完了報告を送ること
+- 軽微な質問回答・メモ作業は報告不要
+
+**Stop Hook（バックストップ）:**
+未報告フラグが残ったままセッションが終了すると、`stop_hook.py` が自動的に
+Slackへ「未報告検知」警告を送信する。
+
+## セッション開始時の必須アクション
+
+**毎セッション最初に必ず実行:**
+```bash
+python ops/slack_monitor/check_unread.py
+```
+→ 未読Slackメッセージを確認する。件数が0なら作業開始。1件以上あれば内容を読んで対応する。
+
+**未読確認後は既読化:**
+```bash
+python ops/slack_monitor/check_unread.py --clear
+```
+
+---
+
+## 🎯 楽天ROOM 4機能 日次目標値 SSOT (絶対遵守・忘れたら必ず確認)
+
+**確定日**: 2026-05-05 | **CEO 指示**
+
+> 「分からなくなったらスプシを確認する。これを入れておけば覚えていなくても都度確認すればOK」
+
+### ルール (永続)
+
+楽天ROOM 4機能 (POST/LIKE/FOLLOW/FOLLOWBACK) の **日次目標値**は、コードの hard-code (`POST_DAILY_MAX=200` 等) ではなく **必ずスプシを参照** する。CEOが日次で目標を更新するため、コード値は常に古い可能性がある。
+
+### 確認手順 (必ず実行)
+
+CEO 報告・進捗確認・ダッシュボード生成・SLO 違反判定の **どの場面でも** 以下を実行:
+
+```bash
+# キャッシュ自動 (6h以内なら再利用、過ぎたら gspread で取得)
+python -c "from ops.notifications.dashboard_report import _load_ssot_targets; print(_load_ssot_targets())"
+
+# または直接確認
+python _check_target_sheet.py     # gid=1447646534 を読む
+```
+
+### SSOT 場所 (固定)
+
+| 項目 | 値 |
+|------|-----|
+| Spreadsheet | 楽天ROOM_検証管理 |
+| ID | `1vTWzNZeesXkOFEyNTnufa5K_TZwnhgCh4V6ZtyuHXL0` |
+| シート名 | `楽天ROOM_デイリーログ` |
+| gid | **`1447646534`** |
+| URL | https://docs.google.com/spreadsheets/d/1vTWzNZeesXkOFEyNTnufa5K_TZwnhgCh4V6ZtyuHXL0/edit?gid=1447646534 |
+
+### カラム (固定)
+
+| Col | 内容 |
+|-----|------|
+| A | 日付 (`YYYY/MM/DD`) |
+| B | 目標投稿数 |
+| E | **目標フォロー数** |
+| H | **目標ライク数** |
+| K | **目標フォローバック数** |
+
+### 自動 cache
+
+`state/daily_targets_ssot.json` に 6時間 cache。`dashboard_report.py` は自動で SSOT を取得して達成率表示する。**コードの hard-code 数値 (`/200` `/500` `/2000` 等) を見たら疑え** — その箇所は SSOT 連動に修正対象。
+
+### 関連ルール
+
+- 詳細: `memory/rakuten_room_targets_ssot.md`
+- 旧 `rakuten_follow_daily_target.md` (2000件必達) は SSOT に統合・スプシの値が優先
+- 第2アカウント禁止 (`rakuten_follow_account_rule.md`) は変更なし
+
+---
+
 ## Project Overview
 
 SolarWorks AI事業統合リポジトリ。楽天ROOM自動投稿BOT + コイン仕入れリサーチを運用する。

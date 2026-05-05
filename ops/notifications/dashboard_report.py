@@ -38,6 +38,70 @@ LIKE_HISTORY = REPO_ROOT / "rakuten-room" / "bot" / "data" / "like_history.json"
 FOLLOW_RPA_LOG = REPO_ROOT / "rakuten-room" / "bot" / "executor" / "follow_rpa_log.json"
 FOLLOW_RUNTIME_STATE = REPO_ROOT / "state" / "follow_runtime_state.json"
 
+# 2026-05-05 礎: SSOT (memory/rakuten_room_targets_ssot.md)
+SSOT_SPREADSHEET_ID = "1vTWzNZeesXkOFEyNTnufa5K_TZwnhgCh4V6ZtyuHXL0"
+SSOT_SHEET_GID = 1447646534
+SSOT_CACHE = REPO_ROOT / "state" / "daily_targets_ssot.json"
+GSPREAD_CREDS = REPO_ROOT / "credentials" / "sheets_service_account.json"
+
+
+def _load_ssot_targets() -> dict:
+    """SSOT スプシから今日の目標値を取得 (cache 6時間).
+
+    Returns:
+        dict {date, post_target, follow_target, like_target, fb_target}
+        失敗時は空 dict (呼び側で fallback)
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_slash = datetime.now().strftime("%Y/%m/%d")
+
+    # Cache check (6h以内なら再利用)
+    if SSOT_CACHE.exists():
+        try:
+            cache = json.loads(SSOT_CACHE.read_text(encoding="utf-8"))
+            if cache.get("date") == today:
+                cache_age = (datetime.now() - datetime.fromisoformat(cache["fetched_at"])).total_seconds()
+                if cache_age < 21600:  # 6h
+                    return cache.get("targets", {})
+        except Exception:
+            pass
+
+    # gspread 経由で取得
+    targets = {}
+    try:
+        import gspread
+        gc = gspread.service_account(filename=str(GSPREAD_CREDS))
+        sh = gc.open_by_key(SSOT_SPREADSHEET_ID)
+        ws = next(w for w in sh.worksheets() if w.id == SSOT_SHEET_GID)
+        rows = ws.get_all_values()
+        for row in rows:
+            if not row or not row[0]:
+                continue
+            if row[0] == today_slash or row[0] == today:
+                # B=投稿目標, E=フォロー目標, H=ライク目標, K=フォローバック目標
+                def _i(v):
+                    try: return int(str(v).replace(",", "").strip())
+                    except: return 0
+                targets = {
+                    "post":       _i(row[1]) if len(row) > 1 else 0,
+                    "follow":     _i(row[4]) if len(row) > 4 else 0,
+                    "like":       _i(row[7]) if len(row) > 7 else 0,
+                    "followback": _i(row[10]) if len(row) > 10 else 0,
+                }
+                break
+        # Cache write
+        if targets:
+            SSOT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+            SSOT_CACHE.write_text(json.dumps({
+                "date": today,
+                "fetched_at": datetime.now().isoformat(),
+                "targets": targets,
+                "source": "gspread:楽天ROOM_デイリーログ",
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        print(f"[ssot] gspread fetch failed: {e}", file=sys.stderr)
+    return targets
+
 
 def _readonly(path: Path) -> sqlite3.Connection | None:
     if not path.exists():
@@ -202,21 +266,32 @@ def build_report(mode: str = "noon") -> str:
     follow = _today_follow()
     fb = _today_followback()
     pool = _pool_audit_info()
+    # 2026-05-05 礎: SSOT スプシから目標値取得
+    targets = _load_ssot_targets()
+    t_post = targets.get("post", 200)
+    t_like = targets.get("like", 500)
+    t_follow = targets.get("follow", 2000)
+    t_fb = targets.get("followback", 30)
+
+    def _pct(actual, target):
+        if not target: return "-"
+        return f"{int(actual * 100 / target)}%"
 
     lines = [
         f"【サイバー定時報告 #{mode_label}】 {now.strftime('%Y-%m-%d %H:%M')}",
         "",
-        f"■ POST   today={post['posted']}/200 | "
+        f"■ POST   today={post['posted']}/{t_post} ({_pct(post['posted'], t_post)}) | "
         f"last {post['last_at'] or '-'} ({post['last_age_h'] or '-'}h前)",
-        f"■ LIKE   today={like['liked']}/500 | "
+        f"■ LIKE   today={like['liked']}/{t_like} ({_pct(like['liked'], t_like)}) | "
         f"last {like['last_at'] or '-'} ({like['last_age_min'] or '-'}m前)",
-        f"■ FOLLOW today={follow['followed']}/2000 | "
+        f"■ FOLLOW today={follow['followed']}/{t_follow} ({_pct(follow['followed'], t_follow)}) | "
         f"sessions={follow.get('sessions_today', 0)} | "
         f"VM={follow['vm_state']} | login={follow.get('login_status', '?')} | "
         f"hb_age={follow.get('heartbeat_age_sec', '?')}s",
-        f"■ FB     today={fb['followback']}/30 | "
+        f"■ FB     today={fb['followback']}/{t_fb} ({_pct(fb['followback'], t_fb)}) | "
         f"pending={fb['pending']} | last {fb['last_at'] or '-'} ({fb['last_age_min'] or '-'}m前)",
         "",
+        f"[目標源] スプシ「楽天ROOM_デイリーログ」 (gid={SSOT_SHEET_GID})",
     ]
     if pool.get("audit"):
         a = pool["audit"]
