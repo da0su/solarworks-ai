@@ -1783,9 +1783,13 @@ def run_follow(limit, dry_run=False, force=False):
             seed = ordered_seeds[idx]
 
             logger.info(f"\n--- [{seed['genre']}] {seed['user']} (#{idx}) ---")
-            # 2026-05-05 Phase 2-2: heartbeat更新（30秒スロットル）
+            # 2026-05-05 Phase 2-2 + C-1: heartbeat更新（30秒スロットル）+ fail_stats by group
+            try:
+                _hb_extra = {"fail_stats": dict(session_fail_stats.counts)} if 'session_fail_stats' in dir() else {}
+            except Exception:
+                _hb_extra = {}
             write_heartbeat("navigate", current_seed=seed["user"],
-                            success=total_success, fail=total_fail)
+                            success=total_success, fail=total_fail, extra=_hb_extra)
 
             if not dry_run:
                 nav_ok, nav_reason = navigate_to_seed_user(seed["user"])
