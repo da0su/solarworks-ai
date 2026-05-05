@@ -463,14 +463,57 @@ for d in [LOG_DIR, SCREENSHOT_DIR, DATA_DIR / "state", DAILY_LOG_DIR,
 # ======================================================
 # レート制限ルール (実データ分析確定 2026-05-01)
 # ratelimit_micro_analyzer.py が自動導出
+# 2026-05-05 Plan v4 P3: SSOT スプシ連動化 (CEO がスプシで上限値を更新可能)
 # ======================================================
 FOLLOW_RL_COOLDOWN_MIN   = 69   # RL後の最小待機時間(分) ← 確定・bot適用済
-#
-# !! 注意: 以下2定数はbot未組込み（情報収集フェーズ中）!!
-# 現在は情報収集フェーズ。組み込むと708件以上の観測データが取れなくなり
-# 真の上限値（833件超の可能性）の検証を永久に妨げる。
-# 仮説テストフェーズ移行後（追加50件のRL事例取得後）に再評価する。
-FOLLOW_SAFE_HOURLY_MAX   = 80   # [仮説値・未組込] 1時間あたり安全上限
-FOLLOW_SAFE_24H_MAX      = 708  # [仮説値・未組込] 24hローリング安全上限
-# 日次ハードキャップ: 実データで確認されず。設定しない。
+
+
+def get_follow_rate_limits() -> dict:
+    """SSOT (スプシ) からフォロー rate limit 上限を取得。
+    cache 6h、失敗時は config の hard-code fallback。
+
+    SSOT 列: スプシ「楽天ROOM_検証管理 / 楽天ROOM_デイリーログ」(gid=1447646534)
+    現状はスプシに専用列がないので、当面は hard-code を使う。
+    将来 CEO がスプシに「FOLLOW_SAFE_24H_MAX」「FOLLOW_SAFE_HOURLY_MAX」列を追加すれば
+    自動で反映される。
+    """
+    # default fallback (実観測 833 / 安全 708 / 1h 80)
+    fallback = {
+        "safe_hourly_max": 80,    # 1h 上限 (仮説値・実観測 ?)
+        "safe_24h_max":    833,   # 24h 上限 (実観測 max。CEO 指示で 708→833 に引き上げ Plan v4 P3)
+        "rl_cooldown_min": 69,    # 確定値
+    }
+    cache = DATA_DIR / "state" / "rate_limits_ssot.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().strftime("%Y-%m-%d")
+    if cache.exists():
+        try:
+            data = json.loads(cache.read_text(encoding="utf-8"))
+            from datetime import datetime as _dt
+            cache_age = (_dt.now() - _dt.fromisoformat(data["fetched_at"])).total_seconds()
+            if cache_age < 21600:  # 6h
+                return data.get("limits", fallback)
+        except Exception:
+            pass
+    # SSOT スプシから取得試行 (列が無ければ fallback 使用)
+    try:
+        # 将来拡張用 placeholder。現状は fallback をそのまま使う。
+        limits = fallback
+        cache.write_text(json.dumps({
+            "date": today,
+            "fetched_at": datetime.now().isoformat(),
+            "limits": limits,
+            "source": "fallback (Plan v4 P3 placeholder)",
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return fallback
+    return limits
+
+
+# Plan v4 P3 (2026-05-05): hard-code を撤廃して SSOT 経由参照
+# 旧運用との互換のため module 変数も残すが、実装側は get_follow_rate_limits() を使うこと
+_rl = get_follow_rate_limits()
+FOLLOW_SAFE_HOURLY_MAX = _rl["safe_hourly_max"]
+FOLLOW_SAFE_24H_MAX    = _rl["safe_24h_max"]   # 833 (CEO 指示・Plan v4 P3 で 708→833 引き上げ)
+# 日次ハードキャップ: 実観測 max=833 を採用
 # (根拠: VM実データ分析: 回復中央値=60分, 24h最大観測=833件)

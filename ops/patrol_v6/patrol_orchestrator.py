@@ -194,6 +194,39 @@ def main():
         "warn_count": len(warn),
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # Plan v4 P4: room_bot_v6.db patrol_log に記録
+    try:
+        import sqlite3
+        db_path = REPO_ROOT / "rakuten-room" / "bot" / "data" / "room_bot_v6.db"
+        if db_path.exists():
+            conn = sqlite3.connect(str(db_path), timeout=2)
+            for short, res in layer_results.items():
+                conn.execute(
+                    "INSERT INTO patrol_log(ts, layer, status, alerts_json, actions_taken_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (datetime.now().isoformat(), short, res.get("status", "?"),
+                     json.dumps(res.get("alerts", []), ensure_ascii=False),
+                     json.dumps([], ensure_ascii=False)),
+                )
+            # SLO 違反は別 table へ
+            for a in all_alerts:
+                if a.get("level") in ("CRITICAL", "WARN"):
+                    conn.execute(
+                        "INSERT INTO slo_violations(detected_at, function, sli_name, "
+                        "actual_value, slo_threshold, alert_level, auto_recover_action) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (datetime.now().isoformat(),
+                         a.get("layer", "?"),
+                         a.get("message", "?")[:120],
+                         None, None,
+                         a.get("level"),
+                         a.get("auto_recover")),
+                    )
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"[patrol_v6] db log error: {e}", file=sys.stderr)
+
     return 2 if crit else (1 if warn else 0)
 
 

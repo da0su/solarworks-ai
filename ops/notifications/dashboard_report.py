@@ -252,6 +252,25 @@ def _pool_audit_info() -> dict:
     return info
 
 
+def _patrol_v6_summary() -> str:
+    """patrol_v6 の最新 state を 1行 summary に."""
+    try:
+        p = REPO_ROOT / "state" / "patrol_v6_state.json"
+        if not p.exists():
+            return "patrol_v6: not run yet"
+        d = json.loads(p.read_text(encoding="utf-8"))
+        crit = d.get("critical_count", 0)
+        warn = d.get("warn_count", 0)
+        ts = d.get("ts", "?")[:19]
+        if crit > 0:
+            return f"patrol_v6: CRITICAL={crit} WARN={warn} (last {ts})"
+        if warn > 0:
+            return f"patrol_v6: WARN={warn} (last {ts})"
+        return f"patrol_v6: ALL OK (last {ts})"
+    except Exception as e:
+        return f"patrol_v6: parse error {e}"
+
+
 def build_report(mode: str = "noon") -> str:
     """4機能サマリレポートを生成する."""
     now = datetime.now()
@@ -292,6 +311,7 @@ def build_report(mode: str = "noon") -> str:
         f"pending={fb['pending']} | last {fb['last_at'] or '-'} ({fb['last_age_min'] or '-'}m前)",
         "",
         f"[目標源] スプシ「楽天ROOM_デイリーログ」 (gid={SSOT_SHEET_GID})",
+        _patrol_v6_summary(),
     ]
     if pool.get("audit"):
         a = pool["audit"]
