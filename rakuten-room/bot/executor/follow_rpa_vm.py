@@ -2382,15 +2382,9 @@ def main():
     else:
         session_limit = random.randint(SESSION_MIN, SESSION_MAX)
         effective_limit = min(args.limit, session_limit)
-        # ③ 朝抑制 (2026-05-03 実装): 06:00-10:59 は limit=20 に制限してc24消費を温存
-        # 根拠: H22(深夜APS=2.0/朝APS=9.8), H16(23:00-11:00=810件/日最適), ③改善計画
-        # --no-session-cap 指定時はこの制限をスキップ（CEO手動テスト用途保護）
-        _morning_limit = 20
-        _hour = datetime.now().hour
-        if 6 <= _hour < 11:
-            if effective_limit > _morning_limit:
-                print(f"[③ 朝抑制] {_hour:02d}時台 → limit {effective_limit} -> {_morning_limit} (c24温存)")
-                effective_limit = _morning_limit
+        # 2026-05-06 CEO指示: 24時間稼働ルール採用。朝抑制 (06-10時 limit=20) 撤廃。
+        # rate_limit 検知時の自動 cooldown が独立で機能するため、時間帯制限は廃止。
+        print(f"[24h稼働] effective_limit={effective_limit} (CEO指示・朝抑制撤廃済)")
     run_follow(effective_limit, dry_run=args.dry_run, force=args.force)
 
 
