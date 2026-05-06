@@ -419,17 +419,11 @@ def launch(force: bool = False, limit: int | None = None):
         log("ABORT: VM share folder unreachable (IME 切替未完 or VM起動異常)")
         return 5
 
-    # ⑦ Dead Zone自動検知 (2026-05-03): --force で bypass
-    if not force:
-        _dz, _dz_reason = check_dead_zone()
-        if _dz:
-            log(f"SKIP: dead_zone検知 → launch中止 ({_dz_reason})")
-            log(f"      --force フラグで強制起動可能")
-            return 4  # dead_zone skip
-        else:
-            log(f"[DEAD_ZONE_CHECK] pass: {_dz_reason}")
-    else:
-        log("[DEAD_ZONE_CHECK] --force により dead_zone check をスキップ")
+    # 2026-05-06 CEO指示: 24時間稼働ルール採用。dead_zone check を default bypass に変更。
+    # rate_limit 検知時の Chrome 自動 close + cooldown が独立で機能するため、
+    # 時刻独立の dead_zone check は撤廃して常時稼働を優先。
+    log("[DEAD_ZONE_CHECK] 24h稼働ルール (CEO指示) で常時 bypass")
+    # 旧ロジック (--force でのみ起動) は削除済
 
     # --- 制限なし運用（CEO指示 2026-04-21）---
     # rate_limit検知時のChrome自動close＋1時間インターバル自体が安全装置として十分に効いているため、
@@ -485,20 +479,14 @@ def launch(force: bool = False, limit: int | None = None):
 
     # --- limit の決定（③ 朝抑制付き dynamic limit 2026-05-03）---
     # 手動 --limit 指定がある場合はそちらを優先（force=True 含む）
-    # 自動 (limit=None) の場合は時刻帯ごとに limit を変更:
-    #   23:00-05:59 → FOLLOW_LIMIT (200): 深夜APS=2.0、最高効率帯
-    #   06:00-10:59 → MORNING_LIMIT (20):  朝APS=9-21、c24消費を抑えて夜帯に温存
-    #   11:00-22:59 → FOLLOW_LIMIT (200): 昼〜夕方（RL覚悟で情報収集）
-    # 根拠: H22(深夜APS=2.0/朝APS=9.8)、H16(23:00-11:00=810件/日最適スケジュール)、③計画
-    MORNING_LIMIT = 20   # 06:00-10:59 に適用（朝c24消費抑制）
+    # 2026-05-06 CEO指示: 24時間稼働ルール採用。朝抑制 (MORNING_LIMIT 06:00-10:59) 撤廃。
+    # 全時間帯で FOLLOW_LIMIT (200) を使用。c24 過多防止は dead_zone bypass 化で対応。
     _now_hour = datetime.now().hour
     if limit is not None:
         use_limit = limit
-    elif 6 <= _now_hour < 11:
-        use_limit = MORNING_LIMIT
-        log(f"[③ 朝抑制] {_now_hour:02d}時台 → limit={MORNING_LIMIT} (c24温存・夜帯に集中)")
     else:
         use_limit = FOLLOW_LIMIT
+        log(f"[24h稼働] {_now_hour:02d}時台 → limit={FOLLOW_LIMIT} (CEO指示 朝抑制撤廃)")
 
     write_marker()
 
