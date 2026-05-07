@@ -23,6 +23,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -124,12 +125,49 @@ def auto_recover(action: str, context: dict) -> dict:
             result["cleaned"] = cleaned
 
         elif action == "escalate_ceo":
-            # Slack <!channel> 通知
+            # 2026-05-07 P0-5 (Plan v5 真因 #4): Slack 送信失敗を確実に検知
+            # 旧: subprocess.run() の戻り値を無視 (fire-and-forget)
+            # 新: returncode 確認 + 3 回 retry + 全失敗時は escalate_failed.log に残す
             sl = REPO_ROOT / "ops" / "notifications" / "slack_reporter.py"
             msg = f"<!channel> 【patrol_v6 CRITICAL】 {context.get('summary', 'unknown')}"
-            subprocess.run([sys.executable, str(sl), msg],
-                         capture_output=True, timeout=30, creationflags=NO_WIN)
-            result["slack_sent"] = True
+            slack_sent = False
+            attempts: list[dict] = []
+            for attempt in range(3):
+                try:
+                    r = subprocess.run(
+                        [sys.executable, str(sl), msg],
+                        capture_output=True, timeout=30, creationflags=NO_WIN,
+                    )
+                    attempts.append({
+                        "attempt": attempt + 1,
+                        "rc": r.returncode,
+                        "stdout_tail": (r.stdout or b"")[-200:].decode("utf-8", "ignore"),
+                        "stderr_tail": (r.stderr or b"")[-200:].decode("utf-8", "ignore"),
+                    })
+                    # slack_reporter.py は成功時 returncode=0 / OK を含む
+                    if r.returncode == 0:
+                        slack_sent = True
+                        break
+                except Exception as e:
+                    attempts.append({"attempt": attempt + 1, "error": str(e)})
+                # backoff: 5 秒 → 30 秒 (合計 < 1 分)
+                if attempt < 2:
+                    time.sleep(5 if attempt == 0 else 30)
+            result["slack_sent"] = slack_sent
+            result["attempts"] = attempts
+            if not slack_sent:
+                # 3 回失敗時はファイルに残す (CEO が見つけ次第対応)
+                fail_log = REPO_ROOT / "state" / "escalate_failed.log"
+                fail_log.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with fail_log.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps({
+                            "ts": datetime.now().isoformat(),
+                            "msg": msg,
+                            "attempts": attempts,
+                        }, ensure_ascii=False) + "\n")
+                except Exception as e:
+                    result["fail_log_error"] = str(e)
 
         else:
             result["status"] = "unknown_action"
@@ -145,7 +183,10 @@ def auto_recover(action: str, context: dict) -> dict:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true",
-                        help="auto recover を実行せず判定のみ")
+                        help="auto recover を実行せず判定のみ (--auto-recover を override)")
+    parser.add_argument("--auto-recover", action="store_true",
+                        dest="auto_recover",
+                        help="2026-05-07 P0-2: 明示的に指定された場合のみ auto_recover を実行")
     parser.add_argument("--layer", help="特定 layer のみ実行")
     args = parser.parse_args()
 
@@ -176,13 +217,32 @@ def main():
     print(f"\n=== Summary: CRITICAL={len(crit)} WARN={len(warn)} ===")
 
     # 自動復旧
-    if not args.check_only and (crit or warn):
+    # 2026-05-07 P0-2 (Plan v5 真因 #4):
+    #   旧: not check_only → recover (default で recover 走るはずだったが Layer alert に
+    #       auto_recover キーが入っていなかった等で実態は観測のみ)
+    #   新: --auto-recover 明示指定時に走る (--check-only で override 可)
+    should_recover = args.auto_recover and not args.check_only
+    recovery_actions_taken: list[dict] = []
+    if should_recover and (crit or warn):
         for a in all_alerts:
             recover = a.get("auto_recover")
             if recover:
                 print(f"  [auto_recover] {a.get('layer')} → {recover}")
                 rec_result = auto_recover(recover, a.get("context", {}))
+                rec_result["alert_layer"] = a.get("layer")
+                rec_result["alert_message"] = a.get("message")
+                recovery_actions_taken.append(rec_result)
                 print(f"     result: {rec_result}")
+        # CRITICAL がありどの alert にも auto_recover が紐付いていない場合は
+        # escalate_ceo を保険として 1 回だけ走らせる (silent stuck の再発防止)
+        if crit and not any(a.get("auto_recover") for a in all_alerts):
+            print("  [auto_recover] CRITICAL あり / auto_recover 未指定 → escalate_ceo fallback")
+            summary = "; ".join(a.get("message", "?") for a in crit[:3])
+            rec = auto_recover("escalate_ceo", {"summary": summary})
+            recovery_actions_taken.append(rec)
+    elif (crit or warn):
+        print(f"  [auto_recover] skip (auto_recover={args.auto_recover}, "
+              f"check_only={args.check_only})")
 
     # state file に書き出し (dashboard 用)
     state_file = REPO_ROOT / "state" / "patrol_v6_state.json"
@@ -192,6 +252,19 @@ def main():
         "layers": layer_results,
         "critical_count": len(crit),
         "warn_count": len(warn),
+        "critical_alerts": [
+            {"layer": a.get("layer"), "message": a.get("message"),
+             "auto_recover": a.get("auto_recover")}
+            for a in crit
+        ],
+        "warn_alerts": [
+            {"layer": a.get("layer"), "message": a.get("message"),
+             "auto_recover": a.get("auto_recover")}
+            for a in warn
+        ],
+        "auto_recover_enabled": args.auto_recover,
+        "check_only": args.check_only,
+        "recovery_actions_taken": recovery_actions_taken,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # Plan v4 P4: room_bot_v6.db patrol_log に記録

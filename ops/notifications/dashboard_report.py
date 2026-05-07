@@ -271,6 +271,54 @@ def _patrol_v6_summary() -> str:
         return f"patrol_v6: parse error {e}"
 
 
+def _patrol_v6_critical_block() -> list[str]:
+    """2026-05-07 P0-6 (Plan v5 真因 #4):
+    patrol_v6_state.json の CRITICAL/WARN alert を dashboard 文頭に展開する。
+
+    Returns:
+        Slack 投稿用の行リスト (CRITICAL あり時のみ <!channel> mention 付き)
+    """
+    lines: list[str] = []
+    try:
+        p = REPO_ROOT / "state" / "patrol_v6_state.json"
+        if not p.exists():
+            return lines
+        d = json.loads(p.read_text(encoding="utf-8"))
+        crit_alerts = d.get("critical_alerts") or []
+        warn_alerts = d.get("warn_alerts") or []
+        recover_actions = d.get("recovery_actions_taken") or []
+        if not crit_alerts and not warn_alerts:
+            return lines
+
+        if crit_alerts:
+            lines.append("<!channel> 【patrol_v6 CRITICAL 検知】")
+            for a in crit_alerts[:5]:
+                msg = (a.get("message") or "")[:100]
+                rec = a.get("auto_recover") or "-"
+                lines.append(f"  [!] [{a.get('layer','?')}] {msg} (recover={rec})")
+            if len(crit_alerts) > 5:
+                lines.append(f"  ... 他 {len(crit_alerts) - 5} 件")
+        if warn_alerts:
+            lines.append(f"[patrol_v6 WARN] {len(warn_alerts)} 件:")
+            for a in warn_alerts[:3]:
+                msg = (a.get("message") or "")[:100]
+                lines.append(f"  - [{a.get('layer','?')}] {msg}")
+        if recover_actions:
+            lines.append(f"[auto_recover taken] {len(recover_actions)} 件:")
+            for r in recover_actions[:5]:
+                act = r.get("action", "?")
+                lyr = r.get("alert_layer", "?")
+                ok = (
+                    "OK" if r.get("rc") == 0 or r.get("slack_sent") or r.get("status") not in ("error", "unknown_action")
+                    else "FAIL"
+                )
+                lines.append(f"  → [{lyr}] {act} = {ok}")
+        lines.append("")  # 空行で 4機能サマリと分ける
+    except Exception as e:
+        lines.append(f"[patrol_v6 critical block parse error] {e}")
+    return lines
+
+
 def build_report(mode: str = "noon") -> str:
     """4機能サマリレポートを生成する."""
     now = datetime.now()
@@ -296,9 +344,15 @@ def build_report(mode: str = "noon") -> str:
         if not target: return "-"
         return f"{int(actual * 100 / target)}%"
 
+    # 2026-05-07 P0-6 (Plan v5): CRITICAL を文頭に展開し CEO が朝起きて即把握できる状態に
+    crit_block = _patrol_v6_critical_block()
     lines = [
         f"【サイバー定時報告 #{mode_label}】 {now.strftime('%Y-%m-%d %H:%M')}",
         "",
+    ]
+    if crit_block:
+        lines.extend(crit_block)
+    lines += [
         f"■ POST   today={post['posted']}/{t_post} ({_pct(post['posted'], t_post)}) | "
         f"last {post['last_at'] or '-'} ({post['last_age_h'] or '-'}h前)",
         f"■ LIKE   today={like['liked']}/{t_like} ({_pct(like['liked'], t_like)}) | "

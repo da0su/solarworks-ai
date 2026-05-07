@@ -192,7 +192,13 @@ def append_log(entry):
         except: pass
     logs.append(entry)
     if len(logs) > 1000: logs = logs[-1000:]
-    LOG_PATH.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 2026-05-07 P0-4 (Plan v5 真因 #2):
+    #   local LOG_PATH の write 失敗は致命的 (rotation 不能 = silent stuck) → raise
+    try:
+        LOG_PATH.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.critical(f"[append_log] LOCAL LOG_PATH write failed: {e}")
+        raise RuntimeError(f"append_log local write failed: {e}")
     # Copy to shared folder for host PC to read (multi-method fallback)
     content = json.dumps(logs, ensure_ascii=False, indent=2)
     _sync_log_to_share(content)
@@ -707,14 +713,31 @@ def write_heartbeat(phase: str, current_seed: str = "", success: int = 0, fail: 
         "extra": extra or {},
     }
     content = json.dumps(data, ensure_ascii=False)
+    # 2026-05-07 P0-4 (Plan v5 真因 #2):
+    #   旧: 全 path 失敗時も debug log のみ → 5/6 20:30 silent stuck (12h+) の原因
+    #   新: local write 失敗を critical 扱い + 両方失敗時は RuntimeError raise
+    write_results: dict = {}
     for p in [HEARTBEAT_PATH_LOCAL, HEARTBEAT_PATH_SHARE]:
         try:
             tmp = p.with_suffix(".tmp")
             tmp.write_text(content, encoding="utf-8")
             tmp.replace(p)
+            write_results[str(p)] = "ok"
         except Exception as e:
-            # share 書込失敗は debug only（patrol が age で検知）
-            logger.debug(f"[heartbeat] {p} write failed: {e}")
+            write_results[str(p)] = f"fail:{e}"
+            # share 失敗は patrol が age で検知できるので debug のみ
+            # local 失敗は致命的 (process が死んでいるサイン)
+            if p == HEARTBEAT_PATH_LOCAL:
+                logger.error(f"[heartbeat] LOCAL write failed: {e}")
+            else:
+                logger.debug(f"[heartbeat] {p} write failed: {e}")
+    # 両方失敗 = process が完全に書き込めない状態 → 即 raise して launcher に異常を伝播
+    if all(v != "ok" for v in write_results.values()):
+        logger.critical(
+            f"[heartbeat] CRITICAL: local + share 両方 write 失敗 → silent stuck 防止 raise / "
+            f"results={write_results}"
+        )
+        raise RuntimeError(f"heartbeat write failed on all paths: {write_results}")
 
 
 def preflight_check(expected_url_fragment=None):
