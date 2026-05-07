@@ -137,11 +137,28 @@ def main():
     log("[B] VM 内 cmd window 起動")
     open_cmd_window()
 
-    # Step C: setup_vm_v6.bat を VM 内に copy → 実行
+    # Step C: setup_vm_v6.bat を VM 内 cmd で実行 (直接 vm_v6 share から起動)
     # bat 内で全 step (mkdir / copy / pip / playwright / profile copy / startup register / server起動) を逐次実行
-    log("[C] setup_vm_v6.bat を VM 内 cmd で copy & 実行 (合計 15-30分)")
-    send_cmd('copy /Y "\\\\vboxsvr\\share\\..\\..\\..\\ops\\vm_v6\\setup_vm_v6.bat" "%USERPROFILE%\\Desktop\\setup_vm_v6.bat"', 1.5)
-    send_cmd('"%USERPROFILE%\\Desktop\\setup_vm_v6.bat"', 1.0)
+    # 旧版は \\vboxsvr\share\..\..\..\ops\vm_v6\ という ../ traversal で失敗していた
+    # 2026-05-07 修正: 直接 \\vboxsvr\vm_v6\ パス + 先頭に IME 無効化シーケンス
+    log("[C] setup_vm_v6.bat を VM 内 cmd で実行 (合計 15-30分)")
+
+    # IME 無効化: 半角英数モードに強制 (cmd は ASCII しか受け付けない)
+    # 全角/半角 キー (scancode 0x29) を 1 回押す
+    scancode("29", "a9")
+    time.sleep(0.5)
+    # 念のため Esc x 2
+    scancode("01", "81")
+    time.sleep(0.2)
+    scancode("01", "81")
+    time.sleep(0.5)
+
+    # 動作確認: echo TEST → cmd が反応していることを確認
+    send_cmd('echo VM_SETUP_BEGIN', 1.0)
+
+    # 直接 vm_v6 share の bat を実行 (../ traversal 問題回避)
+    # cwd は default で C:\Users\cyber だが、bat 内部で cd しないので問題なし
+    send_cmd('"\\\\vboxsvr\\vm_v6\\setup_vm_v6.bat"', 1.0)
 
     # Step D: 完了 marker (HOST 上 .setup_done) を待つ (max 30min)
     log("[D] setup 完了 marker 待機 (最大 30分)")
