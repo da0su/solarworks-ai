@@ -91,6 +91,43 @@ def step5_profile_copy():
         log(f"    rc={rc} {'(OK)' if rc < 8 else '(ERROR)'}")
 
 
+def step5b_env_vm():
+    """.env_vm の存在確認 + template からコピー (CEO 編集用)."""
+    log("[STEP5b] credential file (.env_vm)")
+    env_vm = BASE / "data" / ".env_vm"
+    template = VM_DATA_SHARE / ".env_vm.template"
+    if env_vm.exists():
+        log(f"  OK: {env_vm} 既に存在")
+        # password 設定済みか軽く確認
+        try:
+            content = env_vm.read_text(encoding="utf-8")
+            has_pw = any(
+                line.strip().startswith("RAKUTEN_LOGIN_PASSWORD=") and len(line.split("=", 1)[1].strip()) > 0
+                for line in content.splitlines()
+            )
+            if has_pw:
+                log("  RAKUTEN_LOGIN_PASSWORD 設定済 (POST 自動通過 OK)")
+            else:
+                log("  WARN: RAKUTEN_LOGIN_PASSWORD が空 → POST batch は session/upgrade で停止します")
+        except Exception:
+            pass
+        return
+    # template が share にあれば copy
+    if template.exists():
+        import shutil
+        shutil.copy2(template, env_vm)
+        log(f"  template → {env_vm} にコピー")
+        log("  >>> CEO action: このファイルを編集して RAKUTEN_LOGIN_PASSWORD=... を設定してください")
+    else:
+        # 最低限の空ファイル作成
+        env_vm.write_text(
+            "# VM v6 credential file (Plan v6)\n"
+            "RAKUTEN_LOGIN_PASSWORD=\n",
+            encoding="utf-8",
+        )
+        log(f"  empty {env_vm} 作成")
+
+
 def step6_register_startup():
     log("[STEP6] register startup")
     startup_dir = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
@@ -134,6 +171,7 @@ def main():
             log("[ABORT] playwright install failed")
             return 4
         step5_profile_copy()
+        step5b_env_vm()
         step6_register_startup()
         step7_start_server()
 

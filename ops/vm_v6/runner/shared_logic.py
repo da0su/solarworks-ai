@@ -38,6 +38,57 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
+# Credential loader (Plan v6 Phase A-3)
+# ============================================================
+
+# .env_vm の場所:
+#   VM 内: C:\Users\cyber\Desktop\rakuten_room_bot\data\.env_vm
+#   HOST: rakuten-room/bot/data/.env_vm  (VBox shared folder vm_data 経由 VM が読む)
+ENV_VM_PATH = DATA_DIR / ".env_vm"
+
+_env_vm_cache: dict[str, str] | None = None
+
+
+def _load_env_vm() -> dict[str, str]:
+    """data/.env_vm を読んで dict で返す (簡易 dotenv)。
+
+    Format:
+        # comment
+        KEY=value
+        KEY2="value with spaces"
+    """
+    global _env_vm_cache
+    if _env_vm_cache is not None:
+        return _env_vm_cache
+    out: dict[str, str] = {}
+    if ENV_VM_PATH.exists():
+        try:
+            for line in ENV_VM_PATH.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                out[k] = v
+        except Exception:
+            pass
+    _env_vm_cache = out
+    return out
+
+
+def get_credential(key: str, default: str = "") -> str:
+    """credential 取得: 環境変数 > .env_vm の順.
+
+    例: get_credential('RAKUTEN_LOGIN_PASSWORD')
+    """
+    val = os.environ.get(key)
+    if val:
+        return val
+    return _load_env_vm().get(key, default)
+
+
+# ============================================================
 # HeartbeatPusher
 # ============================================================
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -44,18 +45,33 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             from planner.queue_executor import QueueExecutor
             log.log("queue_executor imported")
 
-            # QueueExecutor は BrowserManager (旧) を期待。bm._ctx, bm._page を再利用
+            # QueueExecutor は BrowserManager (旧) を期待。BrowserManagerV6 を wrap してメソッド forward する。
+            # 2026-05-07 Plan v6 Phase A-2: handle_session_upgrade を bm に forward することで
+            # HOST post_executor.py の session/upgrade 検知 → 自動通過 が VM 側でも動作する。
             class CompatBM:
-                def __init__(self, ctx, page):
-                    self._context = ctx
-                    self._page = page
+                def __init__(self, v6_bm: BrowserManagerV6):
+                    self._v6 = v6_bm
+                    self._context = v6_bm.context
+                    self._page = v6_bm.page
                 @property
                 def page(self): return self._page
-                def take_screenshot(self, label): return None
+                def take_screenshot(self, label):
+                    try:
+                        screenshot_dir = BASE_DIR / "screenshots" / datetime.now().strftime("%Y-%m-%d")
+                        screenshot_dir.mkdir(parents=True, exist_ok=True)
+                        ts = datetime.now().strftime("%H%M%S")
+                        path = screenshot_dir / f"{ts}_{label}.png"
+                        self._page.screenshot(path=str(path), full_page=False)
+                        return path
+                    except Exception:
+                        return None
                 def save_session(self): pass
                 def stop(self): pass
+                # Plan v6 Phase A-2: HOST post_executor.py が呼ぶ handle_session_upgrade を v6 に forward
+                def handle_session_upgrade(self, max_wait_sec: int = 15) -> dict:
+                    return self._v6.handle_session_upgrade(max_wait_sec=max_wait_sec)
 
-            compat = CompatBM(bm.context, bm.page)
+            compat = CompatBM(bm)
             qe = QueueExecutor(compat, target_count=limit)
             summary = qe.execute()
 
