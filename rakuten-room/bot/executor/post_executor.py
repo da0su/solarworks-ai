@@ -125,6 +125,23 @@ class PostExecutor:
             current_url = self.page.url
             logger.info(f"mix ページ遷移完了: {current_url}")
 
+            # 2026-05-07 P0-1.5 (Plan v5 補強):
+            # 楽天は POST 等で login.account.rakuten.com/session/upgrade に強制 redirect し
+            # password 再入力 (= session 昇格) を要求する。
+            # bot 自律運用には .env の RAKUTEN_LOGIN_PASSWORD で自動通過する。
+            if "login.account.rakuten.com/session/upgrade" in current_url:
+                logger.info("session/upgrade ページ検知 → 自動 password 入力試行")
+                up = self.bm.handle_session_upgrade()
+                if up.get("handled"):
+                    current_url = self.page.url
+                    logger.info(f"session/upgrade 通過後: {current_url}")
+                    # 通過後は元の mix ページに戻る必要があるかも (楽天が自動で戻す想定)
+                    self._human_delay(1.0, 2.0)
+                else:
+                    result["error"] = f"session/upgrade 通過失敗: {up.get('reason')}"
+                    result["error_type"] = "session_upgrade_failed"
+                    return result
+
             # mix ページのエラーチェック
             if "/common/error" in current_url or "404" in (self.page.title() or ""):
                 result["error"] = "mix ページがエラー"

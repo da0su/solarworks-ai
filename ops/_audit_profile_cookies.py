@@ -7,7 +7,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
-SESSION = ("Rses", "Raut", "rr_session", "Rat")
+# 2026-05-07: 楽天は OAuth/SSO に移行 (OSSO/ODID/Im/Re) — Rses/Raut は廃止
+# OSSO @ login.account.rakuten.com = 主 SSO session
+# Im @ .id.rakuten.co.jp = id auth token
+# Re/Rg/Rz @ .rakuten.co.jp = Rakuten session
+# s_user @ room.rakuten.co.jp = ROOM session marker
+SESSION = ("OSSO", "ODID", "Im", "Re", "Rg", "Rz", "s_user", "Rses", "Raut", "rr_session", "Rat")
 DATA = Path(__file__).resolve().parents[1] / "rakuten-room" / "bot" / "data"
 
 profiles = [
@@ -27,7 +32,7 @@ for prof in profiles:
     try:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=2)
         rows = con.execute(
-            "SELECT name FROM cookies WHERE host_key LIKE '%rakuten.co.jp%'"
+            "SELECT name FROM cookies WHERE host_key LIKE '%rakuten%'"
         ).fetchall()
         con.close()
         names = [r[0] for r in rows]
