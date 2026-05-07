@@ -113,6 +113,8 @@ def main():
     log("=" * 60)
 
     triggered = False
+    triggered_at = 0.0  # 最後に発火した時刻 (epoch)
+    SETUP_TIMEOUT = 30 * 60  # 30 分で marker 出なければ再 trigger 可能とする
     while True:
         # 既に setup 完了している (marker 存在) なら exit
         if MARKER_PATH.exists():
@@ -125,15 +127,18 @@ def main():
         usage = get_user_usage_state()
         # 2 軸判定: PNG サイズ (lock=単色多=小) + GuestProperty UsageState (cyber=InUse なら active)
         is_locked = size_lock and usage != "InUse"
-        log(f"  png_size={size}b size_lock={size_lock} usage={usage!r} → locked={is_locked}")
+        log(f"  png_size={size}b size_lock={size_lock} usage={usage!r} → locked={is_locked} triggered={triggered}")
+
+        # triggered 状態でも SETUP_TIMEOUT 経過 + 依然 marker 不在 → 再 trigger 可能に reset
+        if triggered and (time.time() - triggered_at) > SETUP_TIMEOUT:
+            log(f"setup timeout {SETUP_TIMEOUT}s 経過 + marker 出ず → triggered reset (再発火可能)")
+            triggered = False
 
         if not is_locked and not triggered:
             log("UNLOCK detected → setup 発火")
             trigger_setup()
             triggered = True
-        elif triggered:
-            # setup spawn 後は marker 出現を待つだけ
-            pass
+            triggered_at = time.time()
         time.sleep(CHECK_INTERVAL)
 
 
