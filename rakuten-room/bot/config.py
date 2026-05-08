@@ -232,8 +232,8 @@ FOLLOW_SESSION_MAX = 50              # 1セッション = 最大50件
 FOLLOW_SESSIONS_PER_DAY = 4          # 1日4セッション
 
 # フォロー間隔（ランダム化。固定間隔にしない）
-FOLLOW_INTERVAL_MIN = 1.0            # 最小間隔（秒）
-FOLLOW_INTERVAL_MAX = 3.0            # 最大間隔（秒）
+FOLLOW_INTERVAL_MIN = 0.3            # 最小間隔（秒・1分1秒逃さず原則・5/8 短縮）
+FOLLOW_INTERVAL_MAX = 0.8            # 最大間隔（秒・5/8 短縮）
 
 # セッション内休憩（一定件数ごとにランダム休憩を入れる）
 FOLLOW_REST_EVERY_MIN = 10           # 休憩を入れる間隔の最小値（件）

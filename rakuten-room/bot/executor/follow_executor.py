@@ -351,8 +351,24 @@ class FollowExecutor:
                     profile_url = profile_url.rstrip("/") + "/items"
 
                 try:
-                    page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
-                    self._human_delay(2.0, 4.0)
+                    # 2026-05-08: Page.goto Page crashed → fresh page で 1 回 retry
+                    try:
+                        page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+                    except Exception as goto_err:
+                        if "Page crashed" in str(goto_err) or "Target crashed" in str(goto_err):
+                            logger.warning(f"Page crashed → page 再生成 retry: {user_name}")
+                            try:
+                                page.close()
+                            except Exception:
+                                pass
+                            page = bm._context.new_page()
+                            bm._page = page
+                            page.set_default_timeout(config.ELEMENT_TIMEOUT)
+                            page.set_default_navigation_timeout(config.PAGE_LOAD_TIMEOUT)
+                            page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+                        else:
+                            raise
+                    self._human_delay(1.0, 2.0)
 
                     # 404 / リダイレクトチェック
                     if "grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url:
@@ -371,7 +387,7 @@ class FollowExecutor:
                         continue
 
                     # フォローボタンを探す（React実装: aria-label="フォロー"）
-                    follow_btn = page.locator('button[aria-label="フォロー"]').first
+                    follow_btn = page.locator('button[aria-label="フォローする"], button[aria-label="フォロー"]').first
 
                     if follow_btn.count() == 0 or not follow_btn.is_visible(timeout=2000):
                         # フォロー済み or ボタンなし
@@ -384,7 +400,7 @@ class FollowExecutor:
                         continue
 
                     follow_btn.click(timeout=3000)
-                    self._human_delay(0.5, 1.5)
+                    self._human_delay(0.3, 0.6)
 
                     # 2026-05-08: 楽天 follow click も session/upgrade trigger される
                     # rollout (5/7 18:00 頃〜)。auto-handler で自動通過 → 元 profile に戻り再 click。
@@ -394,12 +410,12 @@ class FollowExecutor:
                         if up.get("handled"):
                             logger.info("session/upgrade 通過成功 → profile 再取得")
                             page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
-                            self._human_delay(1.5, 2.5)
+                            self._human_delay(0.5, 1.0)
                             # 再度 follow ボタン探索 + click
-                            follow_btn = page.locator('button[aria-label="フォロー"]').first
+                            follow_btn = page.locator('button[aria-label="フォローする"], button[aria-label="フォロー"]').first
                             if follow_btn.count() > 0 and follow_btn.is_visible(timeout=2000):
                                 follow_btn.click(timeout=3000)
-                                self._human_delay(0.5, 1.5)
+                                self._human_delay(0.3, 0.6)
                             else:
                                 logger.warning(f"再探索: フォローボタン不在 {user_name}")
                                 continue
@@ -537,12 +553,28 @@ class FollowExecutor:
 
             profile_url = f"https://room.rakuten.co.jp/{nickname}/items"
             try:
-                page.goto(profile_url, wait_until="domcontentloaded")
-                self._human_delay(2.0, 4.0)
+                # Page crashed retry
+                try:
+                    page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+                except Exception as goto_err:
+                    if "Page crashed" in str(goto_err) or "Target crashed" in str(goto_err):
+                        logger.warning(f"Page crashed → page 再生成 retry: {nickname}")
+                        try:
+                            page.close()
+                        except Exception:
+                            pass
+                        page = bm._context.new_page()
+                        bm._page = page
+                        page.set_default_timeout(config.ELEMENT_TIMEOUT)
+                        page.set_default_navigation_timeout(config.PAGE_LOAD_TIMEOUT)
+                        page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+                    else:
+                        raise
+                self._human_delay(1.0, 2.0)
 
-                # フォローボタンを探す（React実装: aria-label="フォロー"）
+                # フォローボタンを探す（React実装: aria-label="フォローする"）
                 follow_btn = page.locator(
-                    'button[aria-label="フォロー"]'
+                    'button[aria-label="フォローする"], button[aria-label="フォロー"]'
                 ).first
 
                 if follow_btn.count() == 0:
@@ -563,7 +595,7 @@ class FollowExecutor:
                     if up.get("handled"):
                         page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
                         self._human_delay(1.5, 2.5)
-                        follow_btn = page.locator('button[aria-label="フォロー"]').first
+                        follow_btn = page.locator('button[aria-label="フォローする"], button[aria-label="フォロー"]').first
                         if follow_btn.count() > 0 and follow_btn.is_visible(timeout=2000):
                             follow_btn.click(timeout=3000)
                             self._human_delay(0.5, 1.5)
