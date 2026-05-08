@@ -54,13 +54,23 @@ def get_actuals() -> dict:
     except Exception:
         pass
 
-    # FOLLOW: follow_rpa_log.json (今日の合計)
+    # FOLLOW: VM (follow_rpa_log) + HOST (follow_history) 合算
+    # 2026-05-08: HOST follow_via_seeds.py の実績を加算 (VM のみだと 0 表示誤検知)
+    vm_follow = 0
+    host_follow = 0
     try:
         h = json.loads((REPO_ROOT / "rakuten-room" / "bot" / "executor" / "follow_rpa_log.json").read_text(encoding="utf-8"))
-        actuals["follow"] = sum(int(e.get("success", 0)) for e in h
-                                if str(e.get("timestamp", "")).startswith(today))
+        vm_follow = sum(int(e.get("success", 0)) for e in h
+                        if str(e.get("timestamp", "")).startswith(today))
     except Exception:
         pass
+    try:
+        h = json.loads((REPO_ROOT / "rakuten-room" / "bot" / "data" / "follow_history.json").read_text(encoding="utf-8"))
+        host_follow = sum(1 for x in h if isinstance(x, dict)
+                          and str(x.get("followed_at", "")).startswith(today))
+    except Exception:
+        pass
+    actuals["follow"] = vm_follow + host_follow
 
     # FB: room_bot_v5.db
     try:

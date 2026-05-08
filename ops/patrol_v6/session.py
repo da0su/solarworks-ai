@@ -63,8 +63,65 @@ def check_heartbeat(mode: str) -> List[dict]:
     return alerts
 
 
+def check_host_follow_freshness() -> List[dict]:
+    """HOST follow_history.json の最終 entry が新しいかチェック.
+
+    2026-05-08: HOST follow (follow_via_seeds.py / follow_executor.py) の
+    生存判定に、VM heartbeat の代わりに follow_history.json 最終 entry の age を使う。
+    時刻 hour が 9-23 (稼働時間帯) の時のみチェック。
+    最終 entry が 90 分以上前 = 何らかの問題で stop している。
+    """
+    alerts: List[dict] = []
+    now = datetime.now()
+    if not (9 <= now.hour <= 23):
+        return alerts  # 深夜 0-8時は trigger 少ないので skip
+
+    hist_path = REPO_ROOT / "rakuten-room" / "bot" / "data" / "follow_history.json"
+    if not hist_path.exists():
+        return alerts
+
+    try:
+        hist = json.loads(hist_path.read_text(encoding="utf-8"))
+        today_str = now.strftime("%Y-%m-%d")
+        today_entries = [h for h in hist if isinstance(h, dict)
+                         and str(h.get("followed_at", "")).startswith(today_str)]
+        if not today_entries:
+            # 朝 9 時以降で 1 件もない = 完全停止 = CRITICAL
+            if now.hour >= 11:
+                alerts.append({
+                    "level": "CRITICAL",
+                    "message": f"HOST follow today=0 at {now.hour}h (動いていない)",
+                    "auto_recover": "escalate_ceo",
+                    "context": {"summary": "HOST follow が完全停止"},
+                })
+            return alerts
+
+        last_at = today_entries[-1].get("followed_at", "")
+        last_dt = datetime.fromisoformat(str(last_at).replace("Z", ""))
+        age_min = (now - last_dt).total_seconds() / 60
+
+        if age_min >= 90:
+            alerts.append({
+                "level": "CRITICAL",
+                "message": f"HOST follow stale {age_min:.0f}min (last={last_at[:19]} count={len(today_entries)})",
+                "auto_recover": "escalate_ceo",
+                "context": {"summary": f"HOST follow が {age_min:.0f} 分間停止"},
+            })
+        elif age_min >= 45:
+            alerts.append({
+                "level": "WARN",
+                "message": f"HOST follow slow {age_min:.0f}min (last={last_at[:19]})",
+            })
+    except Exception:
+        pass
+
+    return alerts
+
+
 def check() -> dict:
     all_alerts: List[dict] = []
     for mode in ["post", "like", "follow", "followback"]:
         all_alerts.extend(check_heartbeat(mode))
+    # HOST follow 専用 freshness check (CEO 指示で意味のある patrol)
+    all_alerts.extend(check_host_follow_freshness())
     return {"layer": "L6_session", "status": "ok" if not all_alerts else "alert", "alerts": all_alerts}
