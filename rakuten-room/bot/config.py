@@ -481,7 +481,7 @@ def get_follow_rate_limits() -> dict:
     # default fallback (実観測 833 / 安全 708 / 1h 80)
     fallback = {
         "safe_hourly_max": 80,    # 1h 上限 (仮説値・実観測 ?)
-        "safe_24h_max":    833,   # 24h 上限 (実観測 max。CEO 指示で 708→833 に引き上げ Plan v4 P3)
+        "safe_24h_max":    99999, # 2026-05-08 CEO 指示「FOLLOW_SAFE_24H_MAX=833 ルール削除」 → 実質撤廃
         "rl_cooldown_min": 69,    # 確定値
     }
     cache = DATA_DIR / "state" / "rate_limits_ssot.json"
@@ -515,6 +515,6 @@ def get_follow_rate_limits() -> dict:
 # 旧運用との互換のため module 変数も残すが、実装側は get_follow_rate_limits() を使うこと
 _rl = get_follow_rate_limits()
 FOLLOW_SAFE_HOURLY_MAX = _rl["safe_hourly_max"]
-FOLLOW_SAFE_24H_MAX    = _rl["safe_24h_max"]   # 833 (CEO 指示・Plan v4 P3 で 708→833 引き上げ)
+FOLLOW_SAFE_24H_MAX    = _rl["safe_24h_max"]   # 2026-05-08 CEO 指示で 833 ルール削除 → 99999 (実質撤廃・rate_limit 自動 cooldown のみ残す)
 # 日次ハードキャップ: 実観測 max=833 を採用
 # (根拠: VM実データ分析: 回復中央値=60分, 24h最大観測=833件)
