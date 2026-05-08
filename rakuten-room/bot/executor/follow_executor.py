@@ -250,7 +250,7 @@ class FollowExecutor:
                 return f"{MAX_CONSECUTIVE_FAILURES}件連続失敗で自動停止"
 
             # フォローボタンを探してクリック
-            result = self._find_and_click_follow(page)
+            result = self._find_and_click_follow(page, bm)
 
             if result == "no_buttons":
                 # スクロールして新しいユーザーを読み込む
@@ -385,6 +385,29 @@ class FollowExecutor:
 
                     follow_btn.click(timeout=3000)
                     self._human_delay(0.5, 1.5)
+
+                    # 2026-05-08: 楽天 follow click も session/upgrade trigger される
+                    # rollout (5/7 18:00 頃〜)。auto-handler で自動通過 → 元 profile に戻り再 click。
+                    if "login.account.rakuten.com/session/upgrade" in page.url:
+                        logger.info(f"session/upgrade 検知 → auto-handler 起動: {user_name}")
+                        up = bm.handle_session_upgrade()
+                        if up.get("handled"):
+                            logger.info("session/upgrade 通過成功 → profile 再取得")
+                            page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
+                            self._human_delay(1.5, 2.5)
+                            # 再度 follow ボタン探索 + click
+                            follow_btn = page.locator('button[aria-label="フォロー"]').first
+                            if follow_btn.count() > 0 and follow_btn.is_visible(timeout=2000):
+                                follow_btn.click(timeout=3000)
+                                self._human_delay(0.5, 1.5)
+                            else:
+                                logger.warning(f"再探索: フォローボタン不在 {user_name}")
+                                continue
+                        else:
+                            logger.error(f"session/upgrade 通過失敗: {up.get('reason')}")
+                            self.failed_count += 1
+                            self.consecutive_failures += 1
+                            continue
 
                     # 成功判定: aria-label が "フォロー中" に変化
                     try:
@@ -533,6 +556,25 @@ class FollowExecutor:
                 follow_btn.click(timeout=3000)
                 self._human_delay(0.5, 1.5)
 
+                # 2026-05-08: session/upgrade auto-handler 連携
+                if "login.account.rakuten.com/session/upgrade" in page.url:
+                    logger.info(f"session/upgrade 検知 → auto-handler 起動: {nickname}")
+                    up = bm.handle_session_upgrade()
+                    if up.get("handled"):
+                        page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
+                        self._human_delay(1.5, 2.5)
+                        follow_btn = page.locator('button[aria-label="フォロー"]').first
+                        if follow_btn.count() > 0 and follow_btn.is_visible(timeout=2000):
+                            follow_btn.click(timeout=3000)
+                            self._human_delay(0.5, 1.5)
+                        else:
+                            continue
+                    else:
+                        logger.error(f"session/upgrade 通過失敗: {up.get('reason')}")
+                        self.failed_count += 1
+                        self.consecutive_failures += 1
+                        continue
+
                 # 成功判定: aria-label が "フォロー中" に変化
                 try:
                     page.wait_for_selector(
@@ -563,7 +605,7 @@ class FollowExecutor:
 
         return None
 
-    def _find_and_click_follow(self, page: Page) -> str:
+    def _find_and_click_follow(self, page: Page, bm: BrowserManager = None) -> str:
         """ページ上のフォローボタンを探してクリックする
 
         実DOM構造（2026-03-16 診断結果）:
@@ -622,6 +664,35 @@ class FollowExecutor:
                         # フォロークリック
                         btn.click(timeout=3000)
                         self._human_delay(0.5, 1.0)
+
+                        # 2026-05-08: discover/recommendUsers でも session/upgrade trigger 確認
+                        # POST/FB と同じ proven な bm.handle_session_upgrade() を使う
+                        if "login.account.rakuten.com/session/upgrade" in page.url:
+                            if bm is not None:
+                                logger.info("session/upgrade 検知 → bm.handle_session_upgrade()")
+                                up = bm.handle_session_upgrade()
+                                if up.get("handled"):
+                                    logger.info(f"session/upgrade 通過成功 → {url_before} に戻る")
+                                    page.goto(url_before, wait_until="domcontentloaded", timeout=20000)
+                                    self._human_delay(1.5, 2.5)
+                                    self._wait_for_angular(page)
+                                    # 通過後は次 loop で再 click 試行・連続失敗 reset
+                                    self.consecutive_failures = 0
+                                    continue
+                                else:
+                                    logger.error(f"session/upgrade 通過失敗: {up.get('reason')}")
+                            else:
+                                logger.error("bm 未取得 → session/upgrade 通過不能")
+                            # フェールスルー: 元ページに戻って次 loop へ
+                            try:
+                                page.goto(url_before, wait_until="domcontentloaded", timeout=20000)
+                            except Exception:
+                                pass
+                            self._human_delay(1.0, 2.0)
+                            self._wait_for_angular(page)
+                            self.failed_count += 1
+                            self.consecutive_failures += 1
+                            continue
 
                         # URL変化検出（ページ遷移してしまった場合）
                         if page.url != url_before:
