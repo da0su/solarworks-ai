@@ -299,6 +299,25 @@ class LikeExecutor:
                         self._human_delay(0.5, 1.0)
                         url_after = page.url
 
+                        # 2026-05-08: 楽天 LIKE click も session/upgrade trigger するように
+                        # rollout された (5/7 18時頃〜)。auto-handler で password 自動入力で通過。
+                        if "login.account.rakuten.com/session/upgrade" in url_after:
+                            logger.info(f"session/upgrade 検知 → auto-handler 起動")
+                            up = self.bm.handle_session_upgrade()
+                            if up.get("handled"):
+                                logger.info("session/upgrade 通過成功 → 元URLに戻る")
+                                page.go_back()
+                                self._human_delay(1.5, 2.5)
+                                # 通過後は LIKE 成功カウントせず次の loop で再 click 試行
+                                continue
+                            else:
+                                logger.error(f"session/upgrade 通過失敗: {up.get('reason')}")
+                                page.go_back()
+                                self._human_delay(1.0, 2.0)
+                                self.failed_count += 1
+                                self.consecutive_failures += 1
+                                continue
+
                         # 404 / 予期しない遷移検出
                         if url_after != url_before and "room.rakuten.co.jp" not in url_after:
                             logger.warning(f"クリック後に予期しない遷移: {url_before} → {url_after}")
