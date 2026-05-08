@@ -174,12 +174,17 @@ def _today_follow() -> dict:
             info["heartbeat_age_sec"] = f.get("heartbeat_age_sec")
         except Exception:
             pass
+
+    vm_followed = 0
+    host_followed = 0
+
+    # VM 側: follow_rpa_log.json (pyautogui)
     if FOLLOW_RPA_LOG.exists():
         try:
             data = json.loads(FOLLOW_RPA_LOG.read_text(encoding="utf-8"))
             today_str = datetime.now().strftime("%Y-%m-%d")
             today_sessions = [x for x in data if str(x.get("timestamp", "")).startswith(today_str)]
-            info["followed"] = sum(int(x.get("success", 0)) for x in today_sessions)
+            vm_followed = sum(int(x.get("success", 0)) for x in today_sessions)
             info["sessions_today"] = len(today_sessions)
             if today_sessions:
                 last = today_sessions[-1].get("timestamp")
@@ -191,6 +196,32 @@ def _today_follow() -> dict:
                     pass
         except Exception:
             pass
+
+    # 2026-05-08: HOST 側 follow_history.json も集計 (follow_via_seeds.py / follow_executor.py)
+    HOST_FOLLOW_HISTORY = REPO_ROOT / "rakuten-room" / "bot" / "data" / "follow_history.json"
+    if HOST_FOLLOW_HISTORY.exists():
+        try:
+            hist = json.loads(HOST_FOLLOW_HISTORY.read_text(encoding="utf-8"))
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            today_host = [h for h in hist if isinstance(h, dict) and str(h.get("followed_at", "")).startswith(today_str)]
+            host_followed = len(today_host)
+            if today_host:
+                last_at = today_host[-1].get("followed_at")
+                # HOST 系の方が新しければそちらを表示
+                try:
+                    dt_host = datetime.fromisoformat(str(last_at).replace("Z", ""))
+                    age_min = round((datetime.now() - dt_host).total_seconds() / 60, 1)
+                    if info["last_age_min"] is None or age_min < info["last_age_min"]:
+                        info["last_session"] = last_at
+                        info["last_age_min"] = age_min
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    info["followed"] = vm_followed + host_followed
+    info["vm_followed"] = vm_followed
+    info["host_followed"] = host_followed
     return info
 
 
