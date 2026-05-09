@@ -112,8 +112,12 @@ def extract_follower_usernames_from_modal(page) -> list[str]:
     }''')
 
 
-def harvest_seed_followers(bm, seed: str, max_per_seed: int = 100) -> list[str]:
-    """seed の /items 開いて フォロワーボタン click → modal の username 抽出."""
+def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
+    """seed の /items 開いて フォロワーボタン click → modal の username 抽出.
+
+    2026-05-09: scroll 5→20回 + 各回 1.5s 待機で lazy load を確実に取得.
+    seed の follower 上位 200 まで取れるように拡張 (旧: ~30-50 件のみ).
+    """
     page = bm.page
     try:
         page.goto(f"https://room.rakuten.co.jp/{seed}/items",
@@ -123,15 +127,35 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 100) -> list[str]:
         if fb.count() == 0:
             return []
         fb.click(timeout=3000)
-        page.wait_for_timeout(2500)
-        # Scroll modal to load more
-        for _ in range(5):
+        page.wait_for_timeout(3000)
+
+        # Aggressive scroll: 20 iter × 1.5s = 30s で modal の lazy load を最大限引き出す
+        prev_count = 0
+        stable_iters = 0
+        for i in range(20):
             page.evaluate('''() => {
-                const list = document.querySelector('[class*="popup-container"] [class*="scroll"], [class*="popup-container"] ul, [data-testid="modal-overlay"] + div');
-                if (list) list.scrollTop = list.scrollHeight;
-                window.scrollBy(0, 500);
+                const containers = [
+                    ...document.querySelectorAll('[class*="popup-container"] [class*="scroll"]'),
+                    ...document.querySelectorAll('[class*="popup-container"] ul'),
+                    ...document.querySelectorAll('[data-testid="modal-overlay"] + div'),
+                    ...document.querySelectorAll('[class*="modal"] [class*="list"]'),
+                ];
+                containers.forEach(c => { c.scrollTop = c.scrollHeight; });
+                window.scrollBy(0, 1000);
             }''')
-            page.wait_for_timeout(800)
+            page.wait_for_timeout(1500)
+            # 早期終了: 連続 3 回 同件数で打ち切り (それ以上は取れない)
+            try:
+                cur = page.evaluate('() => document.querySelectorAll(\'a[href^="/room_"], a[href^="/salt_"]\').length')
+                if cur == prev_count:
+                    stable_iters += 1
+                    if stable_iters >= 3:
+                        break
+                else:
+                    stable_iters = 0
+                    prev_count = cur
+            except Exception:
+                pass
         names = extract_follower_usernames_from_modal(page)
         return [n for n in names if n != seed][:max_per_seed]
     except Exception as e:
