@@ -305,7 +305,9 @@ def main():
         if time.time() - harvest_start > harvest_time_cap:
             logger.info(f"[harvest] 10分 cap で打ち切り (pool={len(candidate_pool)})")
             break
-        if seed in already: continue
+        # 2026-05-09 18:55: 2nd hop seeds を skip しないよう修正.
+        # seed 自体が already_followed でも, その followers は新鮮な可能性が高い (相互重複少).
+        # 旧 `if seed in already: continue` を削除.
         names = harvest_seed_followers(bm, seed, max_per_seed=120)
         visited_seeds.add(seed)
         fresh = [n for n in names if n not in already and n not in candidate_pool]
