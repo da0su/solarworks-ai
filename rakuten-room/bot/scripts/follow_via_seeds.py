@@ -227,6 +227,10 @@ def follow_one(bm, username: str) -> tuple[str, str]:
 
 
 def main():
+    # 2026-05-09 18:15 silent fail 対策: logger 前に startup marker 出力
+    # → windows_task_follow_host.log に痕跡を残し起動失敗を可視化
+    print(f"[startup] follow_via_seeds.py @ {datetime.now().isoformat()}", flush=True)
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=int, default=100)
     ap.add_argument("--duration-min", type=int, default=15)
@@ -234,6 +238,8 @@ def main():
 
     deadline = time.time() + args.duration_min * 60
     target = args.target
+
+    print(f"[startup] argparse OK target={target} duration={args.duration_min}min", flush=True)
 
     seeds = load_seeds()
     already = load_followed_history()
