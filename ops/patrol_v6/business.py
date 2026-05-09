@@ -75,7 +75,7 @@ def get_actuals() -> dict:
     # FB: room_bot_v5.db
     try:
         c = sqlite3.connect(f"file:{REPO_ROOT / 'rakuten-room' / 'bot' / 'data' / 'room_bot_v5.db'}?mode=ro", uri=True, timeout=2)
-        r = c.execute("SELECT COUNT(*) FROM follow_log WHERE action='followback' AND DATE(followed_at,'localtime')=DATE('now','localtime')").fetchone()
+        r = c.execute("SELECT COUNT(*) FROM follow_log WHERE action='followback' AND DATE(followed_at)=DATE('now','localtime')").fetchone()
         actuals["followback"] = int(r[0]) if r else 0
         c.close()
     except Exception:

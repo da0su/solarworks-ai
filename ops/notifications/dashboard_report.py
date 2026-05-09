@@ -232,7 +232,7 @@ def _today_followback() -> dict:
         try:
             r = c.execute(
                 "SELECT COUNT(*) FROM follow_log "
-                "WHERE action='followback' AND DATE(followed_at,'localtime')=DATE('now','localtime')"
+                "WHERE action='followback' AND DATE(followed_at)=DATE('now','localtime')"
             ).fetchone()
             info["followback"] = int(r[0]) if r else 0
         except Exception:
