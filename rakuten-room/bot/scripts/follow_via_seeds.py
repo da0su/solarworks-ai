@@ -44,27 +44,56 @@ INVESTIGATION_FILE = config.DATA_DIR / "seed_investigation.json"
 def load_seeds() -> list[str]:
     """seed_investigation.json があれば follower_count 降順で計画消費.
     無ければ seed_users.json fallback.
+
+    2026-05-09 18:39: pool 枯渇対策で 2nd hop seeds を末尾に追加.
+    今日 follow したユーザーの followers は already_followed と重複が少ない.
     """
+    out: list[str] = []
+    seen: set[str] = set()
+
     if INVESTIGATION_FILE.exists():
         try:
             data = json.loads(INVESTIGATION_FILE.read_text(encoding="utf-8"))
             # Sort by follower_count desc (richer pools first)
             sorted_data = sorted(data, key=lambda r: r.get("follower_count", 0), reverse=True)
-            seeds = [r["seed_user"] for r in sorted_data if r.get("seed_user")]
-            logger.info(f"using investigation data: {len(seeds)} seeds, top follower_count={sorted_data[0]['follower_count'] if sorted_data else 0}")
-            return seeds
-        except Exception as e:
-            logger.warning(f"investigation data load failed: {e}")
-    # Fallback
-    seeds = json.loads(SEED_FILE.read_text(encoding="utf-8"))
-    out: list[str] = []
-    seen: set[str] = set()
-    for k in ["ladies_fashion", "interior", "kitchen", "bags", "all"]:
-        if k in seeds:
-            for s in seeds[k]:
-                if s not in seen:
+            for r in sorted_data:
+                s = r.get("seed_user")
+                if s and s not in seen:
                     seen.add(s)
                     out.append(s)
+            logger.info(f"using investigation data: {len(out)} seeds, top follower_count={sorted_data[0]['follower_count'] if sorted_data else 0}")
+        except Exception as e:
+            logger.warning(f"investigation data load failed: {e}")
+
+    if not out:
+        # Fallback: seed_users.json
+        seeds_data = json.loads(SEED_FILE.read_text(encoding="utf-8"))
+        for k in ["ladies_fashion", "interior", "kitchen", "bags", "all"]:
+            if k in seeds_data:
+                for s in seeds_data[k]:
+                    if s not in seen:
+                        seen.add(s)
+                        out.append(s)
+
+    # 2nd hop: 直近 follow したユーザーの followers は新鮮 (相互重複少)
+    try:
+        if HISTORY_PATH.exists():
+            history = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+            second_hop_count = 0
+            # 新しい順に最大 200 件混ぜる
+            for h in reversed(history[-500:]):
+                if not isinstance(h, dict): continue
+                uname = h.get("user_name") or h.get("user_id")
+                if uname and uname not in seen:
+                    seen.add(uname)
+                    out.append(uname)
+                    second_hop_count += 1
+                    if second_hop_count >= 200: break
+            if second_hop_count:
+                logger.info(f"+ 2nd hop seeds: {second_hop_count} (recent follows)")
+    except Exception as e:
+        logger.warning(f"2nd hop seed load failed: {e}")
+
     return out
 
 
