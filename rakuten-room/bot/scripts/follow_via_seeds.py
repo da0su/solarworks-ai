@@ -312,7 +312,9 @@ def main():
         visited_seeds.add(seed)
         fresh = [n for n in names if n not in already and n not in candidate_pool]
         candidate_pool.extend(fresh)
-        logger.info(f"[seed:{seed}] +{len(fresh)} fresh (pool={len(candidate_pool)})")
+        # 2026-05-09 19:33: debug 追加 - harvest 真因切り分け (modal opened? names returned? all dup?)
+        sample = names[:3] if names else []
+        logger.info(f"[seed:{seed}] harvested={len(names)} fresh={len(fresh)} sample={sample} (pool={len(candidate_pool)})")
         if len(candidate_pool) >= pool_target:
             break
 
