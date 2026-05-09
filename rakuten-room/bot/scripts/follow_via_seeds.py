@@ -38,9 +38,25 @@ SEED_FILE = BOT_DIR / "executor" / "seed_users.json"
 HISTORY_PATH = config.DATA_DIR / "follow_history.json"
 
 
+INVESTIGATION_FILE = config.DATA_DIR / "seed_investigation.json"
+
+
 def load_seeds() -> list[str]:
+    """seed_investigation.json があれば follower_count 降順で計画消費.
+    無ければ seed_users.json fallback.
+    """
+    if INVESTIGATION_FILE.exists():
+        try:
+            data = json.loads(INVESTIGATION_FILE.read_text(encoding="utf-8"))
+            # Sort by follower_count desc (richer pools first)
+            sorted_data = sorted(data, key=lambda r: r.get("follower_count", 0), reverse=True)
+            seeds = [r["seed_user"] for r in sorted_data if r.get("seed_user")]
+            logger.info(f"using investigation data: {len(seeds)} seeds, top follower_count={sorted_data[0]['follower_count'] if sorted_data else 0}")
+            return seeds
+        except Exception as e:
+            logger.warning(f"investigation data load failed: {e}")
+    # Fallback
     seeds = json.loads(SEED_FILE.read_text(encoding="utf-8"))
-    # Flatten all categories into one list, preserving order
     out: list[str] = []
     seen: set[str] = set()
     for k in ["ladies_fashion", "interior", "kitchen", "bags", "all"]:
@@ -198,7 +214,15 @@ def main():
     already = load_followed_history()
     logger.info(f"seeds={len(seeds)} already_followed={len(already)} target={target} duration_min={args.duration_min}")
 
+    # 2026-05-09 CEO 観察: bot Chrome が前面化で HOST 入力を奪う
+    # → Task Scheduler 経由なら BOT_HEADLESS=1 で headless 化
+    bot_headless = os.environ.get("BOT_HEADLESS", "0") == "1"
     bm = BrowserManager(action="follow")
+    if bot_headless:
+        # BrowserManager の start() は config.BROWSER_HEADLESS を見るので一時 patch
+        import config as _c
+        _c.BROWSER_HEADLESS = True
+        logger.info("BOT_HEADLESS=1 → headless=True で起動 (focus 奪取防止)")
     bm.start()
     if not bm.check_login_status().get("logged_in"):
         logger.error("not logged in")

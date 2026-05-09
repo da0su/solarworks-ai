@@ -200,19 +200,37 @@ class BrowserManager:
             except ImportError:
                 pass
         if not password:
-            logger.critical(
-                "[session_upgrade] RAKUTEN_LOGIN_PASSWORD が .env に未設定 → 自動通過不能。"
-                " rakuten-room/bot/.env に RAKUTEN_LOGIN_PASSWORD=<pw> を追記してください。"
+            # .env 無し → Chrome 内蔵 autofill を試行する fallback path に進む
+            logger.warning(
+                "[session_upgrade] RAKUTEN_LOGIN_PASSWORD 未設定 → Chrome autofill にフォールバック"
             )
-            return {"handled": False, "reason": "no_password_in_env"}
 
         # password 入力欄を探す
         try:
             # 楽天 SSO の現行 form: input[type="password"]
             pw_input = self._page.locator('input[type="password"]').first
             pw_input.wait_for(state="visible", timeout=5000)
-            pw_input.fill(password)
-            logger.info("[session_upgrade] password 入力完了")
+            if password:
+                pw_input.fill(password)
+                logger.info("[session_upgrade] password 入力完了 (.env)")
+            else:
+                # 2026-05-07: .env に password 無い場合、Chrome 内蔵の autofill を triggering する。
+                # Chrome は profile に password を保存していれば、focus + Down + Enter で suggestion を選択可能。
+                logger.info("[session_upgrade] .env 無し → Chrome autofill suggestion 試行")
+                pw_input.click()
+                self._page.wait_for_timeout(500)
+                # Down arrow で autofill dropdown 開く / suggestion 選択
+                pw_input.press("ArrowDown")
+                self._page.wait_for_timeout(300)
+                pw_input.press("Enter")
+                self._page.wait_for_timeout(800)
+                # 入力されたか確認
+                cur_val = pw_input.input_value()
+                if cur_val and len(cur_val) >= 4:
+                    logger.info(f"[session_upgrade] Chrome autofill 成功 (len={len(cur_val)})")
+                else:
+                    logger.error("[session_upgrade] Chrome autofill 失敗 → password 取得不能")
+                    return {"handled": False, "reason": "chrome_autofill_empty"}
             # 「次へ」button (label= 次へ / submit)
             for sel in [
                 'button:has-text("次へ")',
@@ -296,6 +314,13 @@ class BrowserManager:
         self._profile_dir.mkdir(parents=True, exist_ok=True)
         logger.info(f"Chrome プロファイル: {user_data_dir}")
 
+        # 2026-05-09 CEO 観察: bot Chrome が前面化で HOST 入力を奪う
+        # → 環境変数 BOT_HEADLESS=1 (Task Scheduler 経由) なら headless 強制
+        _bot_headless = os.environ.get("BOT_HEADLESS", "0") == "1"
+        _effective_headless = _bot_headless or config.BROWSER_HEADLESS
+        if _bot_headless:
+            logger.info(f"[focus_safe] BOT_HEADLESS=1 → headless 強制 (HOST 入力非干渉)")
+
         # 2026-05-07 P0-1 (Plan v5 真因 #1): launch 前に session cookie の存在を保証
         # follow は VM 側 login なので host 側 chrome_profile_follow には触らない
         if self._action != "follow":
@@ -310,7 +335,7 @@ class BrowserManager:
         launch_args = dict(
             user_data_dir=user_data_dir,
             executable_path=chrome_path,
-            headless=config.BROWSER_HEADLESS,
+            headless=_effective_headless,
             slow_mo=config.BROWSER_SLOW_MO,
             viewport={"width": 1280, "height": 800},
             locale="ja-JP",
