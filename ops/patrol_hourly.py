@@ -346,7 +346,7 @@ def check_like() -> dict:
         try:
             r = c.execute(
                 "SELECT COUNT(*) FROM like_log "
-                "WHERE DATE(liked_at,'localtime')=DATE('now','localtime')"
+                "WHERE DATE(liked_at)=DATE('now','localtime')"
             ).fetchone()
             today_liked = int(r[0]) if r else 0
         except Exception:
@@ -418,7 +418,7 @@ def check_followback() -> dict:
         try:
             r = c.execute(
                 "SELECT COUNT(*) FROM follow_log "
-                "WHERE action='followback' AND DATE(followed_at,'localtime')=DATE('now','localtime')"
+                "WHERE action='followback' AND DATE(followed_at)=DATE('now','localtime')"
             ).fetchone()
             today_fb = int(r[0]) if r else 0
         except Exception:
