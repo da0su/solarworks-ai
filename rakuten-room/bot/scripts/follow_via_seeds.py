@@ -129,10 +129,11 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
         fb.click(timeout=3000)
         page.wait_for_timeout(3000)
 
-        # Aggressive scroll: 20 iter × 1.5s = 30s で modal の lazy load を最大限引き出す
+        # 2026-05-09 v3: 30s/seed は遅すぎ → 8 iter × 0.7s = ~5s/seed に短縮
+        # follow phase に確実に時間を残す。stable 検知で更に早期終了。
         prev_count = 0
         stable_iters = 0
-        for i in range(20):
+        for i in range(8):
             page.evaluate('''() => {
                 const containers = [
                     ...document.querySelectorAll('[class*="popup-container"] [class*="scroll"]'),
@@ -143,7 +144,7 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
                 containers.forEach(c => { c.scrollTop = c.scrollHeight; });
                 window.scrollBy(0, 1000);
             }''')
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(700)
             # 早期終了: 連続 3 回 同件数で打ち切り (それ以上は取れない)
             try:
                 cur = page.evaluate('() => document.querySelectorAll(\'a[href^="/room_"], a[href^="/salt_"]\').length')
@@ -258,12 +259,17 @@ def main():
     failed = 0
     visited_seeds = set()
 
-    # Harvest a big candidate pool first
+    # 2026-05-09 v3: 短時間 harvest → 早く follow 開始
     candidate_pool: list[str] = []
     random.shuffle(seeds)
-    pool_target = target * 4  # 50% skip 率 を見越して 4x 確保
+    pool_target = max(target * 2, 100)  # 4x → 2x で時間節約 (50% skip 想定)
+    harvest_time_cap = 600  # 10 分以内に harvest 切り上げて follow へ
+    harvest_start = time.time()
     for seed in seeds:
         if time.time() > deadline: break
+        if time.time() - harvest_start > harvest_time_cap:
+            logger.info(f"[harvest] 10分 cap で打ち切り (pool={len(candidate_pool)})")
+            break
         if seed in already: continue
         names = harvest_seed_followers(bm, seed, max_per_seed=120)
         visited_seeds.add(seed)
