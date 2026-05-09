@@ -38,9 +38,13 @@ def _today_posted_count(queue_date: str) -> int:
         return 0
     try:
         conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=5)
+        # 2026-05-09 bug fix: posted_at は datetime('now','localtime') で JST 保存
+        # → DATE(...,'localtime') を使うと +9h shift で 5/8 15:00 以降が全て今日扱いになる
+        # → cap が誤って早期発火 (5/9 真の post=6 だが localtime 集計=200 で停止)
+        # 修正: DATE(posted_at) で raw 日付比較
         r = conn.execute(
             "SELECT COUNT(*) FROM post_queue "
-            "WHERE status='posted' AND DATE(posted_at,'localtime')=?",
+            "WHERE status='posted' AND DATE(posted_at)=?",
             (queue_date,),
         ).fetchone()
         conn.close()
