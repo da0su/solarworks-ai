@@ -223,12 +223,17 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
                 window.scrollBy(0, 1000);
             }''')
             page.wait_for_timeout(700)
-            # 早期終了: 連続 3 回 同件数で打ち切り (それ以上は取れない)
+            # 早期終了: modal scope 内の anchor 数で判定 (header 等の document 全体ではない)
+            # かつ少なくとも 6 iter は強制 (lazy load 発火待ち)
             try:
-                cur = page.evaluate('() => document.querySelectorAll(\'a[href^="/room_"], a[href^="/salt_"]\').length')
+                cur = page.evaluate('''() => {
+                    const popup = document.querySelector('[class*="popup-container"]');
+                    return popup ? popup.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').length : 0;
+                }''')
                 if cur == prev_count:
                     stable_iters += 1
-                    if stable_iters >= 3:
+                    # iter 6 以下は break しない (lazy load が iter 14 前後)
+                    if stable_iters >= 3 and i >= 6 and prev_count > 0:
                         break
                 else:
                     stable_iters = 0
