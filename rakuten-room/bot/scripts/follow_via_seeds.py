@@ -360,8 +360,20 @@ def main():
         _c.BROWSER_HEADLESS = True
         logger.info("BOT_HEADLESS=1 → headless=True で起動 (focus 奪取防止)")
     bm.start()
-    if not bm.check_login_status().get("logged_in"):
-        logger.error("not logged in")
+    # 2026-05-10: login_check intermittent timeout 対策 - 1 回 retry
+    login_ok = False
+    for attempt in range(2):
+        try:
+            if bm.check_login_status().get("logged_in"):
+                login_ok = True
+                break
+        except Exception as e:
+            logger.warning(f"[login_check attempt {attempt+1}] err: {e}")
+        if attempt == 0:
+            logger.info("login_check failed, waiting 10s and retrying...")
+            time.sleep(10)
+    if not login_ok:
+        logger.error("not logged in (after 2 attempts)")
         bm.stop()
         return 1
 
