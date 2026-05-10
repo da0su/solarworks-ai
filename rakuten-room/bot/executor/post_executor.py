@@ -233,14 +233,44 @@ class PostExecutor:
             result["screenshots"].append(str(self.bm.take_screenshot("05_submitted")))
 
             # Step 7: 投稿成功を確認
+            # 2026-05-10 CEO 指摘: 旧 code は URL が /mix/collect に留まっていても
+            # 「success」と判定し false success 大量発生 (DB 3838 vs ROOM 実 3500 = 338 fake).
+            # 修正: URL が /mix/collect から離れた OR "すでに投稿済み" 等の error text 不在
+            #       の両方を確認.
             post_error = self._check_post_error()
             if post_error:
                 result["error"] = f"投稿後エラー: {post_error}"
                 result["screenshots"].append(str(self.bm.take_screenshot("06_post_error")))
                 return result
 
-            # 成功判定: mix/collectページから離れた or 成功テキスト表示
+            # collect 画面 error patterns も check (旧 code では post 時に未 check)
+            try:
+                body_text = self.page.text_content("body") or ""
+                from .selectors import COLLECT_ERROR_PATTERNS
+                for p in COLLECT_ERROR_PATTERNS:
+                    if p in body_text:
+                        result["error"] = f"投稿エラー: {p}"
+                        logger.error(f"投稿エラー検知: {p}")
+                        result["screenshots"].append(str(self.bm.take_screenshot("06_collect_error")))
+                        return result
+            except Exception:
+                pass
+
+            # URL ベース成功判定: /mix/collect から離脱したか
             final_url = self.page.url
+            still_on_collect = "/mix/collect" in final_url
+            if still_on_collect:
+                # 5秒待って再確認 (slow redirect 対応)
+                self._human_delay(3.0, 5.0)
+                final_url = self.page.url
+                still_on_collect = "/mix/collect" in final_url
+
+            if still_on_collect:
+                result["error"] = f"投稿未完了 (URL still /mix/collect): {final_url[:80]}"
+                logger.error(f"投稿未完了: URL が /mix/collect に留まっている = 投稿が submit されていない")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_not_submitted")))
+                return result
+
             result["success"] = True
             result["room_url"] = final_url if "room.rakuten.co.jp" in final_url else None
             logger.info(f"投稿成功! URL: {final_url}")
