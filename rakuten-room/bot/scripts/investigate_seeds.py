@@ -66,17 +66,18 @@ def parse_count_str(s: str) -> int:
     return int(n)
 
 
-def investigate_seed(bm, seed: str, category: str) -> dict:
-    """1 seed を調査."""
+def investigate_seed(bm, seed: str, category: str, already_followed: set | None = None) -> dict:
+    """1 seed を調査. already_followed を渡せば overlap (F列) も計算."""
     page = bm.page
     url = f"https://room.rakuten.co.jp/{seed}/items"
     result = {
         "seed_user": seed,
         "category": category,
         "url": url,
-        "my_status": "unknown",  # 'following' / 'not_following' / '404' / 'error'
+        "my_status": "unknown",
         "follower_count": 0,
         "following_count": 0,
+        "followed_overlap": 0,  # 2026-05-10 CEO 指示: フォロワーのうち私が follow した数
         "has_button": False,
         "notes": "",
     }
@@ -136,6 +137,43 @@ def investigate_seed(bm, seed: str, category: str) -> dict:
         result["follower_count"] = parse_count_str(info.get("followerCount", ""))
         result["following_count"] = parse_count_str(info.get("followingCount", ""))
         result["notes"] = info.get("title", "")[:50]
+
+        # 2026-05-10 CEO 指示: F 列 (followed_overlap) 計算
+        # modal を開いて follower username を harvest, my already_followed と intersect
+        if already_followed is not None and result["follower_count"] > 0:
+            try:
+                fb = page.locator('button:has-text("フォロワー"):not(:has-text("フォロー中"))').first
+                if fb.count() > 0:
+                    fb.click(timeout=3000)
+                    page.wait_for_timeout(2500)
+                    # scroll modal で lazy load 発火 (10 iter ~7s)
+                    for _ in range(10):
+                        page.evaluate('''() => {
+                            const popup = document.querySelector('[class*="popup-container"]');
+                            if (popup) popup.querySelectorAll('*').forEach(el => {
+                                const cs = window.getComputedStyle(el);
+                                if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.clientHeight > 100) {
+                                    el.scrollTop = el.scrollHeight;
+                                }
+                            });
+                        }''')
+                        page.wait_for_timeout(700)
+                    # extract follower usernames from modal
+                    follower_names = page.evaluate('''() => {
+                        const popup = document.querySelector('[class*="popup-container"]');
+                        if (!popup) return [];
+                        const us = new Set();
+                        popup.querySelectorAll('a[href^="/room_"]').forEach(a => {
+                            const m = a.getAttribute('href').match(/^\\/(room_[a-zA-Z0-9_]+)/);
+                            if (m) us.add(m[1]);
+                        });
+                        return Array.from(us);
+                    }''')
+                    overlap = sum(1 for n in follower_names if n in already_followed)
+                    result["followed_overlap"] = overlap
+                    result["notes"] += f" | harvest={len(follower_names)},overlap={overlap}"
+            except Exception as e:
+                result["notes"] += f" | overlap_err:{str(e)[:30]}"
     except Exception as e:
         result["my_status"] = "error"
         result["notes"] = str(e)[:80]
@@ -143,7 +181,20 @@ def investigate_seed(bm, seed: str, category: str) -> dict:
 
 
 def write_to_sheet(rows: list[dict]):
-    """gspread で 06_フォロワー調査 タブに書込."""
+    """gspread で 06_フォロワー調査 タブに書込.
+
+    2026-05-10 CEO 指示で日本語ヘッダー化 + 列順整理:
+    A: インフルエンサー名 (seed_user)
+    B: カテゴリ
+    C: URL
+    D: 私のフォロー状況 (フォロー中 / 未フォロー)
+    E: フォロワー数 (このインフルエンサーのフォロワー総数)
+    F: 私がフォローした被り数 (このフォロワーのうち私が follow した数 / overlap)
+    G: 彼らのフォロー数 (このインフルエンサーが他人をフォローしている数)
+    H: ボタン有無
+    I: 備考
+    J: 調査日時
+    """
     try:
         import gspread
     except ImportError:
@@ -160,24 +211,38 @@ def write_to_sheet(rows: list[dict]):
             ws.clear()
         except Exception:
             ws = sh.add_worksheet(title=SHEET_NAME, rows=500, cols=12)
-        # Header
-        header = ["seed_user", "category", "url", "my_status", "follower_count", "following_count", "has_button", "notes", "investigated_at"]
+        # Japanese header
+        header = [
+            "インフルエンサー名", "カテゴリ", "URL",
+            "私のフォロー状況", "フォロワー数",
+            "私がフォローした被り数",  # F: overlap (new)
+            "彼らのフォロー数",         # G: 旧 following_count
+            "ボタン有無", "備考", "調査日時",
+        ]
         values = [header]
         ts = datetime.now().isoformat(timespec="seconds")
+        # Translate my_status to Japanese
+        status_jp = {"following": "フォロー中", "not_following": "未フォロー", "error": "エラー", "unknown": "不明"}
         for r in rows:
             values.append([
-                r["seed_user"], r["category"], r["url"], r["my_status"],
-                r["follower_count"], r["following_count"],
-                "TRUE" if r["has_button"] else "FALSE",
-                r["notes"], ts,
+                r.get("seed_user", ""),
+                r.get("category", ""),
+                r.get("url", ""),
+                status_jp.get(r.get("my_status", "unknown"), r.get("my_status", "")),
+                r.get("follower_count", 0),
+                r.get("followed_overlap", 0),  # F new: overlap count
+                r.get("following_count", 0),    # G: old following_count
+                "TRUE" if r.get("has_button") else "FALSE",
+                r.get("notes", ""),
+                ts,
             ])
         ws.update("A1", values)
         # Format header bold
         try:
-            ws.format("A1:I1", {"textFormat": {"bold": True}})
+            ws.format("A1:J1", {"textFormat": {"bold": True}})
         except Exception:
             pass
-        logger.info(f"[OK] wrote {len(rows)} rows to '{SHEET_NAME}'")
+        logger.info(f"[OK] wrote {len(rows)} rows to '{SHEET_NAME}' with JP header")
         return True
     except Exception as e:
         logger.error(f"sheet write err: {e}")
@@ -197,6 +262,18 @@ def main():
             flat.append((s, cat))
     logger.info(f"investigating {len(flat)} unique seeds")
 
+    # 2026-05-10 CEO 指示: F (overlap) 計算用に follow_history 読込
+    already_followed = set()
+    try:
+        hist = json.loads((BOT_DIR / "data" / "follow_history.json").read_text(encoding="utf-8"))
+        for h in hist:
+            if isinstance(h, dict):
+                if h.get("user_name"): already_followed.add(h["user_name"])
+                if h.get("user_id"): already_followed.add(h["user_id"])
+        logger.info(f"already_followed loaded: {len(already_followed)} entries")
+    except Exception as e:
+        logger.warning(f"follow_history load failed: {e}")
+
     bm = BrowserManager(action="follow")
     bm.start()
     if not bm.check_login_status().get("logged_in"):
@@ -207,11 +284,11 @@ def main():
     rows = []
     t0 = time.time()
     for i, (seed, cat) in enumerate(flat, 1):
-        r = investigate_seed(bm, seed, cat)
+        r = investigate_seed(bm, seed, cat, already_followed=already_followed)
         rows.append(r)
         if i % 10 == 0 or i == len(flat):
             elapsed = time.time() - t0
-            logger.info(f"[{i}/{len(flat)}] elapsed={elapsed:.0f}s status={r['my_status']} {seed} (followers={r['follower_count']})")
+            logger.info(f"[{i}/{len(flat)}] elapsed={elapsed:.0f}s status={r['my_status']} overlap={r.get('followed_overlap',0)} {seed}")
 
     bm.stop()
 

@@ -376,23 +376,45 @@ def main():
     pool_target = max(target * 2, 100)  # 4x → 2x で時間節約 (50% skip 想定)
     harvest_time_cap = 600  # 10 分以内に harvest 切り上げて follow へ
     harvest_start = time.time()
+    # 2026-05-10 CEO 指示: harvest 結果を seed_investigation.json に incremental 反映
+    seed_overlap_updates: dict[str, dict] = {}  # seed_user → {harvested, overlap}
     for seed in seeds:
         if time.time() > deadline: break
         if time.time() - harvest_start > harvest_time_cap:
             logger.info(f"[harvest] 10分 cap で打ち切り (pool={len(candidate_pool)})")
             break
         # 2026-05-09 18:55: 2nd hop seeds を skip しないよう修正.
-        # seed 自体が already_followed でも, その followers は新鮮な可能性が高い (相互重複少).
-        # 旧 `if seed in already: continue` を削除.
         names = harvest_seed_followers(bm, seed, max_per_seed=120)
         visited_seeds.add(seed)
         fresh = [n for n in names if n not in already and n not in candidate_pool]
         candidate_pool.extend(fresh)
-        # 2026-05-09 19:33: debug 追加 - harvest 真因切り分け (modal opened? names returned? all dup?)
         sample = names[:3] if names else []
-        logger.info(f"[seed:{seed}] harvested={len(names)} fresh={len(fresh)} sample={sample} (pool={len(candidate_pool)})")
+        # 2026-05-10: F (overlap) 計算 - このフォロワーのうち私が既 follow している数
+        overlap = sum(1 for n in names if n in already)
+        seed_overlap_updates[seed] = {
+            "harvested": len(names), "followed_overlap": overlap, "fresh": len(fresh)
+        }
+        logger.info(f"[seed:{seed}] harvested={len(names)} fresh={len(fresh)} overlap={overlap} sample={sample} (pool={len(candidate_pool)})")
         if len(candidate_pool) >= pool_target:
             break
+
+    # 2026-05-10 CEO 指示: harvest 結果を seed_investigation.json に書込み戻し
+    try:
+        if INVESTIGATION_FILE.exists() and seed_overlap_updates:
+            data = json.loads(INVESTIGATION_FILE.read_text(encoding="utf-8"))
+            updated = 0
+            for r in data:
+                su = r.get("seed_user")
+                if su and su in seed_overlap_updates:
+                    upd = seed_overlap_updates[su]
+                    r["followed_overlap"] = upd["followed_overlap"]
+                    r["last_harvest_at"] = datetime.now().isoformat(timespec="seconds")
+                    r["last_harvested_count"] = upd["harvested"]
+                    updated += 1
+            INVESTIGATION_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            logger.info(f"[seed_investigation] updated {updated} rows with overlap data")
+    except Exception as e:
+        logger.warning(f"seed_investigation update failed: {e}")
 
     logger.info(f"=== candidate pool: {len(candidate_pool)} fresh ===")
 
