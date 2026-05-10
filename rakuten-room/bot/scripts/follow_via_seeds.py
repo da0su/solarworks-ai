@@ -128,50 +128,49 @@ def append_followed(user_id: str, user_name: str = "", source: str = "seed_follo
     HISTORY_PATH.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def extract_follower_usernames_from_modal(page) -> tuple[list[str], dict]:
-    """modal が開いた状態で follower username を抽出. 診断情報も返す.
+def extract_follower_usernames_from_modal(page) -> dict:
+    """フォロワー username を抽出 (modal or /followers page 両対応).
 
-    2026-05-10 真因対応 + DOM 診断: 旧 code は document 全体 (ページ header の
-    "自分のprofile" リンク=ROOM_ID も含む) から拾っていた → modal 未 open でも 1 件返す
-    誤動作. 修正: modal container 内に scope. かつ DOM 構造を診断 log で記録.
+    2026-05-10 真因対応:
+    - 旧 code は document 全体 (ページ header の "自分のprofile" リンク=ROOM_ID
+      も含む) から拾っていた → modal 未 open でも 1 件返す誤動作
+    - 修正: URL が /followers なら page 全体 minus header. modal なら scope.
     """
     return page.evaluate('''() => {
         const usernames = new Set();
-        const diag = {url: window.location.href, modal_kind: 'none', total_room_links: 0};
-        // 全 anchor 数 (page 全体 follower link 数)
+        const diag = {url: window.location.href, mode: 'none', total_room_links: 0};
         diag.total_room_links = document.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').length;
 
-        // 1) popup-container
-        let modal = document.querySelector('[class*="popup-container"]');
-        if (modal) diag.modal_kind = 'popup-container';
-        // 2) role=dialog
-        if (!modal) { modal = document.querySelector('[role="dialog"]'); if (modal) diag.modal_kind = 'dialog'; }
-        // 3) data-testid modal
-        if (!modal) { modal = document.querySelector('[data-testid*="modal-overlay"]'); if (modal) diag.modal_kind = 'testid-overlay'; }
-        // 4) modal-content
-        if (!modal) { modal = document.querySelector('[class*="modal-content"]'); if (modal) diag.modal_kind = 'modal-content'; }
-        // 5) any class containing "modal"
-        if (!modal) { modal = document.querySelector('[class*="modal"][aria-hidden="false"]'); if (modal) diag.modal_kind = 'modal-aria'; }
-        // 6) Rakuten 用 fallback: aria-modal=true
-        if (!modal) { modal = document.querySelector('[aria-modal="true"]'); if (modal) diag.modal_kind = 'aria-modal'; }
-        // 7) 「フォロワー」見出しを含む section
-        if (!modal) {
-            const headings = document.querySelectorAll('h1,h2,h3,h4,div');
-            for (const h of headings) {
-                if (h.textContent && h.textContent.trim().match(/^フォロワー(\\s|$)/)) {
-                    modal = h.closest('section,aside,div[class*="container"]') || h.parentElement;
-                    if (modal) { diag.modal_kind = 'heading-section'; break; }
-                }
+        let scope = null;
+
+        // (1) /followers URL → page main area
+        if (window.location.pathname.includes('/followers')) {
+            // page 全体 minus header / nav
+            scope = document.querySelector('main') || document.querySelector('#__next') || document.body;
+            diag.mode = 'followers-page';
+        }
+        // (2) Modal detection
+        if (!scope) {
+            const candidates = [
+                ['[class*="popup-container"]', 'popup-container'],
+                ['[role="dialog"]', 'dialog'],
+                ['[data-testid*="modal-overlay"]', 'testid-overlay'],
+                ['[class*="modal-content"]', 'modal-content'],
+                ['[aria-modal="true"]', 'aria-modal'],
+                ['[class*="modal"][aria-hidden="false"]', 'modal-aria'],
+            ];
+            for (const [sel, name] of candidates) {
+                const el = document.querySelector(sel);
+                if (el) { scope = el; diag.mode = name; break; }
             }
         }
 
-        if (!modal) {
-            // log diagnostic info
-            diag.body_class = document.body.className.substring(0, 100);
+        if (!scope) {
+            diag.body_class = (document.body.className || '').substring(0, 100);
             return {names: [], diag};
         }
-        diag.modal_class = (modal.className || '').substring(0, 100);
-        modal.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').forEach(a => {
+        diag.scope_class = (scope.className || '').substring(0, 80);
+        scope.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').forEach(a => {
             const m = a.getAttribute('href').match(/^\\/(room_[a-zA-Z0-9_]+|salt_[a-zA-Z0-9_]+)/);
             if (m) usernames.add(m[1]);
         });
@@ -180,21 +179,40 @@ def extract_follower_usernames_from_modal(page) -> tuple[list[str], dict]:
 
 
 def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
-    """seed の /items 開いて フォロワーボタン click → modal の username 抽出.
+    """seed の フォロワー一覧から username を抽出.
 
-    2026-05-09: scroll 5→20回 + 各回 1.5s 待機で lazy load を確実に取得.
-    seed の follower 上位 200 まで取れるように拡張 (旧: ~30-50 件のみ).
+    2026-05-10: 旧 modal click が動かなくなった (DOM 変化疑い) → /seed/followers
+    URL に直接 navigate する fallback flow に変更. modal が開けばそれを使い、
+    開かなければ followers ページの URL に goto する.
     """
     page = bm.page
     try:
-        page.goto(f"https://room.rakuten.co.jp/{seed}/items",
-                  wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_timeout(2000)
-        fb = page.locator('button:has-text("フォロワー")').first
-        if fb.count() == 0:
-            return []
-        fb.click(timeout=3000)
-        page.wait_for_timeout(3000)
+        url_items = f"https://room.rakuten.co.jp/{seed}/items"
+        page.goto(url_items, wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(2500)
+        url_before_click = page.url
+
+        # フォロワー click 試行 (modal or navigation どちらでも OK)
+        clicked = False
+        try:
+            # button.follow-button--* and contains "フォロワー" - more specific than first match
+            fb = page.locator('button:has-text("フォロワー"):not(:has-text("フォロー中"))').first
+            if fb.count() > 0:
+                fb.click(timeout=3000)
+                clicked = True
+                page.wait_for_timeout(2000)
+        except Exception:
+            pass
+
+        # If click navigation went to /followers URL, scroll for lazy load
+        if "/followers" not in page.url:
+            # Modal expected. fallback: try /followers URL directly
+            url_followers = f"https://room.rakuten.co.jp/{seed}/followers"
+            try:
+                page.goto(url_followers, wait_until="domcontentloaded", timeout=15000)
+                page.wait_for_timeout(2000)
+            except Exception:
+                pass
 
         # 2026-05-09 v3: 30s/seed は遅すぎ → 8 iter × 0.7s = ~5s/seed に短縮
         # follow phase に確実に時間を残す。stable 検知で更に早期終了。
@@ -227,13 +245,11 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
         result = extract_follower_usernames_from_modal(page)
         names = result.get("names", []) if isinstance(result, dict) else []
         diag = result.get("diag", {}) if isinstance(result, dict) else {}
-        # 2026-05-10: ROOM_ID (自分のアカウント) を除外
         own_id = getattr(config, "ROOM_ID", "")
-        # 診断 log (modal 未 open 時のみ): page 全 anchor 数 + URL
-        if not names and diag.get("modal_kind") == "none":
-            logger.info(f"[harvest:{seed}] modal not detected. url={diag.get('url','?')} total_anchors={diag.get('total_room_links',0)} body_class={diag.get('body_class','?')[:50]}")
-        elif diag.get("modal_kind"):
-            logger.debug(f"[harvest:{seed}] modal_kind={diag.get('modal_kind')} class={diag.get('modal_class','')[:50]}")
+        if not names and diag.get("mode") == "none":
+            logger.info(f"[harvest:{seed}] no scope found. url={diag.get('url','?')} total_anchors={diag.get('total_room_links',0)}")
+        else:
+            logger.debug(f"[harvest:{seed}] mode={diag.get('mode')} anchors={diag.get('total_room_links','?')}")
         return [n for n in names if n != seed and n != own_id][:max_per_seed]
     except Exception as e:
         logger.warning(f"[harvest:{seed}] err: {e}")
