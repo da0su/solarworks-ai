@@ -7,5 +7,5 @@ REM ASCII-only to avoid cp932 mis-parse of Japanese comments
 cd /d C:\Users\infoa\Documents\solarworks-ai
 set PYTHONIOENCODING=utf-8
 set BOT_HEADLESS=1
-python rakuten-room\bot\scripts\follow_via_seeds.py --target 30 --duration-min 14 >> "C:\Users\infoa\Documents\solarworks-ai\ops\scheduler\logs\windows_task_follow_host.log" 2>&1
+python rakuten-room\bot\scripts\follow_via_seeds.py --target 200 --duration-min 14 >> "C:\Users\infoa\Documents\solarworks-ai\ops\scheduler\logs\windows_task_follow_host.log" 2>&1
 exit /b %errorlevel%

@@ -36,16 +36,23 @@ def enable_task(name: str):
 
 
 def patch_bat_target(target: int, duration_min: int):
-    """host_follow_launcher.bat の --target / --duration-min を書換える."""
+    """host_follow_launcher.bat の --target / --duration-min を書換える.
+    2026-05-11 修正: 旧 regex は backslash の double escape 問題で match せず → 単純文字列置換に変更.
+    """
     if not BAT.exists():
         print(f"[ERR] bat not found: {BAT}")
         return
     text = BAT.read_text(encoding="utf-8")
     import re
-    new_line = f"python rakuten-room\\bot\\scripts\\follow_via_seeds.py --target {target} --duration-min {duration_min} >> \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\logs\\windows_task_follow_host.log\" 2>&1"
-    text = re.sub(r'python rakuten-room\\bot\\scripts\\follow_via_seeds\.py --target \d+ --duration-min \d+ >> "[^"]+" 2>&1', new_line, text)
-    BAT.write_text(text, encoding="utf-8")
-    print(f"  bat patched: target={target} duration={duration_min}")
+    # 既存 --target N --duration-min M を新値で置換
+    new_text = re.sub(r'--target \d+ --duration-min \d+',
+                       f'--target {target} --duration-min {duration_min}',
+                       text)
+    if new_text == text:
+        print(f"  WARN: bat patch no-op (regex match なし)")
+    else:
+        BAT.write_text(new_text, encoding="utf-8")
+        print(f"  bat patched: target={target} duration={duration_min}")
 
 
 def main():
