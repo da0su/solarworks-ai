@@ -128,27 +128,54 @@ def append_followed(user_id: str, user_name: str = "", source: str = "seed_follo
     HISTORY_PATH.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def extract_follower_usernames_from_modal(page) -> list[str]:
-    """modal が開いた状態で follower username を抽出.
+def extract_follower_usernames_from_modal(page) -> tuple[list[str], dict]:
+    """modal が開いた状態で follower username を抽出. 診断情報も返す.
 
-    2026-05-10 真因対応: 旧 code は document 全体 (ページ header の "自分の profile"
-    リンク = ROOM_ID も含む) から拾っていた → modal が開いてなくても 1 件 (自分) 返す
-    誤動作. modal container 内に scope する.
+    2026-05-10 真因対応 + DOM 診断: 旧 code は document 全体 (ページ header の
+    "自分のprofile" リンク=ROOM_ID も含む) から拾っていた → modal 未 open でも 1 件返す
+    誤動作. 修正: modal container 内に scope. かつ DOM 構造を診断 log で記録.
     """
     return page.evaluate('''() => {
         const usernames = new Set();
-        // Modal container を特定 (open している modal のみ)
-        const modal = document.querySelector('[class*="popup-container"]')
-                   || document.querySelector('[role="dialog"]')
-                   || document.querySelector('[data-testid*="modal-overlay"]')
-                   || document.querySelector('[class*="modal-content"]')
-                   || document.querySelector('[class*="modal"][aria-hidden="false"]');
-        if (!modal) return [];  // modal 未 open = empty (異常検知シグナル)
+        const diag = {url: window.location.href, modal_kind: 'none', total_room_links: 0};
+        // 全 anchor 数 (page 全体 follower link 数)
+        diag.total_room_links = document.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').length;
+
+        // 1) popup-container
+        let modal = document.querySelector('[class*="popup-container"]');
+        if (modal) diag.modal_kind = 'popup-container';
+        // 2) role=dialog
+        if (!modal) { modal = document.querySelector('[role="dialog"]'); if (modal) diag.modal_kind = 'dialog'; }
+        // 3) data-testid modal
+        if (!modal) { modal = document.querySelector('[data-testid*="modal-overlay"]'); if (modal) diag.modal_kind = 'testid-overlay'; }
+        // 4) modal-content
+        if (!modal) { modal = document.querySelector('[class*="modal-content"]'); if (modal) diag.modal_kind = 'modal-content'; }
+        // 5) any class containing "modal"
+        if (!modal) { modal = document.querySelector('[class*="modal"][aria-hidden="false"]'); if (modal) diag.modal_kind = 'modal-aria'; }
+        // 6) Rakuten 用 fallback: aria-modal=true
+        if (!modal) { modal = document.querySelector('[aria-modal="true"]'); if (modal) diag.modal_kind = 'aria-modal'; }
+        // 7) 「フォロワー」見出しを含む section
+        if (!modal) {
+            const headings = document.querySelectorAll('h1,h2,h3,h4,div');
+            for (const h of headings) {
+                if (h.textContent && h.textContent.trim().match(/^フォロワー(\\s|$)/)) {
+                    modal = h.closest('section,aside,div[class*="container"]') || h.parentElement;
+                    if (modal) { diag.modal_kind = 'heading-section'; break; }
+                }
+            }
+        }
+
+        if (!modal) {
+            // log diagnostic info
+            diag.body_class = document.body.className.substring(0, 100);
+            return {names: [], diag};
+        }
+        diag.modal_class = (modal.className || '').substring(0, 100);
         modal.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').forEach(a => {
             const m = a.getAttribute('href').match(/^\\/(room_[a-zA-Z0-9_]+|salt_[a-zA-Z0-9_]+)/);
             if (m) usernames.add(m[1]);
         });
-        return Array.from(usernames);
+        return {names: Array.from(usernames), diag};
     }''')
 
 
@@ -197,9 +224,16 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
                     prev_count = cur
             except Exception:
                 pass
-        names = extract_follower_usernames_from_modal(page)
+        result = extract_follower_usernames_from_modal(page)
+        names = result.get("names", []) if isinstance(result, dict) else []
+        diag = result.get("diag", {}) if isinstance(result, dict) else {}
         # 2026-05-10: ROOM_ID (自分のアカウント) を除外
         own_id = getattr(config, "ROOM_ID", "")
+        # 診断 log (modal 未 open 時のみ): page 全 anchor 数 + URL
+        if not names and diag.get("modal_kind") == "none":
+            logger.info(f"[harvest:{seed}] modal not detected. url={diag.get('url','?')} total_anchors={diag.get('total_room_links',0)} body_class={diag.get('body_class','?')[:50]}")
+        elif diag.get("modal_kind"):
+            logger.debug(f"[harvest:{seed}] modal_kind={diag.get('modal_kind')} class={diag.get('modal_class','')[:50]}")
         return [n for n in names if n != seed and n != own_id][:max_per_seed]
     except Exception as e:
         logger.warning(f"[harvest:{seed}] err: {e}")
