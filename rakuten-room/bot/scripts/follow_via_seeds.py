@@ -129,11 +129,22 @@ def append_followed(user_id: str, user_name: str = "", source: str = "seed_follo
 
 
 def extract_follower_usernames_from_modal(page) -> list[str]:
-    """modal が開いた状態で follower username を抽出."""
+    """modal が開いた状態で follower username を抽出.
+
+    2026-05-10 真因対応: 旧 code は document 全体 (ページ header の "自分の profile"
+    リンク = ROOM_ID も含む) から拾っていた → modal が開いてなくても 1 件 (自分) 返す
+    誤動作. modal container 内に scope する.
+    """
     return page.evaluate('''() => {
         const usernames = new Set();
-        // modal 内の anchor a[href^="/room_"] or a[href^="/salt_"]
-        document.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').forEach(a => {
+        // Modal container を特定 (open している modal のみ)
+        const modal = document.querySelector('[class*="popup-container"]')
+                   || document.querySelector('[role="dialog"]')
+                   || document.querySelector('[data-testid*="modal-overlay"]')
+                   || document.querySelector('[class*="modal-content"]')
+                   || document.querySelector('[class*="modal"][aria-hidden="false"]');
+        if (!modal) return [];  // modal 未 open = empty (異常検知シグナル)
+        modal.querySelectorAll('a[href^="/room_"], a[href^="/salt_"]').forEach(a => {
             const m = a.getAttribute('href').match(/^\\/(room_[a-zA-Z0-9_]+|salt_[a-zA-Z0-9_]+)/);
             if (m) usernames.add(m[1]);
         });
@@ -187,7 +198,9 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
             except Exception:
                 pass
         names = extract_follower_usernames_from_modal(page)
-        return [n for n in names if n != seed][:max_per_seed]
+        # 2026-05-10: ROOM_ID (自分のアカウント) を除外
+        own_id = getattr(config, "ROOM_ID", "")
+        return [n for n in names if n != seed and n != own_id][:max_per_seed]
     except Exception as e:
         logger.warning(f"[harvest:{seed}] err: {e}")
         return []
