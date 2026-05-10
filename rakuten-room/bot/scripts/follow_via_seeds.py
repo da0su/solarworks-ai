@@ -179,54 +179,47 @@ def extract_follower_usernames_from_modal(page) -> dict:
 
 
 def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
-    """seed の フォロワー一覧から username を抽出.
+    """seed の フォロワー modal から username を抽出.
 
-    2026-05-10: 旧 modal click が動かなくなった (DOM 変化疑い) → /seed/followers
-    URL に直接 navigate する fallback flow に変更. modal が開けばそれを使い、
-    開かなければ followers ページの URL に goto する.
+    2026-05-10 真因確定 + 修正:
+    手動テスト (chrome_profile_post で /room_2389d5576a/items 直接実行) で判明:
+    - modal は click で正しく開く (popup-container--*)
+    - **初期 anchors=0 (空)**, scroll 約 14-15 iter (~7-8s) で lazy load 発火
+    - 48 anchors → 16 unique users 抽出可能
+    - 旧 8 iter × 0.7s (5s) では lazy load 起動前で empty → 全 seed pool=0 になっていた
+
+    対応: scroll 12 iter × 0.7s = 8.4s (lazy load 確実発火) + early stop.
     """
     page = bm.page
     try:
         url_items = f"https://room.rakuten.co.jp/{seed}/items"
         page.goto(url_items, wait_until="domcontentloaded", timeout=20000)
         page.wait_for_timeout(2500)
-        url_before_click = page.url
 
-        # フォロワー click 試行 (modal or navigation どちらでも OK)
-        clicked = False
-        try:
-            # button.follow-button--* and contains "フォロワー" - more specific than first match
-            fb = page.locator('button:has-text("フォロワー"):not(:has-text("フォロー中"))').first
-            if fb.count() > 0:
-                fb.click(timeout=3000)
-                clicked = True
-                page.wait_for_timeout(2000)
-        except Exception:
-            pass
+        # フォロワー button click (modal が開く)
+        fb = page.locator('button:has-text("フォロワー"):not(:has-text("フォロー中"))').first
+        if fb.count() == 0:
+            return []
+        fb.click(timeout=3000)
+        page.wait_for_timeout(2500)
 
-        # If click navigation went to /followers URL, scroll for lazy load
-        if "/followers" not in page.url:
-            # Modal expected. fallback: try /followers URL directly
-            url_followers = f"https://room.rakuten.co.jp/{seed}/followers"
-            try:
-                page.goto(url_followers, wait_until="domcontentloaded", timeout=15000)
-                page.wait_for_timeout(2000)
-            except Exception:
-                pass
-
-        # 2026-05-09 v3: 30s/seed は遅すぎ → 8 iter × 0.7s = ~5s/seed に短縮
-        # follow phase に確実に時間を残す。stable 検知で更に早期終了。
+        # 2026-05-10: 12 iter × 0.7s = 8.4s. 14-15 iter で lazy load 発火確認済.
+        # 12 iter で十分余裕 (load 後 stable で early stop)
         prev_count = 0
         stable_iters = 0
-        for i in range(8):
+        for i in range(15):
             page.evaluate('''() => {
-                const containers = [
-                    ...document.querySelectorAll('[class*="popup-container"] [class*="scroll"]'),
-                    ...document.querySelectorAll('[class*="popup-container"] ul'),
-                    ...document.querySelectorAll('[data-testid="modal-overlay"] + div'),
-                    ...document.querySelectorAll('[class*="modal"] [class*="list"]'),
-                ];
-                containers.forEach(c => { c.scrollTop = c.scrollHeight; });
+                // 2026-05-10: 真のスクロール target = popup 内の overflowY:auto 要素
+                // 旧 selector では当たらず. 動的 detect.
+                const popup = document.querySelector('[class*="popup-container"]');
+                if (popup) {
+                    popup.querySelectorAll('*').forEach(el => {
+                        const cs = window.getComputedStyle(el);
+                        if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.clientHeight > 100) {
+                            el.scrollTop = el.scrollHeight;
+                        }
+                    });
+                }
                 window.scrollBy(0, 1000);
             }''')
             page.wait_for_timeout(700)
