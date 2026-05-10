@@ -453,6 +453,9 @@ def main():
         elif status == "skipped":
             skipped += 1
             already.add(username)
+            # 2026-05-10: Rakuten 側で既フォロー判定なら永続化 (次 trigger で同じ user を skip しないため)
+            if reason and "already_following" in str(reason):
+                append_followed(username, username, source="skip_discover")
         else:
             failed += 1
             logger.warning(f"failed {username}: {reason}")
