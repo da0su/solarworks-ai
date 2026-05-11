@@ -263,24 +263,10 @@ def follow_one(bm, username: str) -> tuple[str, str]:
     page = bm.page
     profile_url = f"https://room.rakuten.co.jp/{username}/items"
     try:
-        # 2026-05-10: timeout 15s→25s (Rakuten 側で intermittent slow 観測).
-        # 1 回 timeout なら 1 度 retry.
-        def _goto_with_retry():
-            try:
-                page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
-                return True, None
-            except Exception as e1:
-                if "Timeout" in str(e1):
-                    try:
-                        page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
-                        return True, None
-                    except Exception as e2:
-                        return False, e2
-                return False, e1
-        # Page crashed retry
+        # 2026-05-11 CEO「5/8 1069 件達成時の状態に戻せ」: 旧 25s+retry → 15s no-retry
+        # 5/8 commit c477b733 と同じ挙動. 失敗は即諦めで cycle 高速化.
         try:
-            ok, err = _goto_with_retry()
-            if not ok: raise err
+            page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
         except Exception as e:
             if "crashed" in str(e).lower():
                 try: page.close()
@@ -289,7 +275,7 @@ def follow_one(bm, username: str) -> tuple[str, str]:
                 bm._page = page
                 page.set_default_timeout(config.ELEMENT_TIMEOUT)
                 page.set_default_navigation_timeout(config.PAGE_LOAD_TIMEOUT)
-                page.goto(profile_url, wait_until="domcontentloaded", timeout=25000)
+                page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
             else:
                 return ("failed", f"goto:{str(e)[:60]}")
         time.sleep(random.uniform(0.5, 1.0))
