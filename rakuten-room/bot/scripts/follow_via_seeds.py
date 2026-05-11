@@ -266,7 +266,7 @@ def follow_one(bm, username: str) -> tuple[str, str]:
         # 2026-05-11 CEO「5/8 1069 件達成時の状態に戻せ」: 旧 25s+retry → 15s no-retry
         # 5/8 commit c477b733 と同じ挙動. 失敗は即諦めで cycle 高速化.
         try:
-            page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+            page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
         except Exception as e:
             if "crashed" in str(e).lower():
                 try: page.close()
@@ -275,7 +275,7 @@ def follow_one(bm, username: str) -> tuple[str, str]:
                 bm._page = page
                 page.set_default_timeout(config.ELEMENT_TIMEOUT)
                 page.set_default_navigation_timeout(config.PAGE_LOAD_TIMEOUT)
-                page.goto(profile_url, wait_until="domcontentloaded", timeout=15000)
+                page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
             else:
                 return ("failed", f"goto:{str(e)[:60]}")
         time.sleep(random.uniform(0.5, 1.0))
