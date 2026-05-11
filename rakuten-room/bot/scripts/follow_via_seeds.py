@@ -382,18 +382,20 @@ def main():
     failed = 0
     visited_seeds = set()
 
-    # 2026-05-09 v3: 短時間 harvest → 早く follow 開始
+    # 2026-05-11 CEO 指示「follow 効率化」: harvest を短縮し follow phase に時間配分
+    # 分析: 旧 10 min harvest → 4 min follow = 5-6 follow max
+    # 新  5 min harvest →  9 min follow = 12-15 follow 可能
     candidate_pool: list[str] = []
     random.shuffle(seeds)
-    pool_target = max(target * 2, 100)  # 4x → 2x で時間節約 (50% skip 想定)
-    harvest_time_cap = 600  # 10 分以内に harvest 切り上げて follow へ
+    pool_target = max(target, 60)  # 50% skip 想定で target 件確保
+    harvest_time_cap = 300  # 5 分に短縮 (旧 10 分)
     harvest_start = time.time()
     # 2026-05-10 CEO 指示: harvest 結果を seed_investigation.json に incremental 反映
     seed_overlap_updates: dict[str, dict] = {}  # seed_user → {harvested, overlap}
     for seed in seeds:
         if time.time() > deadline: break
         if time.time() - harvest_start > harvest_time_cap:
-            logger.info(f"[harvest] 10分 cap で打ち切り (pool={len(candidate_pool)})")
+            logger.info(f"[harvest] 5分 cap で打ち切り (pool={len(candidate_pool)})")
             break
         # 2026-05-09 18:55: 2nd hop seeds を skip しないよう修正.
         names = harvest_seed_followers(bm, seed, max_per_seed=120)
