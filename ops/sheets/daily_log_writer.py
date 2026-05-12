@@ -171,6 +171,9 @@ def write_to_sheet(target_date: str, posted: int, follow: int, like: int, fb: in
         return True
 
     # C列=投稿実績, F列=フォロー実績, I列=ライク実績, L列=FB実績
+    # 2026-05-12 CEO 指示: 累積 N/O/P/Q 列は formula =前日+当日実績 で自動計算
+    # → 当 writer は実績 (C/F/I/L) のみ書き込み. N/O/P/Q は触れない (formula 維持).
+    # これにより Rakuten 公式 vs スプシ累積の差 = 過去 実績入力の誤り の診断ツールになる.
     ranges = [
         {"range": f"C{row}", "values": [[posted]]},
         {"range": f"F{row}", "values": [[follow]]},
