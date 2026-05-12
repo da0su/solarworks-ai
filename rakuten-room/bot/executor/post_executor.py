@@ -233,17 +233,19 @@ class PostExecutor:
             result["screenshots"].append(str(self.bm.take_screenshot("05_submitted")))
 
             # Step 7: 投稿成功を確認
-            # 2026-05-10 CEO 指摘: 旧 code は URL が /mix/collect に留まっていても
-            # 「success」と判定し false success 大量発生 (DB 3838 vs ROOM 実 3500 = 338 fake).
-            # 修正: URL が /mix/collect から離れた OR "すでに投稿済み" 等の error text 不在
-            #       の両方を確認.
+            # 2026-05-10 CEO 指摘 (3500 vs 3838) で URL 残留 = failure と判定する厳格化 (commit de0d8bd) を入れたが、
+            # 2026-05-12 CEO「投稿が止まっている」指摘で発覚: /mix/collect URL は投稿後も
+            # そのまま留まる Rakuten UI 仕様で、URL 残留 = failure は誤検知だった.
+            # 5/12 朝 Batch4 (03:00) と Batch1 (09:00) 共 3 連続失敗で停止し 0件投稿に.
+            # 修正: COLLECT_ERROR_PATTERNS (すでに投稿済み等) のみ check, URL 残留判定は撤去.
+            # 3500 vs 3838 の差は別の要因 (Rakuten 側 dedup 等) で別途調査.
             post_error = self._check_post_error()
             if post_error:
                 result["error"] = f"投稿後エラー: {post_error}"
                 result["screenshots"].append(str(self.bm.take_screenshot("06_post_error")))
                 return result
 
-            # collect 画面 error patterns も check (旧 code では post 時に未 check)
+            # collect 画面 error patterns check (5/10 de0d8bd 追加・残置)
             try:
                 body_text = self.page.text_content("body") or ""
                 from .selectors import COLLECT_ERROR_PATTERNS
@@ -256,21 +258,8 @@ class PostExecutor:
             except Exception:
                 pass
 
-            # URL ベース成功判定: /mix/collect から離脱したか
+            # 成功扱い (URL 残留は failure としない)
             final_url = self.page.url
-            still_on_collect = "/mix/collect" in final_url
-            if still_on_collect:
-                # 5秒待って再確認 (slow redirect 対応)
-                self._human_delay(3.0, 5.0)
-                final_url = self.page.url
-                still_on_collect = "/mix/collect" in final_url
-
-            if still_on_collect:
-                result["error"] = f"投稿未完了 (URL still /mix/collect): {final_url[:80]}"
-                logger.error(f"投稿未完了: URL が /mix/collect に留まっている = 投稿が submit されていない")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_not_submitted")))
-                return result
-
             result["success"] = True
             result["room_url"] = final_url if "room.rakuten.co.jp" in final_url else None
             logger.info(f"投稿成功! URL: {final_url}")
