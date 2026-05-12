@@ -66,8 +66,10 @@ def get_actuals() -> dict:
         pass
     try:
         h = json.loads((REPO_ROOT / "rakuten-room" / "bot" / "data" / "follow_history.json").read_text(encoding="utf-8"))
+        # 2026-05-12 真因修正: skip_discover (再試行回避用) は実フォローではないので除外
         host_follow = sum(1 for x in h if isinstance(x, dict)
-                          and str(x.get("followed_at", "")).startswith(today))
+                          and str(x.get("followed_at", "")).startswith(today)
+                          and x.get("source") != "skip_discover")
     except Exception:
         pass
     actuals["follow"] = vm_follow + host_follow

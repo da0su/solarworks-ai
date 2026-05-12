@@ -203,7 +203,10 @@ def _today_follow() -> dict:
         try:
             hist = json.loads(HOST_FOLLOW_HISTORY.read_text(encoding="utf-8"))
             today_str = datetime.now().strftime("%Y-%m-%d")
-            today_host = [h for h in hist if isinstance(h, dict) and str(h.get("followed_at", "")).startswith(today_str)]
+            # 2026-05-12 真因修正: skip_discover (再試行回避用記録) は実フォローではないので除外
+            today_host = [h for h in hist if isinstance(h, dict)
+                           and str(h.get("followed_at", "")).startswith(today_str)
+                           and h.get("source") != "skip_discover"]
             host_followed = len(today_host)
             if today_host:
                 last_at = today_host[-1].get("followed_at")
