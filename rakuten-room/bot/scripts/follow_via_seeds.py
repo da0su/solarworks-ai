@@ -285,11 +285,12 @@ def follow_one(bm, username: str) -> tuple[str, str]:
             return ("failed", "login_redirect")
 
         follow_btn = page.locator('button[aria-label="フォローする"], button[aria-label="フォロー"]').first
-        if follow_btn.count() == 0 or not follow_btn.is_visible(timeout=2000):
+        if follow_btn.count() == 0 or not follow_btn.is_visible(timeout=1500):
             return ("skipped", "no_btn_or_already_following")
 
-        follow_btn.click(timeout=3000)
-        time.sleep(random.uniform(0.3, 0.6))
+        follow_btn.click(timeout=2000)
+        # 2026-05-12 CEO 残月達成プラン: 待機 0.3-0.6 → 0.1-0.3 (高速化)
+        time.sleep(random.uniform(0.1, 0.3))
 
         # Session/upgrade?
         if "login.account.rakuten.com/session/upgrade" in page.url:
@@ -368,20 +369,19 @@ def main():
     failed = 0
     visited_seeds = set()
 
-    # 2026-05-11 CEO 指示「follow 効率化」: harvest を短縮し follow phase に時間配分
-    # 分析: 旧 10 min harvest → 4 min follow = 5-6 follow max
-    # 新  5 min harvest →  9 min follow = 12-15 follow 可能
+    # 2026-05-12 残月達成プラン (CEO 指示): harvest 短縮 + pool target 軽量化で
+    # follow phase に最大時間配分. 13 min trigger で 50-80 件 follow を狙う.
     candidate_pool: list[str] = []
     random.shuffle(seeds)
-    pool_target = max(target, 60)  # 50% skip 想定で target 件確保
-    harvest_time_cap = 300  # 5 分に短縮 (旧 10 分)
+    pool_target = max(target, 40)  # 軽量化 (skip 50% 想定で 目標 + 余裕分)
+    harvest_time_cap = 180  # 3 分に短縮 (旧 5分・1trigger 14min 中 follow phase 10min 確保)
     harvest_start = time.time()
     # 2026-05-10 CEO 指示: harvest 結果を seed_investigation.json に incremental 反映
     seed_overlap_updates: dict[str, dict] = {}  # seed_user → {harvested, overlap}
     for seed in seeds:
         if time.time() > deadline: break
         if time.time() - harvest_start > harvest_time_cap:
-            logger.info(f"[harvest] 5分 cap で打ち切り (pool={len(candidate_pool)})")
+            logger.info(f"[harvest] 3分 cap で打ち切り (pool={len(candidate_pool)})")
             break
         # 2026-05-09 18:55: 2nd hop seeds を skip しないよう修正.
         names = harvest_seed_followers(bm, seed, max_per_seed=120)
