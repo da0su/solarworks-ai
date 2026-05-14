@@ -135,6 +135,27 @@ class QueueExecutor:
         if target_count is None or target_count > cap_remaining:
             logger.info(f"[cap_check] target_count {target_count} -> {cap_remaining} (cap remain)")
             target_count = cap_remaining
+
+        # 2026-05-14 CEO 指示「目標 多すぎても少なすぎても NG・自動是正」:
+        # スプシ daily target を SSOT として参照. action=stop なら exit / per_cycle_target で上書き.
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
+            from shared.daily_pacer import get_pace_directive
+            d = get_pace_directive("POST")
+            logger.info(f"[pacer] POST target={d['target']} actual={d['actual']} expected={d['expected_now']} action={d['action']} reason={d['reason']}")
+            if d["action"] == "stop":
+                logger.warning(f"[pacer] POST stop: {d['reason']}")
+                qm.close()
+                return self._make_summary(0, 0, 0, 0, {}, 0, True, d["reason"])
+            # この batch の上限を per_cycle_target で絞る (over-shoot 防止)
+            pacer_target = d["per_cycle_target"]
+            if pacer_target < target_count:
+                logger.info(f"[pacer] target_count {target_count} -> {pacer_target} (pacer per_cycle)")
+                target_count = pacer_target
+        except Exception as e:
+            logger.warning(f"[pacer] POST disabled (fallback to {target_count}): {e}")
         self._cap = cap
         self._cap_remaining_at_start = cap_remaining
         self._today_posted_before = today_posted_before

@@ -326,10 +326,28 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", type=int, default=100)
     ap.add_argument("--duration-min", type=int, default=15)
+    ap.add_argument("--ignore-pacer", action="store_true", help="daily_pacer の自動 stop/target を無視")
     args = ap.parse_args()
 
     deadline = time.time() + args.duration_min * 60
     target = args.target
+
+    # 2026-05-14 CEO 指示「目標多すぎても少なすぎても NG・自動是正」:
+    # daily_pacer に問合せ・action=stop なら exit, run なら per_cycle_target で上書き.
+    if not args.ignore_pacer:
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+            from shared.daily_pacer import get_pace_directive
+            d = get_pace_directive("FOLLOW")
+            logger.info(f"[pacer] {d['fn']} target={d['target']} actual={d['actual']} expected_now={d['expected_now']} action={d['action']} reason={d['reason']}")
+            if d["action"] == "stop":
+                logger.info(f"[pacer] stop: {d['reason']}")
+                return 0
+            # per_cycle_target でこの cycle の上限を上書き
+            target = max(1, d["per_cycle_target"])
+            logger.info(f"[pacer] target overridden by pacer: {args.target} → {target}")
+        except Exception as e:
+            logger.warning(f"[pacer] failed (fallback to args.target {args.target}): {e}")
 
     print(f"[startup] argparse OK target={target} duration={args.duration_min}min", flush=True)
 
