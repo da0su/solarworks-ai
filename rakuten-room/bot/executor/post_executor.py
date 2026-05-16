@@ -257,32 +257,54 @@ class PostExecutor:
             except Exception as e:
                 logger.warning(f"COLLECT_ERROR_PATTERNS check 例外 (握りつぶさず継続): {e}")
 
-            # (A) URL 離脱を決定的待機 (wait_for_url 15s)
+            # 2026-05-16 Codex review 3 回目で重大バグ発見:
+            # 初期 URL が /mix?itemcode=... (pathname=/mix) のため
+            # wait_for_function("!location.pathname.includes('/mix/collect')") は即 true で待機ゼロ.
+            # 修正: 初期 URL を保持・URL 自体の変化 + 許容パスへの遷移を待機.
+
+            # (A) submit click 直前の URL を記録 (mix_url) - 「異なる URL に遷移」を待機条件に
+            mix_url_snapshot = self.page.url
+
+            # (B) URL 変化を決定的待機 (initial URL から変化するまで・30s)
             try:
-                self.page.wait_for_url(
-                    lambda url: "/mix/collect" not in url,
-                    timeout=15000,
+                self.page.wait_for_function(
+                    "(initial) => window.location.href !== initial",
+                    arg=mix_url_snapshot,
+                    timeout=30000,
                 )
             except Exception:
                 final_url = self.page.url
-                if "/mix/collect" in final_url:
-                    result["error"] = f"投稿未完了 (URL still /mix/collect after 15s): {final_url[:80]}"
-                    logger.error(f"投稿未完了: 15s 待機しても URL /mix/collect 残留 = submit failed")
-                    result["screenshots"].append(str(self.bm.take_screenshot("06_not_submitted")))
-                    return result
-
-            # (B) 離脱したが、room.rakuten.co.jp 配下に遷移していなければ failed
-            #     (エラー画面 / 中間ページ / 別ドメイン リダイレクト も failed 扱い)
-            from urllib.parse import urlparse
-            final_url = self.page.url
-            parsed = urlparse(final_url)
-            if parsed.hostname != "room.rakuten.co.jp":
-                result["error"] = f"投稿後 不明な URL: {final_url[:120]}"
-                logger.error(f"投稿失敗: URL が room.rakuten.co.jp 外 ({parsed.hostname})")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_unknown_redirect")))
+                result["error"] = f"投稿未完了 (URL unchanged 30s): {final_url[:100]}"
+                logger.error(f"投稿未完了: 30s 経過しても URL が変化せず ({mix_url_snapshot} → {final_url})")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_url_unchanged")))
                 return result
 
-            # room_url 必須 (None なら success と認めない)
+            # (C) 遷移先 URL の妥当性確認:
+            #     1) 許容ホスト (room.rakuten.co.jp 系)
+            #     2) 禁止パス (/mix /collect /common/error) は failure
+            from urllib.parse import urlparse
+            ALLOWED_HOSTS = {"room.rakuten.co.jp", "sp.room.rakuten.co.jp"}
+            FORBIDDEN_PATH_KEYWORDS = ["/mix", "/collect", "/common/error", "/error"]
+            final_url = self.page.url
+            parsed = urlparse(final_url)
+            if parsed.hostname not in ALLOWED_HOSTS:
+                result["error"] = f"投稿後 不明なホスト: {final_url[:120]}"
+                logger.error(f"投稿失敗: ホスト {parsed.hostname} が {ALLOWED_HOSTS} 外")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_bad_host")))
+                return result
+            for forbidden in FORBIDDEN_PATH_KEYWORDS:
+                if forbidden in parsed.path:
+                    result["error"] = f"投稿後 禁止パス遷移: {final_url[:120]}"
+                    logger.error(f"投稿失敗: パス {parsed.path} に禁止キーワード '{forbidden}'")
+                    result["screenshots"].append(str(self.bm.take_screenshot("06_forbidden_path")))
+                    return result
+
+            # (D) final_url 必須・http 開始 check
+            if not final_url or not final_url.startswith("http"):
+                result["error"] = f"投稿後 final_url 不正: {final_url}"
+                logger.error(f"投稿失敗: final_url 不正")
+                return result
+
             result["room_url"] = final_url
             result["success"] = True
             logger.info(f"投稿成功! room_url: {final_url}")

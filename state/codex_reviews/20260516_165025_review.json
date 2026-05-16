@@ -1,0 +1,34 @@
+{
+  "verdict": "REVIEW_NEEDED",
+  "summary": "URL 残留=failure の復活は正方向だが、成功判定/ログの厳密性と待機方法に不備があり、再び false success/false failure を招く余地が残る。",
+  "issues": [
+    "成功判定が「/mix/collect を離脱したら success」に依存し過ぎで、離脱後にエラー画面や別中間画面(非 room.rakuten.co.jp)に遷移しても success 扱いになり得る (room_url が None でも success=True のまま)。",
+    "logger.info で『投稿成功!』を出すが、room_url が None の場合でも success=True のため、運用・通知が誤誘導になる危険 (再び虚偽報告の温床)。",
+    "wait 実装が _human_delay(3-5s) のみで非決定的。回線/サーバ遅延で遷移が5秒超の場合に false failure、逆に短すぎる確認で誤判定が発生する可能性。",
+    "URL 部分一致チェックのみで DOM/ネットワークの実成功シグナルを確認していない (success toast/投稿完了要素/投稿API 201 応答 等の検証がない)。",
+    "collect 画面のエラーパターン検出が try/except pass で握りつぶされるため、セレクタ取得失敗や body 取得失敗時に黙って成功側へ流れるリスク。",
+    "final_url ベースの判定に依存しつつ、room_url が未取得の成功ケースを許容しており、DB/スプシ側の『達成』計上ロジックが再び崩れる危険がある。"
+  ],
+  "suggestions": [
+    "成功条件を二段階に強化: (A) /mix/collect を離脱 AND (B) 以下いずれか必須: room.rakuten.co.jp の投稿詳細URLに遷移、または『投稿完了』系 DOM トースト/要素の存在確認、または投稿API/GraphQL の 2xx(201) レスポンス検知。B 不成立なら failed 扱いにする。",
+    "room_url が None の場合は success=True にしない。必ず failed とし error_type='no_room_url_after_post' 等で明示。ログも『成功』ではなく『未確定/失敗』として出力する。",
+    "待機は _human_delay ではなく page.wait_for_url(lambda/url=... '/mix/collect' を含まない, timeout=15-20s) など決定的な待機に変更し、タイムアウト時は failed。SPA の場合は wait_for_function で DOM 変化/完了トーストを待つ。",
+    "collect エラーパターン検出の try/except で握りつぶさず、例外は logger.warning/debug に記録して判定を継続。少なくとも検出不能を気づけるようにする。",
+    "ログ/通知整備: 『投稿成功!』は room_url 取得時にのみ出す。success 判定前に出さない。Slack 連携がある場合は成功時限定・集約して過剰通知を防ぐ。",
+    "URL 判定は urlparse で path を評価し、将来のクエリ付替えに頑健化。必要なら allow-list の成功パスを導入。",
+    "回帰防止: この URL 離脱+成功シグナル検証の E2E テストを追加し、/mix/collect 残留時は failed になること、room_url なしで success にならないことを CI で担保。",
+    "DB 修正(450件の status 反転)は一括更新前に dry-run/影響件数ロギングを行い、通知は1件ずつではなく集約報告に限定。エラー種別用の index/enum 整合も確認。"
+  ],
+  "risks": [
+    "離脱後にエラー/中間ページへ遷移したケースを success と誤判定し、再度 false success を生むリスク。",
+    "ネットワーク遅延で 3-5 秒内に離脱しない正常ケースを false failure と誤判定するリスク。",
+    "room_url なし成功ログにより、運用側が『達成』と誤認するリスク (再発時の信用失墜)。",
+    "例外握りつぶしにより、実際にはエラーページでも検出できず成功扱いに流れるリスク。",
+    "Rakuten 側のパス変更/SPA 遷移仕様変更で substring 判定が陳腐化し、検知漏れ・誤判定が発生するリスク。",
+    "DB 一括訂正や再実行で Slack 通知やリトライが過剰発火し、運用ノイズ・二次障害を引き起こすリスク。"
+  ],
+  "raw": "{\n    \"verdict\": \"REVIEW_NEEDED\",\n    \"summary\": \"URL 残留=failure の復活は正方向だが、成功判定/ログの厳密性と待機方法に不備があり、再び false success/false failure を招く余地が残る。\",\n    \"issues\": [\n        \"成功判定が「/mix/collect を離脱したら success」に依存し過ぎで、離脱後にエラー画面や別中間画面(非 room.rakuten.co.jp)に遷移しても success 扱いになり得る (room_url が None でも success=True のまま)。\",\n        \"logger.info で『投稿成功!』を出すが、room_url が None の場合でも success=True のため、運用・通知が誤誘導になる危険 (再び虚偽報告の温床)。\",\n        \"wait 実装が _human_delay(3-5s) のみで非決定的。回線/サーバ遅延で遷移が5秒超の場合に false failure、逆に短すぎる確認で誤判定が発生する可能性。\",\n        \"URL 部分一致チェックのみで DOM/ネットワークの実成功シグナルを確認していない (success toast/投稿完了要素/投稿API 201 応答 等の検証がない)。\",\n        \"collect 画面のエラーパターン検出が try/except pass で握りつぶされるため、セレクタ取得失敗や body 取得失敗時に黙って成功側へ流れるリスク。\",\n        \"final_url ベースの判定に依存しつつ、room_url が未取得の成功ケースを許容しており、DB/スプシ側の『達成』計上ロジックが再び崩れる危険がある。\"\n    ],\n    \"suggestions\": [\n        \"成功条件を二段階に強化: (A) /mix/collect を離脱 AND (B) 以下いずれか必須: room.rakuten.co.jp の投稿詳細URLに遷移、または『投稿完了』系 DOM トースト/要素の存在確認、または投稿API/GraphQL の 2xx(201) レスポンス検知。B 不成立なら failed 扱いにする。\",\n        \"room_url が None の場合は success=True にしない。必ず failed とし error_type='no_room_url_after_post' 等で明示。ログも『成功』ではなく『未確定/失敗』として出力する。\",\n        \"待機は _human_delay ではなく page.wait_for_url(lambda/url=... '/mix/collect' を含まない, timeout=15-20s) など決定的な待機に変更し、タイムアウト時は failed。SPA の場合は wait_for_function で DOM 変化/完了トーストを待つ。\",\n        \"collect エラーパターン検出の try/except で握りつぶさず、例外は logger.warning/debug に記録して判定を継続。少なくとも検出不能を気づけるようにする。\",\n        \"ログ/通知整備: 『投稿成功!』は room_url 取得時にのみ出す。success 判定前に出さない。Slack 連携がある場合は成功時限定・集約して過剰通知を防ぐ。\",\n        \"URL 判定は urlparse で path を評価し、将来のクエリ付替えに頑健化。必要なら allow-list の成功パスを導入。\",\n        \"回帰防止: この URL 離脱+成功シグナル検証の E2E テストを追加し、/mix/collect 残留時は failed になること、room_url なしで success にならないことを CI で担保。\",\n        \"DB 修正(450件の status 反転)は一括更新前に dry-run/影響件数ロギングを行い、通知は1件ずつではなく集約報告に限定。エラー種別用の index/enum 整合も確認。\"\n    ],\n    \"risks\": [\n        \"離脱後にエラー/中間ページへ遷移したケースを success と誤判定し、再度 false success を生むリスク。\",\n        \"ネットワーク遅延で 3-5 秒内に離脱しない正常ケースを false failure と誤判定するリスク。\",\n        \"room_url なし成功ログにより、運用側が『達成』と誤認するリスク (再発時の信用失墜)。\",\n        \"例外握りつぶしにより、実際にはエラーページでも検出できず成功扱いに流れるリスク。\",\n        \"Rakuten 側のパス変更/SPA 遷移仕様変更で substring 判定が陳腐化し、検知漏れ・誤判定が発生するリスク。\",\n        \"DB 一括訂正や再実行で Slack 通知やリトライが過剰発火し、運用ノイズ・二次障害を引き起こすリスク。\"\n    ]\n}",
+  "timestamp": "2026-05-16T16:50:25",
+  "context": "URL check 再導入 (5/12 8f34a76 で誤撤去・5日間虚偽報告発生・CEO 指摘で復元)\ncommit message:\nfix(post_executor): URL check 再導入 (5/16 CEO 「投稿はずっと 0 のはず・嘘はよくない」指摘)\n\n【CEO 指摘 (5/16 17:00)】\nスプシでは 5/14-5/16 で POST 60件/日 達成と記録. 私が「100% 達成」と虚偽報告.\n実態は Rakuten ROOM 商品数 3500 (5/10 と同じ) → 5日間 0件投稿.\n\n【真因 (私の重大ミス)】\n- 5/10 commit de0d8bd で URL 残留 = failure 判定を導入 (CEO 指摘の正解実装)\n- 5/12 commit 8f34a76 で 私が「過剰反応」と勘違いし URL check を撤去 (重大ミス)\n- 以降 5/12-5/16 で 450件の false success が DB に記録\n- スプシに「達成」と表示され CEO に虚偽報告\n\n【即修正】\n1. post_executor.py: URL 離脱判定を復活 (de0d8bd ロジック復活)\n   - /mix/collect 残留時 3-5s wait 再 check → 残留なら failed return\n2. DB post_queue: 5/12-5/16 の false success 450件を status='failed' に更新\n   - error_type='false_success_url_residue'\n3. スプシ C列 5/12-5/16 を 0 に修正\n   - 累計 N列 (formula 自動計算) も Rakuten 公式 3500 と完全一致確認\n\n【教訓】\n- CEO の指摘した既存 fix を「過剰反応」と判断して撤去しない (検証なし変更禁止)\n- 累積数値は必ず Rakuten 公式と照合してから「達成」と報告する\n- スプシ「達成」表示を盲信せず、Rakuten 側の真の数値を verify\n\n",
+  "model": "gpt-5"
+}

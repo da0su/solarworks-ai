@@ -1,0 +1,33 @@
+{
+  "verdict": "REJECT",
+  "summary": "mix フロー用の成功待機ロジックが機能せず false success を誘発。collect 周辺の未整理コード（未定義定数/相対 import）も残存しランタイムエラー懸念。",
+  "issues": [
+    "成功待機 (URL 離脱) が誤実装: wait_for_function(() => !location.pathname.includes('/mix/collect')) は初期 URL が /mix?itemcode=…（pathname は '/mix'）のため即時 true となり、実質待たずに通過＝URL 残留でも success 判定になりうる（過去の「URL 残留 = failure」ガードを実質無効化）",
+    "投稿成功判定が弱い: ALLOWED_HOSTS のみで final_url を許容し、/mix 上に残留しても host 条件を満たせば success になり得る。POST_SUCCESS_INDICATORS を import しているが未使用",
+    "collect 由来の未整理コードが残存: check_collect 内で ROOM_COLLECT_URL が未定義（NameError で落ちる）。mix 方式移行後も collect 検査が壊れたまま",
+    "関数内の相対 import（from .selectors import COLLECT_ERROR_PATTERNS）が混在: 同モジュール先頭で absolute import 済みにも関わらず、関数内で相対 import を再度実行。スクリプト直実行やパッケージ解決状況により ImportError/循環依存のリスク",
+    "成功 URL のバリデーションが不十分: host 以外のパス検証がなく、/mix, /common/error, 中間ページでも success 化の余地あり",
+    "コメントと実装の乖離: 「二段階成功判定」の記述に反し、(A) の決定的待機が無効、(B) も host チェックのみで脆弱。CEO が最重視する虚偽成功を再発させる設計"
+  ],
+  "suggestions": [
+    "URL 離脱待機を mix 実 URL 基準で厳密化: 例) self.page.wait_for_function('url => location.href !== url', mix_url, timeout=30000) または wait_for_url(re.compile(r'^https://(sp\\.)?room\\.rakuten\\.co\\.jp/(?!mix)')) を用い、/mix からの離脱を必須化",
+    "成功判定を強化: 1) /mix 系でないこと, 2) POST_SUCCESS_INDICATORS（成功トースト/完了文言/投稿カード等）の DOM 検出, 3) final_url のパスをホワイトリスト（例: '^/[a-z0-9_-]+/items/|/my/.*(post|item)'}）で検証。いずれか不成立なら failure とする",
+    "「URL 残留 = failure」を復活・明文化: 30s 待機後も location.href が mix_url のまま/または pathname が '/mix' 系なら即 failure（スクショ採取・ログ出力）",
+    "collect 遺物の整理: check_collect を mix 用の事前検証に改修するか、当面は使用停止・明示的に NotImplementedError を投げる。少なくとも ROOM_COLLECT_URL 未定義を即時修正（不要なら削除）",
+    "import を統一: 関数内の相対 import を削除し、先頭の absolute import のみ使用。パッケージ前提で動かすなら sys.path hack も含め import 体系を一本化",
+    "ALLOWED_HOSTS と URL 検証ロジックをモジュール定数化し、テスト可能に。必要であれば許容パス/ホストを設定で拡張可能にする",
+    "room_url の妥当性を追加検証: 'http' 開始に加え、/mix|/collect|/common/error を禁止、想定成功パターン（ユーザページ/アイテム詳細/投稿完了ページ）にマッチさせる",
+    "失敗時には必ずスクショ・final_url・body 先頭 N 文字をログ化し、Slack 等の通知は（もし別所で行うなら）ノイズ抑制のため severity に応じたレベル制御を徹底"
+  ],
+  "risks": [
+    "投稿未完了でも success と誤判定（虚偽成功）し、CEO 要件に反する重大な信頼失墜リスク",
+    "check_collect 呼び出し時の NameError によるランタイム障害",
+    "相対 import に起因する環境差異での ImportError/循環依存",
+    "成功 URL バリデーション不備によりエラー画面/中間ページを success として計上するリスク",
+    "将来のリダイレクト先変更（新ホスト/新パス）により誤判定（要設定化）"
+  ],
+  "raw": "{\n    \"verdict\": \"REJECT\",\n    \"summary\": \"mix フロー用の成功待機ロジックが機能せず false success を誘発。collect 周辺の未整理コード（未定義定数/相対 import）も残存しランタイムエラー懸念。\",\n    \"issues\": [\n        \"成功待機 (URL 離脱) が誤実装: wait_for_function(() => !location.pathname.includes('/mix/collect')) は初期 URL が /mix?itemcode=…（pathname は '/mix'）のため即時 true となり、実質待たずに通過＝URL 残留でも success 判定になりうる（過去の「URL 残留 = failure」ガードを実質無効化）\",\n        \"投稿成功判定が弱い: ALLOWED_HOSTS のみで final_url を許容し、/mix 上に残留しても host 条件を満たせば success になり得る。POST_SUCCESS_INDICATORS を import しているが未使用\",\n        \"collect 由来の未整理コードが残存: check_collect 内で ROOM_COLLECT_URL が未定義（NameError で落ちる）。mix 方式移行後も collect 検査が壊れたまま\",\n        \"関数内の相対 import（from .selectors import COLLECT_ERROR_PATTERNS）が混在: 同モジュール先頭で absolute import 済みにも関わらず、関数内で相対 import を再度実行。スクリプト直実行やパッケージ解決状況により ImportError/循環依存のリスク\",\n        \"成功 URL のバリデーションが不十分: host 以外のパス検証がなく、/mix, /common/error, 中間ページでも success 化の余地あり\",\n        \"コメントと実装の乖離: 「二段階成功判定」の記述に反し、(A) の決定的待機が無効、(B) も host チェックのみで脆弱。CEO が最重視する虚偽成功を再発させる設計\"\n    ],\n    \"suggestions\": [\n        \"URL 離脱待機を mix 実 URL 基準で厳密化: 例) self.page.wait_for_function('url => location.href !== url', mix_url, timeout=30000) または wait_for_url(re.compile(r'^https://(sp\\\\.)?room\\\\.rakuten\\\\.co\\\\.jp/(?!mix)')) を用い、/mix からの離脱を必須化\",\n        \"成功判定を強化: 1) /mix 系でないこと, 2) POST_SUCCESS_INDICATORS（成功トースト/完了文言/投稿カード等）の DOM 検出, 3) final_url のパスをホワイトリスト（例: '^/[a-z0-9_-]+/items/|/my/.*(post|item)'}）で検証。いずれか不成立なら failure とする\",\n        \"「URL 残留 = failure」を復活・明文化: 30s 待機後も location.href が mix_url のまま/または pathname が '/mix' 系なら即 failure（スクショ採取・ログ出力）\",\n        \"collect 遺物の整理: check_collect を mix 用の事前検証に改修するか、当面は使用停止・明示的に NotImplementedError を投げる。少なくとも ROOM_COLLECT_URL 未定義を即時修正（不要なら削除）\",\n        \"import を統一: 関数内の相対 import を削除し、先頭の absolute import のみ使用。パッケージ前提で動かすなら sys.path hack も含め import 体系を一本化\",\n        \"ALLOWED_HOSTS と URL 検証ロジックをモジュール定数化し、テスト可能に。必要であれば許容パス/ホストを設定で拡張可能にする\",\n        \"room_url の妥当性を追加検証: 'http' 開始に加え、/mix|/collect|/common/error を禁止、想定成功パターン（ユーザページ/アイテム詳細/投稿完了ページ）にマッチさせる\",\n        \"失敗時には必ずスクショ・final_url・body 先頭 N 文字をログ化し、Slack 等の通知は（もし別所で行うなら）ノイズ抑制のため severity に応じたレベル制御を徹底\"\n    ],\n    \"risks\": [\n        \"投稿未完了でも success と誤判定（虚偽成功）し、CEO 要件に反する重大な信頼失墜リスク\",\n        \"check_collect 呼び出し時の NameError によるランタイム障害\",\n        \"相対 import に起因する環境差異での ImportError/循環依存\",\n        \"成功 URL バリデーション不備によりエラー画面/中間ページを success として計上するリスク\",\n        \"将来のリダイレクト先変更（新ホスト/新パス）により誤判定（要設定化）\"\n    ]\n}",
+  "timestamp": "2026-05-16T16:54:04",
+  "context": "Codex review 2回目 (REVIEW_NEEDED) を受けて wait_for_function に修正 + allowed_hosts 集合化 + room_url validation + 越境 .env 廃止. 3回目の review で最終確認.",
+  "model": "gpt-5"
+}

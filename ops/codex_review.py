@@ -60,20 +60,19 @@ verdict 基準:
 
 
 def _load_openai_key() -> str | None:
-    """OpenAI API key を環境変数 or .env files から取得."""
+    """OpenAI API key を取得 (環境変数 or 専用 .env).
+
+    Codex review 指摘 (2026-05-16): 越境 .env 走査廃止. 単一公式経路のみ.
+    """
     k = os.environ.get("OPENAI_API_KEY")
     if k:
         return k
-    for env_path in [
-        REPO_ROOT / ".env",
-        REPO_ROOT / "web-media" / "eneuru" / ".env",
-        REPO_ROOT / "web-media" / "seo" / ".env",
-        REPO_ROOT / "rakuten-room" / "bot" / ".env",
-    ]:
-        if env_path.exists():
-            for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                if line.startswith("OPENAI_API_KEY="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+    # 専用 .env のみ (越境走査廃止)
+    env_path = REPO_ROOT / "credentials" / "openai.env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("OPENAI_API_KEY="):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
     return None
 
 

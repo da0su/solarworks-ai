@@ -1,0 +1,40 @@
+{
+  "verdict": "REJECT",
+  "summary": "wait_for_url に lambda を渡しており Python Playwright では未対応＝即例外→実際は待たずに『15s 待機』と誤判定して false failure 多発の重大不具合。中間リダイレクト考慮不足・成功検証の第二段も弱い。",
+  "issues": [
+    "Python Playwright の page.wait_for_url は str/Pattern/URL を受け付けるが、lambda は未対応。現行実装は即例外→すぐ下の except へ落ちて実待機なしで URL 判定を行い『15s 待機しても残留』と誤ログを出し、成功するケースでも早期に failed 扱いになる恐れ（致命的）。",
+    "中間リダイレクト（例: r.rakuten.co.jp 経由）を許容せず、/mix/collect から離脱直後に hostname を即判定。ルーム最終ページに到達前の一時 URL を誤って failed 判定するリスクが高い。",
+    "hostname == 'room.rakuten.co.jp' のみを許容。モバイル等で sp.room.rakuten.co.jp など有効なバリアントが存在する場合に false failure を誘発。",
+    "room.rakuten.co.jp 配下であってもエラーページ/ログインページ/空ページに遷移する可能性があり、DOM/レスポンス検証が不足している（成功 UI/要素の確認や 200 ステータス検証がないため false success 余地が残る）。",
+    "15s 固定タイムアウトは遅延時に不十分な可能性。ネットワーク/サーバ側遅延で正しく成功しても failed 判定になり得る。",
+    "例外時のフローが『15s 待機した前提の文言』でログされるが、実際は待機できていない（誤解を招く監視・運用上の問題）。",
+    "ops/codex_review.py: OpenAI 依存を追加したが requirements に未明記。CI/スケジューラ環境で ImportError を誘発する可能性。",
+    "ops/codex_review.py: OPENAI_API_KEY 未設定を REJECT で返す仕様は、開発/一部 CI 実行環境で恒常的にブロックを生む。外部 API 障害やレート制限時もワークフロー停止のリスク。",
+    "ops/codex_review.py: 複数 .env を横断的に読む実装はシークレット分離の観点でリスキー（他プロジェクトの鍵を誤用/リークする温床）。",
+    "レビュー結果の保存(state/codex_reviews)にローテーション/クリーンアップがなく、長期的に肥大化する恐れ。"
+  ],
+  "suggestions": [
+    "決定的待機の実装を修正: Python では lambda ではなく re.Pattern か wait_for_function を使用。例: page.wait_for_function('!location.pathname.includes(\"/mix/collect\")', timeout=30000) または page.wait_for_url(re.compile(r'^(?!.*?/mix/collect).*$'), timeout=30000)。",
+    "中間リダイレクト考慮の二段待機に変更: (1) /mix/collect からの離脱を待機 → (2) さらに 'https://room.rakuten.co.jp/**' への到達を wait_for_url(re.compile(r'^https://room\\.rakuten\\.co\\.jp/.*'), timeout=10000, wait_until='domcontentloaded') で待機。これに失敗したら unknown redirect として failed。",
+    "許容ホストを集合で管理（例: {'room.rakuten.co.jp', 'sp.room.rakuten.co.jp'}）。将来のドメイン変更やモバイル差異を feature flag/設定化して運用で調整可能に。",
+    "URL だけでなく成功の決定的シグナルを DOM で検証（例: 投稿完了トースト/シェアボタン/コレクションタイトルの可視、data-testid 等）。加えて最新ナビゲーションのレスポンスステータスが 200 台であることを確認。",
+    "タイムアウトを段階的に引き上げ（例: 離脱 15–30s、ルーム着地追加 10–15s）し、総合上限（例: 45s）を設ける。実測に基づき調整可能にする。",
+    "例外経路のログを正確化（『wait_for_url 非対応のため未待機』等）し、監視ノイズ/誤解を回避。",
+    "openai 依存を requirements(dev) に明記しバージョンを固定。ops 用であることを README/ヘルプに記載し、本番実行経路から除外。",
+    "codex_review のゲートは『保護ブランチの CI のみ必須』に限定し、ローカル/一部 CI では --soft や環境変数で寛容モード（キー未設定/API 障害時は REVIEW_NEEDED かつ exit 0 など）を提供。",
+    "OPENAI_API_KEY の探索は単一の公式経路（環境変数 or 明示指定ファイル）のみに絞る。越境 .env 走査は廃止。",
+    "state/codex_reviews のローテーション（世代管理/日数ベース削除）を実装。"
+  ],
+  "risks": [
+    "現状の wait_for_url(lambda ...) は即例外→実待機せずに失敗判定するため、大量の false failure を生み、実投稿を無駄にブロックする重大リスク。",
+    "中間リダイレクトを許容しないため、適切な最終到達前に failed となり、成功を失敗としてカウントする危険（信頼性・統計の毀損）。",
+    "room.rakuten.co.jp 配下でもエラーページを成功と誤認する余地が残る（URL だけの判定の限界）。",
+    "外部 AI 依存が CI/開発フローを停止させるリスク（キー未設定・API 障害・レート制限・モデル非対応）。",
+    "シークレット探索の過広範囲化による誤用/漏洩のリスク。",
+    "レビューファイルの無制限蓄積によるストレージ圧迫。"
+  ],
+  "raw": "{\n    \"verdict\": \"REJECT\",\n    \"summary\": \"wait_for_url に lambda を渡しており Python Playwright では未対応＝即例外→実際は待たずに『15s 待機』と誤判定して false failure 多発の重大不具合。中間リダイレクト考慮不足・成功検証の第二段も弱い。\",\n    \"issues\": [\n        \"Python Playwright の page.wait_for_url は str/Pattern/URL を受け付けるが、lambda は未対応。現行実装は即例外→すぐ下の except へ落ちて実待機なしで URL 判定を行い『15s 待機しても残留』と誤ログを出し、成功するケースでも早期に failed 扱いになる恐れ（致命的）。\",\n        \"中間リダイレクト（例: r.rakuten.co.jp 経由）を許容せず、/mix/collect から離脱直後に hostname を即判定。ルーム最終ページに到達前の一時 URL を誤って failed 判定するリスクが高い。\",\n        \"hostname == 'room.rakuten.co.jp' のみを許容。モバイル等で sp.room.rakuten.co.jp など有効なバリアントが存在する場合に false failure を誘発。\",\n        \"room.rakuten.co.jp 配下であってもエラーページ/ログインページ/空ページに遷移する可能性があり、DOM/レスポンス検証が不足している（成功 UI/要素の確認や 200 ステータス検証がないため false success 余地が残る）。\",\n        \"15s 固定タイムアウトは遅延時に不十分な可能性。ネットワーク/サーバ側遅延で正しく成功しても failed 判定になり得る。\",\n        \"例外時のフローが『15s 待機した前提の文言』でログされるが、実際は待機できていない（誤解を招く監視・運用上の問題）。\",\n        \"ops/codex_review.py: OpenAI 依存を追加したが requirements に未明記。CI/スケジューラ環境で ImportError を誘発する可能性。\",\n        \"ops/codex_review.py: OPENAI_API_KEY 未設定を REJECT で返す仕様は、開発/一部 CI 実行環境で恒常的にブロックを生む。外部 API 障害やレート制限時もワークフロー停止のリスク。\",\n        \"ops/codex_review.py: 複数 .env を横断的に読む実装はシークレット分離の観点でリスキー（他プロジェクトの鍵を誤用/リークする温床）。\",\n        \"レビュー結果の保存(state/codex_reviews)にローテーション/クリーンアップがなく、長期的に肥大化する恐れ。\"\n    ],\n    \"suggestions\": [\n        \"決定的待機の実装を修正: Python では lambda ではなく re.Pattern か wait_for_function を使用。例: page.wait_for_function('!location.pathname.includes(\\\"/mix/collect\\\")', timeout=30000) または page.wait_for_url(re.compile(r'^(?!.*?/mix/collect).*$'), timeout=30000)。\",\n        \"中間リダイレクト考慮の二段待機に変更: (1) /mix/collect からの離脱を待機 → (2) さらに 'https://room.rakuten.co.jp/**' への到達を wait_for_url(re.compile(r'^https://room\\\\.rakuten\\\\.co\\\\.jp/.*'), timeout=10000, wait_until='domcontentloaded') で待機。これに失敗したら unknown redirect として failed。\",\n        \"許容ホストを集合で管理（例: {'room.rakuten.co.jp', 'sp.room.rakuten.co.jp'}）。将来のドメイン変更やモバイル差異を feature flag/設定化して運用で調整可能に。\",\n        \"URL だけでなく成功の決定的シグナルを DOM で検証（例: 投稿完了トースト/シェアボタン/コレクションタイトルの可視、data-testid 等）。加えて最新ナビゲーションのレスポンスステータスが 200 台であることを確認。\",\n        \"タイムアウトを段階的に引き上げ（例: 離脱 15–30s、ルーム着地追加 10–15s）し、総合上限（例: 45s）を設ける。実測に基づき調整可能にする。\",\n        \"例外経路のログを正確化（『wait_for_url 非対応のため未待機』等）し、監視ノイズ/誤解を回避。\",\n        \"openai 依存を requirements(dev) に明記しバージョンを固定。ops 用であることを README/ヘルプに記載し、本番実行経路から除外。\",\n        \"codex_review のゲートは『保護ブランチの CI のみ必須』に限定し、ローカル/一部 CI では --soft や環境変数で寛容モード（キー未設定/API 障害時は REVIEW_NEEDED かつ exit 0 など）を提供。\",\n        \"OPENAI_API_KEY の探索は単一の公式経路（環境変数 or 明示指定ファイル）のみに絞る。越境 .env 走査は廃止。\",\n        \"state/codex_reviews のローテーション（世代管理/日数ベース削除）を実装。\"\n    ],\n    \"risks\": [\n        \"現状の wait_for_url(lambda ...) は即例外→実待機せずに失敗判定するため、大量の false failure を生み、実投稿を無駄にブロックする重大リスク。\",\n        \"中間リダイレクトを許容しないため、適切な最終到達前に failed となり、成功を失敗としてカウントする危険（信頼性・統計の毀損）。\",\n        \"room.rakuten.co.jp 配下でもエラーページを成功と誤認する余地が残る（URL だけの判定の限界）。\",\n        \"外部 AI 依存が CI/開発フローを停止させるリスク（キー未設定・API 障害・レート制限・モデル非対応）。\",\n        \"シークレット探索の過広範囲化による誤用/漏洩のリスク。\",\n        \"レビューファイルの無制限蓄積によるストレージ圧迫。\"\n    ]\n}",
+  "timestamp": "2026-05-16T16:52:34",
+  "context": "ChatGPT Codex の review (REVIEW_NEEDED) を受けて二段階成功判定 + wait_for_url 決定的待機 + urlparse hostname check + room_url 必須化 を実装. これでも残課題ある?\ncommit message:\nfeat(codex+post): ChatGPT (GPT-5) Codex 連携 + post_executor 2段階成功判定\n\nCEO 5/16 指示「君一人では信頼できない。ChatGPT Codex と連携してブラッシュアップ」\n\n【新規】 ops/codex_review.py\nGPT-5 を critical reviewer として呼び出すツール.\nusage:\n  python ops/codex_review.py --commit HEAD\n  python ops/codex_review.py --file <path>\n  python ops/codex_review.py --diff \"...\"\n出力: state/codex_reviews/<timestamp>.json\nverdict: APPROVE / REVIEW_NEEDED / REJECT\n\n【初回 review 結果】 commit a5c2272 (URL check 復活) を Codex に投げ:\n  → REVIEW_NEEDED (改善 6 issues + 8 suggestions)\n  主な指摘:\n    1. URL 離脱だけでは不十分 (エラー画面/別ドメインも離脱として扱われる)\n    2. room_url=None でも success=True → 再び false success の温床\n    3. _human_delay 非決定的 - wait_for_url で確定待機すべき\n    4. except pass で握りつぶし\n    5. 「投稿成功!」ログは room_url 確定時のみ\n\n【post_executor 改善 (Codex 提案反映)】\n1. wait_for_url(lambda url: \"/mix/collect\" not in url, timeout=15000) で\n   決定的離脱待機\n2. urlparse で hostname == \"room.rakuten.co.jp\" を check\n   (エラー画面 / 別ドメインリダイレクトを排除)\n3. room_url 必須 - None なら success とせず failed\n4. 例外 try/except pass → warning ログで握りつぶさない\n\nこれで「URL 離脱したけど別ページ/エラー」を false success と認識する\n従来の隙間を塞いだ.\n\n【今後の運用】 重要 commit は Codex review を通してから push する.\n\n",
+  "model": "gpt-5"
+}
