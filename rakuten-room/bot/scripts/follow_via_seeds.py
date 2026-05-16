@@ -351,6 +351,39 @@ def main():
 
     print(f"[startup] argparse OK target={target} duration={args.duration_min}min", flush=True)
 
+    # Codex 5/16 9回目 review 反映 #7: rate gate を ブラウザ起動前 にチェック (無駄リソース回避)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    try:
+        from shared.follow_rate_gate import (
+            get_status as _rate_status,
+            update_heartbeat as _hb_update,
+            GateError,
+            EXIT_RATE_LIMITED_NOOP,
+            EXIT_RATE_LIMITED_PARTIAL,
+            EXIT_GATE_INIT_ERROR,
+        )
+    except Exception as e:
+        # import 自体が失敗 → fail-closed (Codex #2 反映で import 例外は無いはずだが念のため)
+        logger.error(f"[rate_gate] import failed (fail-closed): {e}")
+        return 21
+
+    try:
+        _initial_gate = _rate_status()
+        logger.info(f"[rate_gate] today={_initial_gate['today']}/{_initial_gate['daily_cap']}, last_hour={_initial_gate['last_hour']}/{_initial_gate['hourly_cap']}")
+        if not _initial_gate["can_follow"]:
+            logger.warning(
+                f"[rate_gate] RATE LIMITED before browser start: hourly={_initial_gate['last_hour']}/{_initial_gate['hourly_cap']}, "
+                f"daily={_initial_gate['today']}/{_initial_gate['daily_cap']} → noop exit ({EXIT_RATE_LIMITED_NOOP})"
+            )
+            _hb_update("rate_limited_noop", problem=False,
+                       hourly_count=_initial_gate["last_hour"],
+                       daily_count=_initial_gate["today"])
+            return EXIT_RATE_LIMITED_NOOP
+    except GateError as e:
+        logger.error(f"[rate_gate] init error (fail-closed): {e}")
+        _hb_update("gate_init_error", problem=True, error=str(e)[:200])
+        return EXIT_GATE_INIT_ERROR
+
     seeds = load_seeds()
     already = load_followed_history()
     logger.info(f"seeds={len(seeds)} already_followed={len(already)} target={target} duration_min={args.duration_min}")
@@ -436,6 +469,17 @@ def main():
 
     logger.info(f"=== candidate pool: {len(candidate_pool)} fresh ===")
 
+    # Codex 5/16 9回目 review 反映 v3: exit_code 一貫管理 (Codex #3)
+    from shared.follow_rate_gate import (
+        can_follow as _rate_can_follow,
+        record_follow as _rate_record,
+        get_status as _rate_status,
+    )
+    # _hb_update, GateError, EXIT_* は main 上部で既に import 済 (early gate check で使用)
+    exit_code = 0  # 0=ok, 20=rate_limited_noop, 21=gate_init_err
+
+    _hb_update("follow_loop_start", problem=False)
+
     # Follow loop
     t_start = time.time()
     for username in candidate_pool:
@@ -447,24 +491,56 @@ def main():
             break
         if username in already:
             continue
+        # 各 follow 直前 cap recheck (Codex 8回目 #2 + 10回目 #1: partial 区別)
+        try:
+            if not _rate_can_follow():
+                _st = _rate_status()
+                logger.warning(f"[rate_gate] cap mid-loop: hourly={_st['last_hour']}, daily={_st['today']} → stop")
+                _hb_update("rate_limited_midloop", problem=False,
+                           success_so_far=success,
+                           hourly_count=_st["last_hour"], daily_count=_st["today"])
+                # success==0 → NOOP (20), success>0 → PARTIAL (22). 虚偽成功 0 を排除.
+                exit_code = EXIT_RATE_LIMITED_NOOP if success == 0 else EXIT_RATE_LIMITED_PARTIAL
+                break
+        except GateError as e:
+            logger.error(f"[rate_gate] mid-loop error (fail-closed): {e}")
+            _hb_update("gate_error_midloop", problem=True,
+                       success_so_far=success, error=str(e)[:200])
+            exit_code = EXIT_GATE_INIT_ERROR
+            break
 
         status, reason = follow_one(bm, username)
         if status == "success":
             success += 1
             already.add(username)
             append_followed(username, username)
+            try:
+                _rate_record()  # lock + recheck (GateError 可能)
+            except GateError as e:
+                logger.warning(f"[rate_gate] record_follow lock cap reached: {e} → stop")
+                _hb_update("rate_limited_record", problem=False,
+                           success_so_far=success, error=str(e)[:200])
+                # Codex 10回目 #1: success>0 でも非0で報告 (虚偽成功 0 排除)
+                exit_code = EXIT_RATE_LIMITED_PARTIAL
+                break
             elapsed = time.time() - t_start
             rate = success / max(elapsed/60, 0.01)
             logger.info(f"[{success}/{target}] OK {username} ({elapsed:.0f}s, {rate:.1f}/min)")
+            if success % 5 == 0:
+                _hb_update("follow_running", problem=False,
+                           seed=username, success_so_far=success)
         elif status == "skipped":
             skipped += 1
             already.add(username)
-            # 2026-05-10: Rakuten 側で既フォロー判定なら永続化 (次 trigger で同じ user を skip しないため)
             if reason and "already_following" in str(reason):
                 append_followed(username, username, source="skip_discover")
         else:
             failed += 1
             logger.warning(f"failed {username}: {reason}")
+
+    _hb_update("follow_done", problem=False,
+               success_total=success, skipped=skipped, failed=failed,
+               exit_code=exit_code)
 
     bm.stop()
 
@@ -477,8 +553,9 @@ def main():
     logger.info(f"elapsed: {elapsed:.0f}s ({elapsed/60:.1f}min)")
     logger.info(f"rate: {success/max(elapsed/60, 0.01):.1f} follow/min")
     logger.info(f"achievement: {success}/{target} = {success*100/target:.0f}%")
+    logger.info(f"exit_code: {exit_code}")
     logger.info("=" * 60)
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
