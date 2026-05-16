@@ -230,6 +230,50 @@ def test_pet_food_explicit_ng():
     assert status == "fail"
 
 
+# === CEO 5/16 「手軽に買いやすい」5000円 line + 全面推奨 ===
+def test_otsuyokuhin_boost():
+    """お取り寄せ品 boost (CEO 5/16 全面推奨)"""
+    status, _ = _persona_check("お取り寄せ プリン 6個セット 高級")
+    assert status == "boost"
+
+def test_omiyage_boost():
+    """ご当地お土産 boost"""
+    status, _ = _persona_check("全国ご当地お土産 詰め合わせ 銘菓")
+    assert status == "boost"
+
+def test_fukubukuro_boost():
+    """訳あり福袋 boost (1980円 案件)"""
+    status, _ = _persona_check("訳あり 食品福袋 30品 送料無料")
+    assert status == "boost"
+
+def test_sheet_mask_boost():
+    """シートマスク 30枚 boost (CEO 5/16 OK)"""
+    status, _ = _persona_check("シートマスク 30枚 大容量 韓国")
+    assert status == "boost"
+
+def test_premium_shoyu_neutral():
+    """プレミアム醤油 (Codex 13回目 #1: 「プレミアム」は汎用 promo → 削除. 「醤油」自体は boost に未追加なので pass)
+    CEO 「手軽に買いやすい」5000円 line で十分守れる前提.
+    """
+    status, _ = _persona_check("プレミアム 醤油 厳選 国産")
+    assert status == "pass", f"プレミアム/厳選 を boost 削除後は neutral (got {status})"
+
+def test_aroma_diffuser_boost():
+    """アロマディフューザー boost (CEO 5/16 ✓)"""
+    status, _ = _persona_check("アロマディフューザー 北欧 木製")
+    assert status == "boost"
+
+def test_furusato_nouzei_ng():
+    """ふるさと納税 NG (CEO 5/16 確定 - システム複雑)"""
+    status, _ = _persona_check("ふるさと納税 海鮮セット 返礼品 10000円")
+    assert status == "fail"
+
+def test_magazine_furoku_ng():
+    """雑誌付録 NG (CEO 5/16 チェックなし)"""
+    status, _ = _persona_check("雑誌付録 コスメポーチ 限定")
+    assert status == "fail"
+
+
 if __name__ == "__main__":
     tests = [
         test_kaigo_keyword_fail, test_kaigo_chair_fail, test_senior_fail,
@@ -250,6 +294,10 @@ if __name__ == "__main__":
         test_lead_diffuser_not_pet, test_usagi_pattern_clothing_not_pet,
         test_6_year_old_boost, test_fullwidth_6_year_old_boost,
         test_pet_food_explicit_ng,
+        # CEO 5/16 「手軽に買いやすい」ルール
+        test_otsuyokuhin_boost, test_omiyage_boost, test_fukubukuro_boost,
+        test_sheet_mask_boost, test_premium_shoyu_neutral, test_aroma_diffuser_boost,
+        test_furusato_nouzei_ng, test_magazine_furoku_ng,
     ]
     failed = []
     for fn in tests:

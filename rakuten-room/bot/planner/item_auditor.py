@@ -225,6 +225,34 @@ def audit_single(item: dict, check_url: bool = True) -> dict:
         result["persona_boost"] = True
         result["persona_reason"] = persona_reason
 
+    # --- Check 4.6: 価格 cap check (CEO 5/16 「手軽に買いやすい」5000円 line) ---
+    # 通常品 5000円超 = fail / boost 一致品は 15000円まで許容 / 30000円超 はどんな品でも fail
+    cap_normal = getattr(config, "PERSONA_PRICE_CAP_NORMAL", 5000)
+    cap_boosted = getattr(config, "PERSONA_PRICE_CAP_BOOSTED", 15000)
+    cap_hard = getattr(config, "PERSONA_PRICE_CAP_HARD", 30000)
+    if price and price > 0:
+        if price > cap_hard:
+            result["audit_result"] = "fail"
+            result["fail_reason"] = f"価格 hard cap 超過: {price:,}円 > {cap_hard:,}円 (どの商品も NG)"
+            result["checks"]["price_cap"] = "fail_hard"
+            return result
+        if result["persona_boost"]:
+            # boost 一致 → 15000円まで許容
+            if price > cap_boosted:
+                result["audit_result"] = "fail"
+                result["fail_reason"] = f"価格 boosted cap 超過: {price:,}円 > {cap_boosted:,}円 (boost 一致でも上限)"
+                result["checks"]["price_cap"] = "fail_boosted"
+                return result
+            result["checks"]["price_cap"] = "pass_boosted"
+        else:
+            # 通常品 → 5000円まで
+            if price > cap_normal:
+                result["audit_result"] = "fail"
+                result["fail_reason"] = f"価格 cap 超過: {price:,}円 > {cap_normal:,}円 (手軽ライン超え)"
+                result["checks"]["price_cap"] = "fail_normal"
+                return result
+            result["checks"]["price_cap"] = "pass_normal"
+
     # --- Check 5: 価格チェック（CEO判断 2026-03-20: 異常値はfail） ---
     if price and (price < 100 or price > 500000):
         result["audit_result"] = "fail"
