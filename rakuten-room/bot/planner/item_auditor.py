@@ -34,23 +34,15 @@ AUDIT_RESULTS_PATH = config.AUDIT_RESULTS_PATH
 # --- 監査 NGパターン ---
 
 # タイトルにこれらが含まれる → fail（商品本体ではない可能性が高い）
+# 2026-04-09 Phase 1-1 修正: クーポン/ポイント/エントリー等は通常商品にも頻出するため大幅に絞り込み
+# 「商品ページではないバナー/告知ページ」を狙い撃ちするパターンだけを残す
 TITLE_FAIL_PATTERNS = [
-    r"クーポン",
-    r"ポイント\d+倍",
-    r"セール開催中",
-    r"バナー",
-    r"お買い物マラソン",
-    r"スーパーSALE",
-    r"エントリー",
-    r"まとめ買い.*クーポン",
-    r"LINE友だち",
-    r"メルマガ",
-    r"店内全品",
-    r"全商品対象",
-    r"\d+%OFF.*クーポン",
-    r"プレミアム会員",
-    r"レビュー.*特典",
-    r"おまけ付き",
+    r"^クーポン",                       # タイトル先頭がクーポン = クーポン専用ページ
+    r"クーポン(?:配布終了|発行停止)",   # クーポン施策の終了告知
+    r"^バナー",                         # タイトル先頭がバナー = バナー画像ページ
+    r"^エントリー(?:はこちら|受付)",    # エントリー告知ページ（通常商品の「エントリー必要」とは区別）
+    r"LINE友だち追加",                  # LINE誘導専用ページ
+    r"メルマガ(?:登録|配信)",           # メルマガ誘導専用ページ
 ]
 
 # タイトルにこれらが含まれる → pass扱い（CEO判断 2026-03-20: 投稿OK）
@@ -71,6 +63,42 @@ INVALID_URL_PATTERNS = [
     r"point\.rakuten\.co\.jp",        # ポイントページ
     r"search\.rakuten\.co\.jp",       # 検索結果
 ]
+
+
+# --- ペルソナ check (CEO 2026-05-16 指示: 31歳・0歳新米ママ) ---
+
+def _normalize_for_persona(s: str) -> str:
+    """ペルソナ check 用 normalize (Codex 11回目 #3 反映: NFKC + lower).
+
+    『０歳』→『0歳』、『ｵﾑﾂ』→『オムツ』 等の表記ゆれを吸収.
+    """
+    if not s:
+        return ""
+    import unicodedata
+    return unicodedata.normalize("NFKC", s).lower()
+
+
+def _persona_check(title: str, comment: str = "") -> tuple[str, str]:
+    """ペルソナ NG keyword に該当すれば ('fail', reason).
+    boost keyword 含む場合は ('boost', reason).
+    どちらでもなければ ('pass', '').
+    """
+    try:
+        ng_kw = getattr(config, "PERSONA_NG_KEYWORDS", [])
+        boost_kw = getattr(config, "PERSONA_BOOST_KEYWORDS", [])
+    except Exception:
+        return ("pass", "")
+    # NFKC + lower で表記ゆれ吸収
+    text = _normalize_for_persona(f"{title or ''} {comment or ''}")
+    # NG keyword check (first match wins) - keyword 側も normalize
+    for kw in ng_kw:
+        if kw and _normalize_for_persona(kw) in text:
+            return ("fail", f"persona NG keyword '{kw}'")
+    # Boost check
+    for kw in boost_kw:
+        if kw and _normalize_for_persona(kw) in text:
+            return ("boost", f"persona boost keyword '{kw}'")
+    return ("pass", "")
 
 
 def audit_single(item: dict, check_url: bool = True) -> dict:
@@ -172,6 +200,20 @@ def audit_single(item: dict, check_url: bool = True) -> dict:
         result["checks"]["title_quality"] = "fail"
         return result
     result["checks"]["title_quality"] = "pass"
+
+    # --- Check 4.5: ペルソナ check (CEO 2026-05-16: 31歳・0歳新米ママ) ---
+    # default 値で下流 Null 安全保証 (Codex 11回目 #5 反映)
+    result["persona_boost"] = False
+    result["persona_reason"] = ""
+    persona_status, persona_reason = _persona_check(title, item.get("comment", ""))
+    result["checks"]["persona"] = persona_status
+    if persona_status == "fail":
+        result["audit_result"] = "fail"
+        result["fail_reason"] = f"persona 不一致: {persona_reason}"
+        return result
+    elif persona_status == "boost":
+        result["persona_boost"] = True
+        result["persona_reason"] = persona_reason
 
     # --- Check 5: 価格チェック（CEO判断 2026-03-20: 異常値はfail） ---
     if price and (price < 100 or price > 500000):
