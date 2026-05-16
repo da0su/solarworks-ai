@@ -28,6 +28,27 @@ from logger.logger import setup_logger
 
 logger = setup_logger()
 
+# ------------------------------------------------------------------
+# POST 成功判定 厳格 URL regex (Codex 5/16 6回目 review 指摘で tightened)
+#
+# 正規 item URL: https://(sp.)room.rakuten.co.jp/<owner>/items/<digits>
+#   - <digits> の直後は終端 / クエリ / フラグメントのみ許容
+#   - /items/<id>/like /items/<id>/edit 等の非カノニカル下位パスは不許可
+#
+# Codex 指摘で防止される false positive:
+#   - /items/123/like (いいね画面)  → match しない
+#   - /items/123/edit (編集画面)    → match しない
+#   - /mix?... (URL残留)            → 元々除外
+# ------------------------------------------------------------------
+import re as _re
+# 末尾スラッシュ '/items/123/' も許容 (本番で SP 版が trailing slash 返却する case を考慮)
+STRICT_SUCCESS_URL = _re.compile(
+    r"^https://(?:sp\.)?room\.rakuten\.co\.jp/[^/]+/items/\d+/?(?:[?#].*)?$"
+)
+# モジュール定数化 (Codex 5/16 review 指摘・一貫性 + テスト容易性)
+ALLOWED_HOSTS = {"room.rakuten.co.jp", "sp.room.rakuten.co.jp"}
+FORBIDDEN_PATH_KEYWORDS = ["/mix", "/collect", "/common/error", "/error"]
+
 
 class PostExecutor:
     """楽天ROOMへの投稿を実行するクラス"""
@@ -279,19 +300,40 @@ class PostExecutor:
                 result["screenshots"].append(str(self.bm.take_screenshot("06_url_unchanged")))
                 return result
 
-            # (C) 遷移先 URL の妥当性確認:
-            #     1) 許容ホスト (room.rakuten.co.jp 系)
-            #     2) 禁止パス (/mix /collect /common/error) は failure
+            # (C) 遷移先 URL の妥当性確認 (4段):
+            #     C-0) final_url が空/非 http(s) → 早期 fail (about:blank/chrome-error 等診断容易化)
+            #     C-1) 許容ホスト (room.rakuten.co.jp / sp.room.rakuten.co.jp)
+            #     C-2) 禁止パス (/mix /collect /common/error) は failure (診断ラベル分離維持)
+            #     C-3) 厳格 regex (モジュール定数 STRICT_SUCCESS_URL) で
+            #          正規 item URL '/items/<digits>' のみ success
+            # Codex 5/16 6/7回目 review 指摘:
+            #   - 旧 regex は /items/<id>/like /edit 等通してた → tightened
+            #   - 末尾スラッシュ '/items/123/' は許容 (Rakuten SP 版 trailing slash 対策)
+            #   - C-0 早期 http guard を復活 (about:blank 等の診断性確保)
+            #   - owner ID 一致 / HTTP 200 / DOM 完了 toast は Phase B 予定 (TODO)
             from urllib.parse import urlparse
-            ALLOWED_HOSTS = {"room.rakuten.co.jp", "sp.room.rakuten.co.jp"}
-            FORBIDDEN_PATH_KEYWORDS = ["/mix", "/collect", "/common/error", "/error"]
             final_url = self.page.url
-            parsed = urlparse(final_url)
+
+            # C-0 早期 guard: urlparse で scheme を厳密判定 (Codex 7回目 review 指摘 #2)
+            #   startswith('http') だと 'httpx://' 等も通過してしまう → 厳格判定
+            try:
+                parsed = urlparse(final_url) if final_url else None
+            except Exception:
+                parsed = None
+            if not final_url or parsed is None or parsed.scheme not in ("http", "https"):
+                result["error"] = f"投稿後 final_url 不正 scheme: {final_url!r}"
+                logger.error(f"投稿失敗: final_url '{final_url}' が http/https scheme でない")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_url_invalid_scheme")))
+                return result
+
+            # C-1 host check
             if parsed.hostname not in ALLOWED_HOSTS:
                 result["error"] = f"投稿後 不明なホスト: {final_url[:120]}"
                 logger.error(f"投稿失敗: ホスト {parsed.hostname} が {ALLOWED_HOSTS} 外")
                 result["screenshots"].append(str(self.bm.take_screenshot("06_bad_host")))
                 return result
+
+            # C-2 禁止パス check (URL 残留 / error page)
             for forbidden in FORBIDDEN_PATH_KEYWORDS:
                 if forbidden in parsed.path:
                     result["error"] = f"投稿後 禁止パス遷移: {final_url[:120]}"
@@ -299,15 +341,19 @@ class PostExecutor:
                     result["screenshots"].append(str(self.bm.take_screenshot("06_forbidden_path")))
                     return result
 
-            # (D) final_url 必須・http 開始 check
-            if not final_url or not final_url.startswith("http"):
-                result["error"] = f"投稿後 final_url 不正: {final_url}"
-                logger.error(f"投稿失敗: final_url 不正")
+            # C-3 厳格 regex check (false success 完全遮断・https/host/items形式すべて内包)
+            if not STRICT_SUCCESS_URL.match(final_url):
+                result["error"] = f"投稿後 URL が正規 item パターン不一致: {final_url[:140]}"
+                logger.error(f"投稿失敗: URL '{final_url}' が STRICT_SUCCESS_URL regex に不一致")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_url_regex_fail")))
                 return result
 
+            # TODO (Phase B): owner ID 一致確認 + HTTP 200 status check + DOM 完了 toast 確認
+            #   現状は URL regex のみで false success 防御。Phase B で 3 重判定に強化予定.
             result["room_url"] = final_url
             result["success"] = True
-            logger.info(f"投稿成功! room_url: {final_url}")
+            result["success_evidence"] = "strict_url_regex_match"
+            logger.info(f"投稿成功 (strict URL regex match)! room_url: {final_url}")
             result["screenshots"].append(str(self.bm.take_screenshot("06_success")))
 
             self.bm.save_session()
