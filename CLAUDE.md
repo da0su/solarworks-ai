@@ -16,7 +16,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 python ops/codex_review.py --commit HEAD --context "<change の背景>"
 # exit 0=APPROVE / 1=REVIEW_NEEDED / 2=REJECT
+
+python ops/codex_review.py --usage
+# 累計 + 今月の Codex 使用量を表示
 ```
+
+**【CEO 5/16 追加指示】「コーデックスで使用した場合は、使用した分を毎回報告すること」**
+- review 毎に token 数 + USD/JPY 概算 + 月次累計を CEO 報告に含める
+- 自動表示: review 実行時に USAGE/COST/MONTH/CUM を console + 保存ファイルに記録
+- ログ: `state/codex_reviews/_usage_log.jsonl`
 
 詳細: `memory/codex_review_rule.md`
 

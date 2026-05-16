@@ -35,6 +35,68 @@ REVIEWS_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL = "gpt-5"  # critical review model
 
+# CEO 指示 (2026-05-16):「Codex 使用した場合は毎回 使用分を報告」
+# 料金表 (USD / 1M tokens). 最新値は OpenAI pricing page で要確認.
+# 不明 model は input=10.0/output=30.0 で保守的概算.
+USD_PER_1M = {
+    "gpt-5":          {"input": 1.25,  "output": 10.0},
+    "gpt-5-mini":     {"input": 0.25,  "output": 2.0},
+    "gpt-4o":         {"input": 2.5,   "output": 10.0},
+    "gpt-4o-mini":    {"input": 0.15,  "output": 0.6},
+}
+USD_JPY = 155.0  # 概算 USD→JPY (毎月見直し)
+USAGE_LOG = REVIEWS_DIR / "_usage_log.jsonl"
+
+
+def _calc_cost(model: str, prompt_tokens: int, completion_tokens: int) -> dict:
+    rate = USD_PER_1M.get(model, {"input": 10.0, "output": 30.0})
+    in_usd = prompt_tokens * rate["input"] / 1_000_000
+    out_usd = completion_tokens * rate["output"] / 1_000_000
+    total_usd = in_usd + out_usd
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "input_usd": round(in_usd, 6),
+        "output_usd": round(out_usd, 6),
+        "total_usd": round(total_usd, 6),
+        "total_jpy": round(total_usd * USD_JPY, 4),
+        "rate_used": rate,
+        "usd_jpy": USD_JPY,
+    }
+
+
+def _append_usage_log(entry: dict) -> None:
+    try:
+        with USAGE_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _cumulative_usage() -> dict:
+    """USAGE_LOG を全集計 (今月 / 累計)."""
+    if not USAGE_LOG.exists():
+        return {"month_usd": 0, "month_jpy": 0, "all_usd": 0, "all_jpy": 0, "month_calls": 0, "all_calls": 0}
+    from datetime import date
+    today = date.today()
+    ym = f"{today.year:04d}-{today.month:02d}"
+    m_usd = a_usd = 0.0
+    m_calls = a_calls = 0
+    for line in USAGE_LOG.read_text(encoding="utf-8").splitlines():
+        try:
+            e = json.loads(line)
+            a_usd += e.get("total_usd", 0); a_calls += 1
+            if str(e.get("timestamp", "")).startswith(ym):
+                m_usd += e.get("total_usd", 0); m_calls += 1
+        except Exception:
+            continue
+    return {
+        "month_usd": round(m_usd, 4), "month_jpy": round(m_usd * USD_JPY, 2),
+        "all_usd": round(a_usd, 4), "all_jpy": round(a_usd * USD_JPY, 2),
+        "month_calls": m_calls, "all_calls": a_calls,
+    }
+
 SYSTEM_PROMPT = """あなたはシニア Python/Playwright/Windows Task Scheduler エキスパート コードレビュアーです。
 楽天 ROOM 自動化 bot の change を critical review します。
 重視:
@@ -108,13 +170,29 @@ def review_change(diff_text: str, context: str = "") -> dict:
         )
         raw = resp.choices[0].message.content
         data = json.loads(raw)
+        # CEO 5/16 指示: 使用 token + 概算費用を毎回記録
+        u = getattr(resp, "usage", None)
+        if u is not None:
+            usage = _calc_cost(MODEL, u.prompt_tokens, u.completion_tokens)
+        else:
+            usage = _calc_cost(MODEL, 0, 0)
     except Exception as e:
-        return {"verdict": "REVIEW_NEEDED", "summary": f"OpenAI call err: {e}", "issues": [str(e)], "suggestions": [], "risks": [], "raw": ""}
+        return {"verdict": "REVIEW_NEEDED", "summary": f"OpenAI call err: {e}", "issues": [str(e)], "suggestions": [], "risks": [], "raw": "", "usage": None}
 
+    ts = datetime.now().isoformat(timespec="seconds")
     data["raw"] = raw
-    data["timestamp"] = datetime.now().isoformat(timespec="seconds")
+    data["timestamp"] = ts
     data["context"] = context
     data["model"] = MODEL
+    data["usage"] = usage
+
+    # 使用量を _usage_log.jsonl に追記 (月次・累計 集計用)
+    _append_usage_log({
+        "timestamp": ts, "model": MODEL,
+        "context": context[:120],
+        **usage,
+    })
+    data["cumulative"] = _cumulative_usage()
 
     # 保存
     fn = REVIEWS_DIR / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_review.json"
@@ -148,9 +226,27 @@ def _print_review(r: dict):
         print("\nRISKS:")
         for i, ri in enumerate(r.get("risks", []), 1):
             print(f"  {i}. {ri}")
+    # CEO 5/16 指示: 使用量必ず報告
+    u = r.get("usage") or {}
+    c = r.get("cumulative") or {}
+    if u:
+        print(f"\nUSAGE    : tokens in={u.get('prompt_tokens',0):,} / out={u.get('completion_tokens',0):,} / total={u.get('total_tokens',0):,}")
+        print(f"COST     : ${u.get('total_usd',0):.4f} ~= JPY{u.get('total_jpy',0):.2f}  (in ${u.get('input_usd',0):.4f} + out ${u.get('output_usd',0):.4f})")
+    if c:
+        print(f"MONTH    : ${c.get('month_usd',0):.4f} ~= JPY{c.get('month_jpy',0):.2f}  ({c.get('month_calls',0)} calls 今月)")
+        print(f"CUM      : ${c.get('all_usd',0):.4f} ~= JPY{c.get('all_jpy',0):.2f}  ({c.get('all_calls',0)} calls 累計)")
     if r.get("saved_to"):
         print(f"\nSaved: {r['saved_to']}")
     print(f"{'='*60}\n")
+
+
+def print_usage_summary():
+    """累計 + 今月の Codex 使用量を表示 (毎回 review 報告 + 単独確認用)."""
+    c = _cumulative_usage()
+    print(f"\n[Codex 使用量]")
+    print(f"  今月: ${c['month_usd']:.4f} ~= JPY{c['month_jpy']:.2f}  ({c['month_calls']} calls)")
+    print(f"  累計: ${c['all_usd']:.4f} ~= JPY{c['all_jpy']:.2f}  ({c['all_calls']} calls)")
+    return c
 
 
 def main():
@@ -159,7 +255,12 @@ def main():
     ap.add_argument("--file", help="file path to review")
     ap.add_argument("--diff", help="diff text directly")
     ap.add_argument("--context", default="", help="change の背景説明")
+    ap.add_argument("--usage", action="store_true", help="累計+今月の使用量のみ表示して終了")
     args = ap.parse_args()
+
+    if args.usage:
+        print_usage_summary()
+        return 0
 
     if args.commit:
         diff, msg = _get_commit_diff(args.commit)
