@@ -233,18 +233,18 @@ class PostExecutor:
             result["screenshots"].append(str(self.bm.take_screenshot("05_submitted")))
 
             # Step 7: 投稿成功を確認
-            # 2026-05-16 CEO 指摘で正解確定 (5/12-5/16 で 300件以上の false success 発生):
-            # - 5/10 commit de0d8bd「URL 残留 = failure」判定は正しかった
-            # - 5/12 commit 8f34a76 で「過剰反応」と勘違いし URL check を撤去 → 諸悪の根源
-            # - 5/16 ROOM 商品 3500 (5/10 と同じ) = 5日間実投稿 0件 が真実
-            # 復活: URL が /mix/collect から離脱した時のみ success と判定する.
+            # 2026-05-16 CEO 指摘 + ChatGPT Codex (GPT-5) review で強化:
+            # 二段階成功判定 - 過去の false success/failure を再発しない設計.
+            #   (A) /mix/collect URL から離脱 (wait_for_url で決定的待機)
+            #   (B) AND room.rakuten.co.jp 配下の有効 URL に遷移
+            # 両方満たさない場合 failed return.
             post_error = self._check_post_error()
             if post_error:
                 result["error"] = f"投稿後エラー: {post_error}"
                 result["screenshots"].append(str(self.bm.take_screenshot("06_post_error")))
                 return result
 
-            # collect 画面 error patterns check
+            # collect 画面 error patterns check (例外も warning でログ)
             try:
                 body_text = self.page.text_content("body") or ""
                 from .selectors import COLLECT_ERROR_PATTERNS
@@ -254,26 +254,38 @@ class PostExecutor:
                         logger.error(f"投稿エラー検知: {p}")
                         result["screenshots"].append(str(self.bm.take_screenshot("06_collect_error")))
                         return result
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"COLLECT_ERROR_PATTERNS check 例外 (握りつぶさず継続): {e}")
 
-            # 2026-05-16 復活: URL 離脱判定 (de0d8bd 復活)
-            final_url = self.page.url
-            still_on_collect = "/mix/collect" in final_url
-            if still_on_collect:
-                # 5秒待って再確認 (slow redirect 対応)
-                self._human_delay(3.0, 5.0)
+            # (A) URL 離脱を決定的待機 (wait_for_url 15s)
+            try:
+                self.page.wait_for_url(
+                    lambda url: "/mix/collect" not in url,
+                    timeout=15000,
+                )
+            except Exception:
                 final_url = self.page.url
-                still_on_collect = "/mix/collect" in final_url
-            if still_on_collect:
-                result["error"] = f"投稿未完了 (URL still /mix/collect): {final_url[:80]}"
-                logger.error(f"投稿未完了: URL が /mix/collect 残留 = submit されてない")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_not_submitted")))
+                if "/mix/collect" in final_url:
+                    result["error"] = f"投稿未完了 (URL still /mix/collect after 15s): {final_url[:80]}"
+                    logger.error(f"投稿未完了: 15s 待機しても URL /mix/collect 残留 = submit failed")
+                    result["screenshots"].append(str(self.bm.take_screenshot("06_not_submitted")))
+                    return result
+
+            # (B) 離脱したが、room.rakuten.co.jp 配下に遷移していなければ failed
+            #     (エラー画面 / 中間ページ / 別ドメイン リダイレクト も failed 扱い)
+            from urllib.parse import urlparse
+            final_url = self.page.url
+            parsed = urlparse(final_url)
+            if parsed.hostname != "room.rakuten.co.jp":
+                result["error"] = f"投稿後 不明な URL: {final_url[:120]}"
+                logger.error(f"投稿失敗: URL が room.rakuten.co.jp 外 ({parsed.hostname})")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_unknown_redirect")))
                 return result
 
+            # room_url 必須 (None なら success と認めない)
+            result["room_url"] = final_url
             result["success"] = True
-            result["room_url"] = final_url if "room.rakuten.co.jp" in final_url else None
-            logger.info(f"投稿成功! URL: {final_url}")
+            logger.info(f"投稿成功! room_url: {final_url}")
             result["screenshots"].append(str(self.bm.take_screenshot("06_success")))
 
             self.bm.save_session()
