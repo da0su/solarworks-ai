@@ -462,10 +462,11 @@ PERSONA_BOOST_KEYWORDS = [
     "プチプラ", "韓国コスメ", "韓国",
     # ファッション
     "ワンピース", "カーディガン", "ナイトウェア", "ルームウェア",
-    # キッチン (時短)
-    "食洗機対応", "時短", "ワンオペ", "便利グッズ",
-    # インテリア・雑貨
-    "おしゃれ", "かわいい", "北欧", "ナチュラル", "木製",
+    # キッチン (CEO 実態確認 5/16 19:00 反映: 「時短」「便利グッズ」過剰発火 → 削除)
+    "食洗機対応", "ワンオペ",
+    # インテリア・雑貨 (CEO 実態確認 5/16 19:00 反映: 「おしゃれ」過剰発火1152件 → 削除)
+    # 残すのは「北欧」「かわいい」等の具体カテゴリ語のみ
+    "かわいい", "北欧", "ナチュラル", "木製",
     # Codex 12回目 #4 typo 修正: 「うだちライト」→ 「間接照明」
     "ペンダントライト", "間接照明",
     # マザーズバッグ・アクセサリー (CEO 5/16 追加)
@@ -514,9 +515,35 @@ PERSONA_NG_OVERRIDE_KEYWORDS = [
 PERSONA_PREFERRED_GENRES = ["baby", "kids", "beauty", "kitchen", "fashion",
                              "living", "interior", "food", "stationery", "seasonal"]
 # product_fetcher で 取得頻度を下げる genre
-# CEO 5/16: pet 完全 NG, car は genre 内 child seat 除外で deprioritize
+# CEO 5/16: pet/car/outdoor/garden は完全除外 (DEPRIORITIZED でなく EXCLUDED)
 PERSONA_DEPRIORITIZED_GENRES = ["car", "outdoor", "pet", "garden"]
 # CEO 5/16: sports は産後ケア/軽運動/ジム まで boost なので preferred 寄り (除外)
+
+# CEO 5/16 19:00 「即買い」実態確認:
+# 現状 queued ジャンル比 kitchen 23% / food 6% / baby 1.4% で偏在 →
+# 取得時から baby/food/kids を厚く取る weight 設定.
+PERSONA_GENRE_WEIGHTS = {
+    # 倍率 (default 1.0). PERSONA に合致するほど厚く取る.
+    "food":       3.0,   # 「全面推奨」CEO 指示
+    "baby":       3.0,   # 0歳児ママ persona 必須
+    "kids":       2.0,   # 入園準備等
+    "beauty":     1.5,   # ママ自分時間
+    "kitchen":    1.0,   # 標準 (既に充足)
+    "living":     1.0,
+    "fashion":    1.0,
+    "interior":   1.0,
+    "stationery": 1.0,
+    "seasonal":   1.0,
+    "book":       0.5,   # 自己啓発本など過剰気味なので半減
+    "appliance":  0.5,   # ガジェット系・5000円超多いので半減
+    "health":     0.5,
+    "sports":     0.5,
+    # 完全除外 (取得しない)
+    "pet":        0.0,
+    "car":        0.0,
+    "outdoor":    0.0,
+    "garden":     0.0,
+}
 
 
 # ============================================================

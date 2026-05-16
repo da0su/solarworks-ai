@@ -225,7 +225,7 @@ def fetch_genre_items(genre: str, keywords: list[str],
     exclude = exclude_codes or set()
     seen_codes = set()
     results = []
-    pages_per_keyword = max(1, max_per_keyword // 30)
+    pages_per_keyword = max(3, max_per_keyword // 30)  # 最低3ページ取得（90件/KW）
 
     for keyword in keywords:
         for page in range(1, pages_per_keyword + 1):
@@ -262,9 +262,20 @@ def fetch_all_genres(target_total: int = None) -> list[dict]:
     """
     target = target_total or (config.POOL_MIN + config.POOL_REPLENISH_BUFFER)
     genres = config.GENRE_SEARCH_KEYWORDS
-    per_genre = max(10, target // len(genres) + 5)
 
-    logger.info(f"=== 全ジャンル商品取得開始: 目標 {target}件 ({per_genre}件/ジャンル) ===")
+    # CEO 5/16 19:00 「即買い」実態確認反映:
+    # PERSONA_GENRE_WEIGHTS で baby/food/kids を厚く・pet/car/outdoor/garden を除外
+    weights = getattr(config, "PERSONA_GENRE_WEIGHTS", {})
+    # genre 別に必要件数を weight で配分
+    active_genres = {g: weights.get(g, 1.0) for g in genres.keys() if weights.get(g, 1.0) > 0}
+    total_weight = sum(active_genres.values())
+    # weight=0 (除外) ジャンルは取得しない
+    excluded_genres = [g for g in genres.keys() if weights.get(g, 1.0) == 0.0]
+    if excluded_genres:
+        logger.info(f"[persona_filter] 除外 genre: {excluded_genres}")
+
+    logger.info(f"=== 全ジャンル商品取得開始: 目標 {target}件 (active {len(active_genres)} ジャンル) ===")
+    logger.info(f"[persona_filter] weights: {active_genres}")
 
     # 除外コード集約
     exclude = _load_posted_item_codes() | _load_existing_item_codes()
@@ -274,7 +285,21 @@ def fetch_all_genres(target_total: int = None) -> list[dict]:
     genre_counts = {}
 
     for genre, keywords in genres.items():
-        logger.info(f"[{genre}] 取得開始 (キーワード{len(keywords)}個)")
+        # weight=0 → 完全 skip (取得しない)
+        weight = weights.get(genre, 1.0)
+        if weight <= 0:
+            genre_counts[genre] = 0
+            continue
+        # 目標達成済みなら残りジャンルをスキップ
+        if len(all_items) >= target:
+            logger.info(f"[{genre}] スキップ（目標{target}件達成済み: {len(all_items)}件）")
+            genre_counts[genre] = 0
+            continue
+
+        # weight 比率で per_genre を計算 (food/baby は 3x, pet は 0x)
+        per_genre = max(10, int(target * weight / total_weight) + 5)
+
+        logger.info(f"[{genre}] 取得開始 (weight={weight}, target={per_genre}, キーワード{len(keywords)}個)")
         items = fetch_genre_items(genre, keywords,
                                   max_per_keyword=per_genre // len(keywords) + 30,
                                   exclude_codes=exclude)
