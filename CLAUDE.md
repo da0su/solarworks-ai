@@ -2,6 +2,28 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Codex (GPT-5) Critical Review (必須・2026-05-16 CEO 指示)
+
+**「君一人では信頼できない。ChatGPT (Codex) と連携してブラッシュアップ」** (CEO 指示)
+
+以下に該当する commit は **必ず push 前に Codex review を通す**:
+1. 検証ロジック変更 (success/failure 判定, URL check 等)
+2. 既存 fix の revert / 無効化
+3. CEO 指摘で投入された commit の上書き
+4. 数値報告に影響する集計/フィルタ
+5. production bot (POST/FOLLOW/LIKE/FB) の core 動作
+
+```bash
+python ops/codex_review.py --commit HEAD --context "<change の背景>"
+# exit 0=APPROVE / 1=REVIEW_NEEDED / 2=REJECT
+```
+
+詳細: `memory/codex_review_rule.md`
+
+過去の失敗事例 (Codex があれば防げた):
+- 5/12 commit 8f34a76: URL check 撤去 → 450件 false success → 5日間虚偽報告
+- 5/16 commit 3c0e3d6: wait_for_function pathname 誤判定 (待機ゼロで通過)
+
 ## 作業完了フロー（必須・毎回実行）
 
 **重要タスクに着手するとき（最初に実行）:**
