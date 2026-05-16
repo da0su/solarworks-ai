@@ -82,19 +82,29 @@ def _persona_check(title: str, comment: str = "") -> tuple[str, str]:
     """ペルソナ NG keyword に該当すれば ('fail', reason).
     boost keyword 含む場合は ('boost', reason).
     どちらでもなければ ('pass', '').
+
+    Codex 12回目 #5 反映: override keyword (チャイルドシート 等) があれば
+    NG check を skip して boost 優先 (例: 「車載 チャイルドシート ISOFIX」)
     """
     try:
         ng_kw = getattr(config, "PERSONA_NG_KEYWORDS", [])
         boost_kw = getattr(config, "PERSONA_BOOST_KEYWORDS", [])
+        override_kw = getattr(config, "PERSONA_NG_OVERRIDE_KEYWORDS", [])
     except Exception:
         return ("pass", "")
     # NFKC + lower で表記ゆれ吸収
     text = _normalize_for_persona(f"{title or ''} {comment or ''}")
-    # NG keyword check (first match wins) - keyword 側も normalize
-    for kw in ng_kw:
-        if kw and _normalize_for_persona(kw) in text:
-            return ("fail", f"persona NG keyword '{kw}'")
-    # Boost check
+    # Override check: あれば NG skip (例: チャイルドシート は car 系 NG を override)
+    has_override = any(
+        kw and _normalize_for_persona(kw) in text
+        for kw in override_kw
+    )
+    if not has_override:
+        # NG keyword check (first match wins)
+        for kw in ng_kw:
+            if kw and _normalize_for_persona(kw) in text:
+                return ("fail", f"persona NG keyword '{kw}'")
+    # Boost check (override 経由でも 普通 check でも)
     for kw in boost_kw:
         if kw and _normalize_for_persona(kw) in text:
             return ("boost", f"persona boost keyword '{kw}'")

@@ -100,6 +100,136 @@ def test_kogu_fuyou_no_longer_fail():
     assert status in ("boost", "pass"), f"工具不要は誤爆 NG (got {status})"
 
 
+# ============================================================
+# CEO 2026-05-16 確定ルール 回帰テスト (4 ラウンドの Q&A 反映)
+# ============================================================
+
+# === NG keyword 追加 ===
+def test_pet_ng():
+    """ペット用品 完全 NG (CEO 5/16 確定)"""
+    status, _ = _persona_check("犬用 ハーネス 中型犬 散歩")
+    assert status == "fail"
+
+def test_cat_food_ng():
+    status, _ = _persona_check("キャットフード 無添加 国産")
+    assert status == "fail"
+
+def test_pramodel_ng():
+    """男性趣味ホビー NG (CEO 5/16 確定)"""
+    status, _ = _persona_check("ガンプラ 限定 RG ガンダム")
+    assert status == "fail"
+
+def test_trading_card_ng():
+    status, _ = _persona_check("ポケモン トレーディングカード 限定パック")
+    assert status == "fail"
+
+def test_dining_table_ng():
+    """大型家具 NG (CEO 5/16 確定)"""
+    status, _ = _persona_check("ダイニングテーブル 4人用 木製")
+    assert status == "fail"
+
+def test_sofa_set_ng():
+    status, _ = _persona_check("3人掛けソファ レザー L字")
+    assert status == "fail"
+
+def test_tv_board_ng():
+    status, _ = _persona_check("テレビ台 150cm ローボード")
+    assert status == "fail"
+
+def test_drive_recorder_ng():
+    """車・バイク用品 NG (CEO 5/16 確定)"""
+    status, _ = _persona_check("ドライブレコーダー 360度 前後")
+    assert status == "fail"
+
+def test_bike_helmet_ng():
+    status, _ = _persona_check("バイクヘルメット フルフェイス")
+    assert status == "fail"
+
+def test_formal_ng():
+    """ブラックフォーマル NG (CEO 5/16 OFF)"""
+    status, _ = _persona_check("ブラックフォーマル レディース 礼服 喪服")
+    assert status == "fail"
+
+# === Boost 拡張 ===
+def test_maternity_boost():
+    """マタニティ・授乳服 boost (CEO 5/16 OK)"""
+    status, _ = _persona_check("授乳服 ワンピース 産後 おしゃれ")
+    assert status == "boost"
+
+def test_yoga_boost():
+    """ヨガマット boost (CEO 5/16 軽運動 OK)"""
+    status, _ = _persona_check("ヨガマット 10mm 厚手 トレーニング")
+    assert status == "boost"
+
+def test_mothersbag_boost():
+    """マザーズバッグ boost (CEO 5/16 追加)"""
+    status, _ = _persona_check("マザーズバッグ リュック 大容量 軽量")
+    assert status == "boost"
+
+def test_baby_bed_boost():
+    """ベビーベッド boost (CEO 5/16 追加)"""
+    status, _ = _persona_check("ベビーベッド 折りたたみ コンパクト")
+    assert status == "boost"
+
+def test_smartphone_case_boost():
+    """スマホケース boost (CEO 5/16 ガジェット OK)"""
+    status, _ = _persona_check("iPhoneケース 韓国 おしゃれ")
+    assert status == "boost"
+
+def test_3yr_kid_boost():
+    """3歳児用 boost (CEO 5/16 0-6歳 OK)"""
+    status, _ = _persona_check("3歳 知育玩具 木製パズル")
+    assert status == "boost"
+
+def test_postpartum_boost():
+    """産後ケア boost (CEO 5/16 追加)"""
+    status, _ = _persona_check("骨盤ベルト 産後 リフォーマー")
+    assert status == "boost"
+
+# === 例外: チャイルドシートは boost (車用品 NG の例外) ===
+def test_child_seat_not_blocked_by_car():
+    """チャイルドシート は車関連だが boost (CEO 5/16 例外)"""
+    status, _ = _persona_check("チャイルドシート 新生児 ISOFIX")
+    assert status == "boost"
+
+
+# === Codex 12回目 review 反映 ===
+def test_child_seat_with_car_keyword_still_boost():
+    """『車載 チャイルドシート ISOFIX』は boost 優先 (override logic)"""
+    status, reason = _persona_check("車載 チャイルドシート ISOFIX 0歳")
+    assert status == "boost", f"override 効かず: {status}, {reason}"
+
+
+def test_lead_diffuser_not_pet():
+    """『リードディフューザー』はペットリードではない誤爆を防ぐ"""
+    status, _ = _persona_check("リードディフューザー アロマ 北欧")
+    assert status in ("boost", "pass"), "リードディフューザーは pet NG しない"
+
+
+def test_usagi_pattern_clothing_not_pet():
+    """『うさぎ柄 ベビーロンパース』は pet NG しない (動物柄ベビー服)"""
+    status, _ = _persona_check("うさぎ柄 ベビーロンパース 0歳")
+    assert status == "boost"
+
+
+def test_6_year_old_boost():
+    """6歳児用 boost (Codex 12回目 #3: 「6歳」追加確認)"""
+    status, _ = _persona_check("6歳 入学準備 ランドセル")
+    assert status == "boost"
+
+
+def test_fullwidth_6_year_old_boost():
+    """全角６歳 も boost (NFKC normalize)"""
+    status, _ = _persona_check("６歳 知育絵本")
+    assert status == "boost"
+
+
+def test_pet_food_explicit_ng():
+    """『ペットフード』は明示的 NG"""
+    status, _ = _persona_check("ペットフード 国産無添加 1kg")
+    assert status == "fail"
+
+
 if __name__ == "__main__":
     tests = [
         test_kaigo_keyword_fail, test_kaigo_chair_fail, test_senior_fail,
@@ -107,6 +237,19 @@ if __name__ == "__main__":
         test_baby_boost, test_mama_boost,
         test_persona_aligned_pass, test_pure_neutral_pass, test_empty_input,
         test_fullwidth_age_boost, test_halfwidth_katakana_ng, test_kogu_fuyou_no_longer_fail,
+        # CEO 5/16 確定 ルール
+        test_pet_ng, test_cat_food_ng, test_pramodel_ng, test_trading_card_ng,
+        test_dining_table_ng, test_sofa_set_ng, test_tv_board_ng,
+        test_drive_recorder_ng, test_bike_helmet_ng, test_formal_ng,
+        test_maternity_boost, test_yoga_boost, test_mothersbag_boost,
+        test_baby_bed_boost, test_smartphone_case_boost, test_3yr_kid_boost,
+        test_postpartum_boost,
+        test_child_seat_not_blocked_by_car,
+        # Codex 12回目 review 反映
+        test_child_seat_with_car_keyword_still_boost,
+        test_lead_diffuser_not_pet, test_usagi_pattern_clothing_not_pet,
+        test_6_year_old_boost, test_fullwidth_6_year_old_boost,
+        test_pet_food_explicit_ng,
     ]
     failed = []
     for fn in tests:
