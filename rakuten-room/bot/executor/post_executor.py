@@ -245,13 +245,58 @@ class PostExecutor:
                 done_btn = done_btn.first
 
             # submit click 直前 baseline 取得 (Codex 15回目 #3 反映)
-            # 「my ROOM を見る」link は完了画面で新規出現 = ヘッダー常在 link との誤検出防止
             from .selectors import POST_SUCCESS_LINK_SELECTOR as _SUCCESS_LINK_SEL
             try:
                 baseline_link_count = self.page.locator(_SUCCESS_LINK_SEL).count()
             except Exception:
                 baseline_link_count = 0
             logger.info(f"[success_check] baseline 'my ROOM を見る' link count: {baseline_link_count}")
+
+            # ==========================================================
+            # CEO 5/17 真因確定: 真の成功 = my ROOM 商品数 +1 確認 (Codex 18/19回目)
+            # Codex 19 #1: import 失敗時は graceful degrade (検証スキップで通常 toast 判定)
+            # Codex 19 #3: new_page() を try/finally で確実 close
+            # Codex 19 #7: profile health gate も統合
+            # ==========================================================
+            _fetch_my_room_fingerprint = None
+            try:
+                # repo root を sys.path に追加 (Codex 19 #1 stable import)
+                import sys as _sys
+                from pathlib import Path as _Path
+                _repo_root = _Path(__file__).resolve().parents[3]
+                if str(_repo_root) not in _sys.path:
+                    _sys.path.insert(0, str(_repo_root))
+                from shared.profile_health import fetch_my_room_fingerprint as _fetch_my_room_fingerprint
+            except Exception as _imp_e:
+                logger.warning(f"[verify+1] profile_health import 失敗 (検証スキップで toast 判定のみ): {_imp_e}")
+
+            my_room_baseline = None
+            if _fetch_my_room_fingerprint:
+                check_page = None
+                try:
+                    ctx = self.page.context
+                    check_page = ctx.new_page()
+                    my_room_baseline = _fetch_my_room_fingerprint(check_page)
+                    logger.info(f"[verify+1] my ROOM baseline: items={my_room_baseline.get('item_count')}, followers={my_room_baseline.get('follower_count')}")
+                    # Profile gate (Codex 19 #7): 商品数 baseline=None or 0 のみは別アカウント疑い → fail-fast
+                    if my_room_baseline.get("item_count") is None:
+                        logger.error("[profile_gate] my ROOM 商品数取得失敗 → profile 異常疑い")
+                        try:
+                            check_page.close()
+                        except Exception:
+                            pass
+                        result["error"] = "profile gate: my ROOM item_count 取得不能 → 別アカウント or profile 破損疑い"
+                        result["profile_gate_fail"] = True
+                        result["screenshots"].append(str(self.bm.take_screenshot("05_profile_gate_fail")))
+                        return result
+                except Exception as e:
+                    logger.warning(f"[verify+1] baseline 取得失敗 (続行・後段で検証): {e}")
+                finally:
+                    if check_page:
+                        try:
+                            check_page.close()
+                        except Exception:
+                            pass
 
             logger.info("「完了」ボタンをクリック")
             try:
@@ -453,15 +498,73 @@ class PostExecutor:
                 if link_url_re.match(full_href):
                     room_url = full_href
 
-            result["room_url"] = room_url  # None でも success=True (Rakuten SPA 仕様)
+            # ==========================================================
+            # (E) 真の成功確定: my ROOM 商品数 +1 確認 (Codex 18/19回目 二相確定)
+            # ==========================================================
+            # Codex 19 #4: 60s→180s + 指数バックオフ (Rakuten 反映遅延考慮)
+            # Codex 19 #3: try/finally で check_page 確実 close
+            # toast + link 検出だけでは false success risk (5/12-5/17 立証)
+            real_verify_ok = False
+            real_verify_msg = "skipped (baseline 未取得)"
+            check_count = None
+            if my_room_baseline and my_room_baseline.get("item_count") is not None and _fetch_my_room_fingerprint:
+                baseline_count = my_room_baseline["item_count"]
+                import time as _time
+                ctx = self.page.context
+                # 180s 以内 + 指数バックオフ (5s, 10s, 15s, 20s, 25s, 30s ...)
+                verify_deadline = _time.time() + 180.0
+                check_count = baseline_count
+                wait_sec = 5.0
+                attempt = 0
+                while _time.time() < verify_deadline:
+                    attempt += 1
+                    check_page = None
+                    try:
+                        check_page = ctx.new_page()
+                        fp_now = _fetch_my_room_fingerprint(check_page)
+                        new_count = fp_now.get("item_count")
+                        if new_count is not None:
+                            check_count = new_count
+                            logger.info(f"[verify+1 attempt={attempt}] items {baseline_count}→{check_count}")
+                            if check_count > baseline_count:
+                                real_verify_ok = True
+                                real_verify_msg = f"items {baseline_count}→{check_count} (+{check_count-baseline_count}) attempt={attempt}"
+                                break
+                    except Exception as e:
+                        logger.warning(f"[verify+1 attempt={attempt}] check 例外 (retry): {e}")
+                    finally:
+                        if check_page:
+                            try:
+                                check_page.close()
+                            except Exception:
+                                pass
+                    _time.sleep(wait_sec)
+                    wait_sec = min(wait_sec * 1.3, 30.0)  # 指数バックオフ 最大 30s
+                if not real_verify_ok:
+                    real_verify_msg = f"items {baseline_count}→{check_count} (180s + {attempt} attempts でも +1 未確認・Rakuten 側拒否疑い)"
+            else:
+                real_verify_msg = "baseline 未取得 (profile 異常 or import 失敗)"
+
+            if not real_verify_ok:
+                # 真の成功検証 失敗 → false success として失敗扱い
+                result["error"] = f"投稿成功 toast/link は検出されたが ROOM 商品数 +1 未確認: {real_verify_msg}"
+                result["success"] = False
+                result["false_success_suspect"] = True
+                result["toast_link_evidence"] = success_evidence
+                result["verify_msg"] = real_verify_msg
+                logger.error(f"投稿失敗 (FALSE SUCCESS 疑い・商品数 +1 未確認): {real_verify_msg}")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_false_success_caught")))
+                return result
+
+            # 真の成功確定 (二相 AND OK)
+            result["room_url"] = room_url
             result["success"] = True
             result["success_evidence"] = success_evidence
+            result["verify_msg"] = real_verify_msg
             if not room_url:
-                result["degraded_success"] = True  # href 取得不能だが投稿自体は成功
-                logger.info(f"投稿成功 (degraded: SPA button で href 取得不可・実投稿は成功確定): evidence={success_evidence}")
-            else:
-                logger.info(f"投稿成功! evidence={success_evidence} | room_url={room_url}")
-            result["screenshots"].append(str(self.bm.take_screenshot("06_success")))
+                result["degraded_success"] = True
+            logger.info(f"投稿真の成功 confirmed! evidence={success_evidence} | verify={real_verify_msg} | room_url={room_url}")
+            result["screenshots"].append(str(self.bm.take_screenshot("06_success_verified")))
 
             self.bm.save_session()
             return result
