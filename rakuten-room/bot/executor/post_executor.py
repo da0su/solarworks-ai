@@ -244,6 +244,15 @@ class PostExecutor:
             else:
                 done_btn = done_btn.first
 
+            # submit click 直前 baseline 取得 (Codex 15回目 #3 反映)
+            # 「my ROOM を見る」link は完了画面で新規出現 = ヘッダー常在 link との誤検出防止
+            from .selectors import POST_SUCCESS_LINK_SELECTOR as _SUCCESS_LINK_SEL
+            try:
+                baseline_link_count = self.page.locator(_SUCCESS_LINK_SEL).count()
+            except Exception:
+                baseline_link_count = 0
+            logger.info(f"[success_check] baseline 'my ROOM を見る' link count: {baseline_link_count}")
+
             logger.info("「完了」ボタンをクリック")
             try:
                 done_btn.click(timeout=5000)
@@ -278,82 +287,179 @@ class PostExecutor:
             except Exception as e:
                 logger.warning(f"COLLECT_ERROR_PATTERNS check 例外 (握りつぶさず継続): {e}")
 
-            # 2026-05-16 Codex review 3 回目で重大バグ発見:
-            # 初期 URL が /mix?itemcode=... (pathname=/mix) のため
-            # wait_for_function("!location.pathname.includes('/mix/collect')") は即 true で待機ゼロ.
-            # 修正: 初期 URL を保持・URL 自体の変化 + 許容パスへの遷移を待機.
+            # ==========================================================
+            # 投稿成功判定 v5 (CEO 2026-05-17 + Codex 14/15回目 review 反映)
+            # ==========================================================
+            # 真因 (DOM 探索 5/17 21:38):
+            #   Rakuten ROOM 現代 UI は submit 後 URL 不変 (mix/collect のまま)
+            #   ajax で「コレ ! 完了!」 + 「my ROOM を見る」link 出現 = 投稿成功
+            #
+            # Codex 15回目 review 反映 (REJECT 9件):
+            #   - link は header 'my ROOM' と区別: 'my ROOM を見る' 全文 + text-is で厳格 match
+            #   - submit 前 baseline 取得 → 新規出現 (count 増) のみ trigger
+            #   - 成功判定 = トースト regex AND link 新規出現 (AND 条件)
+            #     どちらか単独では成功にしない (虚偽成功遮断)
+            #   - 軽量 URL host ガード fail 復活
+            #   - evidence に outerHTML 含める
+            # ==========================================================
+            from .selectors import POST_SUCCESS_TEXT_SELECTORS, POST_FAILURE_MODAL_SELECTORS
 
-            # (A) submit click 直前の URL を記録 (mix_url) - 「異なる URL に遷移」を待機条件に
-            mix_url_snapshot = self.page.url
+            # Codex 16回目 #2 反映: is_visible(timeout=...) は Python Playwright で TypeError
+            # → wait_for(state="visible", timeout=...) + try/except で待機
+            def _visible_within(locator, timeout_ms: int) -> bool:
+                """指定 timeout 内で visible になれば True. ならなければ False (例外吸収)."""
+                try:
+                    locator.wait_for(state="visible", timeout=timeout_ms)
+                    return True
+                except Exception:
+                    return False
 
-            # (B) URL 変化を決定的待機 (initial URL から変化するまで・30s)
-            try:
-                self.page.wait_for_function(
-                    "(initial) => window.location.href !== initial",
-                    arg=mix_url_snapshot,
-                    timeout=30000,
-                )
-            except Exception:
+            # (B) 失敗 modal を先 check
+            failure_msg = None
+            for fsel in POST_FAILURE_MODAL_SELECTORS:
+                try:
+                    loc = self.page.locator(fsel).first
+                    if _visible_within(loc, 1500):
+                        try:
+                            failure_text = (loc.inner_text(timeout=500) or "")[:200]
+                        except Exception:
+                            failure_text = fsel
+                        failure_msg = f"{fsel} (text={failure_text!r})"
+                        break
+                except Exception:
+                    continue
+            if failure_msg:
+                result["error"] = f"投稿失敗 modal 検出: {failure_msg}"
+                logger.error(f"投稿失敗: {failure_msg}")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_failure_modal")))
+                return result
+
+            # (A) 成功判定: トースト regex AND 'my ROOM を見る' link 新規出現 を 30s polling
+            #     Codex 15 #2/#3 反映: 両方揃わないと success にしない.
+            success_evidence = None
+            success_link_href = None
+            success_outer_html = None
+            toast_detected = False
+            link_new_visible = False
+            import time as _time
+            deadline = _time.time() + 30.0
+
+            while _time.time() < deadline:
+                # 失敗 modal 再 check (mid 検知)
+                for fsel in POST_FAILURE_MODAL_SELECTORS:
+                    try:
+                        if _visible_within(self.page.locator(fsel).first, 200):
+                            result["error"] = f"投稿失敗 modal mid 検出: {fsel}"
+                            logger.error(f"投稿失敗 (mid): {fsel}")
+                            result["screenshots"].append(str(self.bm.take_screenshot("06_failure_modal_mid")))
+                            return result
+                    except Exception:
+                        pass
+
+                # トースト regex 検出 check
+                if not toast_detected:
+                    for tsel in POST_SUCCESS_TEXT_SELECTORS:
+                        try:
+                            loc = self.page.locator(tsel).first
+                            if _visible_within(loc, 200):
+                                try:
+                                    toast_text = (loc.inner_text(timeout=500) or "")[:80]
+                                    toast_outer = (loc.evaluate("el => el.outerHTML") or "")[:250]
+                                except Exception:
+                                    toast_text = ""; toast_outer = ""
+                                toast_detected = True
+                                toast_info = f"toast:{tsel}|text={toast_text!r}|outer={toast_outer!r}"
+                                logger.info(f"[success_check] toast 検出: {toast_info}")
+                                break
+                        except Exception:
+                            continue
+
+                # link 新規出現 check (count > baseline)
+                if not link_new_visible:
+                    try:
+                        now_count = self.page.locator(_SUCCESS_LINK_SEL).count()
+                        if now_count > baseline_link_count:
+                            link_new_visible = True
+                            # 最新 (visible) link の href + outerHTML
+                            for i in range(now_count):
+                                cand = self.page.locator(_SUCCESS_LINK_SEL).nth(i)
+                                try:
+                                    if _visible_within(cand, 200):
+                                        success_link_href = cand.get_attribute("href", timeout=500)
+                                        success_outer_html = (cand.evaluate("el => el.outerHTML") or "")[:250]
+                                        link_inner = (cand.inner_text(timeout=500) or "")[:80]
+                                        logger.info(f"[success_check] link 新規出現: count {baseline_link_count}→{now_count}, href={success_link_href}, text={link_inner!r}")
+                                        break
+                                except Exception:
+                                    continue
+                    except Exception:
+                        pass
+
+                # AND 条件: 両方揃ったら成功確定
+                if toast_detected and link_new_visible:
+                    success_evidence = (
+                        f"AND(toast=True,link_new_count={baseline_link_count}+|"
+                        f"href={success_link_href!r}|outer={success_outer_html!r})"
+                    )
+                    break
+                _time.sleep(0.5)
+
+            if not success_evidence:
+                # 30s timeout
                 final_url = self.page.url
-                result["error"] = f"投稿未完了 (URL unchanged 30s): {final_url[:100]}"
-                logger.error(f"投稿未完了: 30s 経過しても URL が変化せず ({mix_url_snapshot} → {final_url})")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_url_unchanged")))
+                missing = []
+                if not toast_detected: missing.append("toast")
+                if not link_new_visible: missing.append("link_new")
+                result["error"] = f"投稿成功 不検出 (30s timeout, missing={missing}): url={final_url[:120]}"
+                logger.error(f"投稿失敗 (missing={missing}): url={final_url}")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_no_success_signals")))
                 return result
 
-            # (C) 遷移先 URL の妥当性確認 (4段):
-            #     C-0) final_url が空/非 http(s) → 早期 fail (about:blank/chrome-error 等診断容易化)
-            #     C-1) 許容ホスト (room.rakuten.co.jp / sp.room.rakuten.co.jp)
-            #     C-2) 禁止パス (/mix /collect /common/error) は failure (診断ラベル分離維持)
-            #     C-3) 厳格 regex (モジュール定数 STRICT_SUCCESS_URL) で
-            #          正規 item URL '/items/<digits>' のみ success
-            # Codex 5/16 6/7回目 review 指摘:
-            #   - 旧 regex は /items/<id>/like /edit 等通してた → tightened
-            #   - 末尾スラッシュ '/items/123/' は許容 (Rakuten SP 版 trailing slash 対策)
-            #   - C-0 早期 http guard を復活 (about:blank 等の診断性確保)
-            #   - owner ID 一致 / HTTP 200 / DOM 完了 toast は Phase B 予定 (TODO)
+            # (C) URL host ガード - allowlist 厳格化 + 例外時 fail-safe (Codex 16 #5/#6)
             from urllib.parse import urlparse
+            ALLOWED_HOSTS = {"room.rakuten.co.jp", "sp.room.rakuten.co.jp"}
             final_url = self.page.url
-
-            # C-0 早期 guard: urlparse で scheme を厳密判定 (Codex 7回目 review 指摘 #2)
-            #   startswith('http') だと 'httpx://' 等も通過してしまう → 厳格判定
             try:
-                parsed = urlparse(final_url) if final_url else None
-            except Exception:
-                parsed = None
-            if not final_url or parsed is None or parsed.scheme not in ("http", "https"):
-                result["error"] = f"投稿後 final_url 不正 scheme: {final_url!r}"
-                logger.error(f"投稿失敗: final_url '{final_url}' が http/https scheme でない")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_url_invalid_scheme")))
-                return result
-
-            # C-1 host check
-            if parsed.hostname not in ALLOWED_HOSTS:
-                result["error"] = f"投稿後 不明なホスト: {final_url[:120]}"
-                logger.error(f"投稿失敗: ホスト {parsed.hostname} が {ALLOWED_HOSTS} 外")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_bad_host")))
-                return result
-
-            # C-2 禁止パス check (URL 残留 / error page)
-            for forbidden in FORBIDDEN_PATH_KEYWORDS:
-                if forbidden in parsed.path:
-                    result["error"] = f"投稿後 禁止パス遷移: {final_url[:120]}"
-                    logger.error(f"投稿失敗: パス {parsed.path} に禁止キーワード '{forbidden}'")
-                    result["screenshots"].append(str(self.bm.take_screenshot("06_forbidden_path")))
+                parsed = urlparse(final_url)
+                if parsed.scheme not in ("http", "https") or parsed.hostname not in ALLOWED_HOSTS:
+                    result["error"] = f"投稿成功検出後 URL 異常 host={parsed.hostname} scheme={parsed.scheme}: {final_url[:120]}"
+                    logger.error(f"投稿失敗 (URL host allowlist 外 + 成功検出 無視): {final_url}")
+                    result["screenshots"].append(str(self.bm.take_screenshot("06_url_host_fail")))
                     return result
-
-            # C-3 厳格 regex check (false success 完全遮断・https/host/items形式すべて内包)
-            if not STRICT_SUCCESS_URL.match(final_url):
-                result["error"] = f"投稿後 URL が正規 item パターン不一致: {final_url[:140]}"
-                logger.error(f"投稿失敗: URL '{final_url}' が STRICT_SUCCESS_URL regex に不一致")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_url_regex_fail")))
+            except Exception as e:
+                # Codex 16 #6: 例外時 fail-safe で失敗扱い
+                result["error"] = f"投稿成功検出後 URL parse 失敗 fail-safe: {e}"
+                logger.error(f"投稿失敗 (URL parse 例外 fail-safe): {e}")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_url_parse_fail")))
                 return result
 
-            # TODO (Phase B): owner ID 一致確認 + HTTP 200 status check + DOM 完了 toast 確認
-            #   現状は URL regex のみで false success 防御。Phase B で 3 重判定に強化予定.
-            result["room_url"] = final_url
+            # (D) link href 妥当性: ^https?://(sp.)?room.rakuten.co.jp/ にマッチ必須
+            # Codex 16 #4: room_url 不明時は success=False (CEO 虚偽成功排除方針)
+            import re as _re_url
+            link_url_re = _re_url.compile(r"^https?://(?:sp\.)?room\.rakuten\.co\.jp/")
+            room_url = None
+            if success_link_href:
+                if success_link_href.startswith("/"):
+                    full_href = f"https://room.rakuten.co.jp{success_link_href}"
+                else:
+                    full_href = success_link_href
+                if link_url_re.match(full_href):
+                    room_url = full_href
+
+            if not room_url:
+                # room_url 不明 → success=False で要手動確認に
+                result["error"] = f"投稿成功 toast/link 検出済だが room_url 取得失敗 → 要手動確認: href={success_link_href!r}"
+                result["success"] = False
+                result["degraded_success"] = True
+                result["success_evidence_partial"] = success_evidence
+                logger.error(f"投稿失敗 (room_url 取得不可・手動確認要): href={success_link_href}")
+                result["screenshots"].append(str(self.bm.take_screenshot("06_no_room_url_degraded")))
+                return result
+
+            result["room_url"] = room_url
             result["success"] = True
-            result["success_evidence"] = "strict_url_regex_match"
-            logger.info(f"投稿成功 (strict URL regex match)! room_url: {final_url}")
+            result["success_evidence"] = success_evidence
+            logger.info(f"投稿成功! evidence={success_evidence} | room_url={result['room_url']}")
             result["screenshots"].append(str(self.bm.take_screenshot("06_success")))
 
             self.bm.save_session()

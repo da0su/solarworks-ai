@@ -1,0 +1,685 @@
+{
+  "explored_at": "2026-05-17T21:38:41.960254",
+  "phases": {
+    "initial": {
+      "url": "https://room.rakuten.co.jp/mix/collect?itemcode=1100046522401385&scid=we_room_upc60",
+      "title": "ROOM - 欲しい! に出会える。",
+      "inputs": [
+        {
+          "index": 0,
+          "tag": "TEXTAREA",
+          "type": "textarea",
+          "name": "content",
+          "id": "collect-content",
+          "placeholder": "オススメポイントや好きな所など、この商品に関するコメントを記入しましょう。",
+          "value": "",
+          "className": "ng-pristine ng-untouched ng-valid",
+          "visible": true,
+          "rect": {
+            "x": 353,
+            "y": 612,
+            "w": 574,
+            "h": 123
+          },
+          "outerHTML": "<textarea id=\"collect-content\" name=\"content\" ng-model=\"$parent.content\" ng-trim=\"false\" ng-class=\"{'error': contentError}\" placeholder=\"オススメポイントや好きな所など、この商品に関するコメントを記入しましょう。\" class=\"ng-pristine ng-untouched ng-valid\" style=\"\"></textarea>",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 1,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratAccountId",
+          "placeholder": "",
+          "value": "140",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratAccountId\" value=\"140\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 2,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratServiceId",
+          "placeholder": "",
+          "value": "1",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratServiceId\" value=\"1\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 3,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratPageLayout",
+          "placeholder": "",
+          "value": "resp",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratPageLayout\" value=\"resp\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 4,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratSiteSection",
+          "placeholder": "",
+          "value": "colle",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratSiteSection\" value=\"colle\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 5,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratAdobeSiteSection",
+          "placeholder": "",
+          "value": "collect:[NW]",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratAdobeSiteSection\" value=\"collect:[NW]\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 6,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratPageType",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratPageType\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 7,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratPageName",
+          "placeholder": "",
+          "value": "colleinput",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratPageName\" value=\"colleinput\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 8,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratSearchQuery",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratSearchQuery\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 9,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratShopUrl",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratShopUrl\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 10,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratShopId",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratShopId\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 11,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratItemId",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratItemId\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 12,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratItemGenre",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratItemGenre\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 13,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratTestTargeting",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratTestTargeting\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 14,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratCustomParameters",
+          "placeholder": "",
+          "value": "{\"login_status\":\"on\"}",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratCustomParameters\" value=\"{&quot;login_status&quot;:&quot;on&quot;}\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 15,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratSinglePageApplicationLoad",
+          "placeholder": "",
+          "value": "true",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratSinglePageApplicationLoad\" value=\"true\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        }
+      ],
+      "buttons": [
+        {
+          "index": 0,
+          "tag": "BUTTON",
+          "type": "submit",
+          "text": "オリジナル写真追加・編集",
+          "className": "button text-black",
+          "disabled": false,
+          "visible": true,
+          "rect": {
+            "x": 557,
+            "y": 494
+          },
+          "outerHTML": "<button class=\"button text-black\" ng-hide=\"isIE8\" ng-click=\"image()\">オリジナル写真追加・編集</button>"
+        },
+        {
+          "index": 1,
+          "tag": "BUTTON",
+          "type": "submit",
+          "text": "完了",
+          "className": "button button-red collect-btn",
+          "disabled": false,
+          "visible": true,
+          "rect": {
+            "x": 510,
+            "y": 830
+          },
+          "outerHTML": "<button ng-click=\"collect()\" class=\"button button-red collect-btn\" ng-disabled=\"isCollectDisabled || isSubmitted\">\n              <span ng-show=\"!isSubmitted\" class=\"ng-binding\">完了</span>\n              <span class=\"ng-hide\" ng-show=\"isSubmitted\"><img "
+        },
+        {
+          "index": 2,
+          "tag": "BUTTON",
+          "type": "submit",
+          "text": "完了",
+          "className": "button button-red collect-btn",
+          "disabled": false,
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0
+          },
+          "outerHTML": "<button ng-click=\"collect()\" class=\"button button-red collect-btn\" ng-disabled=\"isCollectDisabled || isSubmitted\">\n              <span ng-show=\"!isSubmitted\">完了</span>\n              <span class=\"ng-hide\" ng-show=\"isSubmitted\"><img src=\"/responsive/im"
+        }
+      ],
+      "visible_text": "ROOM\nコレして投稿する\n1/5\nオリジナル写真追加・編集\nダイエット・健康・美容などの商品を投稿する際、商品の効果・効能に関する表現をすると、薬機法に抵触する可能性がありますので十分にご注意ください。詳しくはこちら\n 0 / 500\n【ロムアンド公式】ベターザンアイズ rom&nd Official romand 全14色　Better than eyes アイシャドウ アイパレット 韓国メイク 韓国コスメ ロムアンド公式ショップ\n完了"
+    },
+    "after_submit": {
+      "url": "https://room.rakuten.co.jp/mix/collect?itemcode=1100046522401385&scid=we_room_upc60",
+      "inputs": [
+        {
+          "index": 0,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratAccountId",
+          "placeholder": "",
+          "value": "140",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratAccountId\" value=\"140\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 1,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratServiceId",
+          "placeholder": "",
+          "value": "1",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratServiceId\" value=\"1\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 2,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratPageLayout",
+          "placeholder": "",
+          "value": "resp",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratPageLayout\" value=\"resp\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 3,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratSiteSection",
+          "placeholder": "",
+          "value": "colle",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratSiteSection\" value=\"colle\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 4,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratAdobeSiteSection",
+          "placeholder": "",
+          "value": "collect:[NW]",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratAdobeSiteSection\" value=\"collect:[NW]\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 5,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratPageType",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratPageType\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 6,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratPageName",
+          "placeholder": "",
+          "value": "collecomplete",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratPageName\" value=\"collecomplete\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 7,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratSearchQuery",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratSearchQuery\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 8,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratShopUrl",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratShopUrl\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 9,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratShopId",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratShopId\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 10,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratItemId",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratItemId\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 11,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratItemGenre",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratItemGenre\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 12,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratTestTargeting",
+          "placeholder": "",
+          "value": "",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratTestTargeting\" value=\"\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 13,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratCustomParameters",
+          "placeholder": "",
+          "value": "{\"login_status\":\"on\",\"account_type\":\"member\",\"account_id\":\"1000006606047125\",\"colle_id\":\"17003785805",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratCustomParameters\" value=\"{&quot;login_status&quot;:&quot;on&quot;,&quot;account_type&quot;:&quot;member&quot;,&quot;account_id&quot;:&quot;1000006606047125&quot;,&quot;colle_id&quot;:&quot;1700378580530191&quot;,&quot;colle_category_id&quot;:&quot;2800000405348",
+          "required": false,
+          "contentEditable": ""
+        },
+        {
+          "index": 14,
+          "tag": "INPUT",
+          "type": "hidden",
+          "name": "rat",
+          "id": "ratSinglePageApplicationLoad",
+          "placeholder": "",
+          "value": "true",
+          "className": "",
+          "visible": false,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "w": 0,
+            "h": 0
+          },
+          "outerHTML": "<input type=\"hidden\" name=\"rat\" id=\"ratSinglePageApplicationLoad\" value=\"true\" style=\"\">",
+          "required": false,
+          "contentEditable": ""
+        }
+      ],
+      "buttons": [],
+      "visible_text": "ROOM\nコレして投稿する\n\nコレ完了!\n\nmy ROOM を見る\n\nコレクションに追加する\n\n新規コレクション\n\nを作成",
+      "modal_text": []
+    }
+  },
+  "mix_url": "https://room.rakuten.co.jp/mix?itemcode=asiabnc%3A10000030&scid=we_room_upc60"
+}
