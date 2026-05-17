@@ -433,8 +433,15 @@ class PostExecutor:
                 result["screenshots"].append(str(self.bm.take_screenshot("06_url_parse_fail")))
                 return result
 
-            # (D) link href 妥当性: ^https?://(sp.)?room.rakuten.co.jp/ にマッチ必須
-            # Codex 16 #4: room_url 不明時は success=False (CEO 虚偽成功排除方針)
+            # (D) link href 妥当性: ^https?://(sp.)?room.rakuten.co.jp/ にマッチで room_url 設定
+            # CEO 5/17 dry-run 結果: Rakuten ROOM 現代 UI の 'my ROOM を見る' button は
+            #   SPA で href="" の anchor (JS で表示切替・遷移なし) = href から room_url 取得不可
+            #   → toast + link 新規出現 の AND 条件が成立すれば success=True 確定
+            #   → href 取れた場合のみ room_url 設定 (重複判定の補助)
+            #   → href 取れない場合は room_url=None + degraded_success=True (ただし success=True 維持)
+            #
+            # 「room_url なし = success=False 降格」は 過剰防御 で実成功を取りこぼす false negative.
+            # AND 2重条件 (toast + link 新規出現) は虚偽成功遮断に十分.
             import re as _re_url
             link_url_re = _re_url.compile(r"^https?://(?:sp\.)?room\.rakuten\.co\.jp/")
             room_url = None
@@ -446,20 +453,14 @@ class PostExecutor:
                 if link_url_re.match(full_href):
                     room_url = full_href
 
-            if not room_url:
-                # room_url 不明 → success=False で要手動確認に
-                result["error"] = f"投稿成功 toast/link 検出済だが room_url 取得失敗 → 要手動確認: href={success_link_href!r}"
-                result["success"] = False
-                result["degraded_success"] = True
-                result["success_evidence_partial"] = success_evidence
-                logger.error(f"投稿失敗 (room_url 取得不可・手動確認要): href={success_link_href}")
-                result["screenshots"].append(str(self.bm.take_screenshot("06_no_room_url_degraded")))
-                return result
-
-            result["room_url"] = room_url
+            result["room_url"] = room_url  # None でも success=True (Rakuten SPA 仕様)
             result["success"] = True
             result["success_evidence"] = success_evidence
-            logger.info(f"投稿成功! evidence={success_evidence} | room_url={result['room_url']}")
+            if not room_url:
+                result["degraded_success"] = True  # href 取得不能だが投稿自体は成功
+                logger.info(f"投稿成功 (degraded: SPA button で href 取得不可・実投稿は成功確定): evidence={success_evidence}")
+            else:
+                logger.info(f"投稿成功! evidence={success_evidence} | room_url={room_url}")
             result["screenshots"].append(str(self.bm.take_screenshot("06_success")))
 
             self.bm.save_session()
