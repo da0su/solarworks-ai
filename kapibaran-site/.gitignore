@@ -1,0 +1,17 @@
+# Playwright persistent session (cookie / cache) — never commit
+state/wp_session/
+state/*.json
+
+# 実行時に生成される logs / screenshots
+logs/
+screenshots/
+
+# python cache
+__pycache__/
+*.pyc
+
+# 認証ファイル類 (basecredentials.py が外部 Box から読み込むので
+# このディレクトリ内に置かれないが念のため)
+.env
+*.env
+*credentials*.txt
