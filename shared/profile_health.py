@@ -53,8 +53,7 @@ def fetch_my_room_fingerprint(page: "Page", timeout_ms: int = 20000) -> dict:
         'fetched_at': str,
     }
     """
-    page.goto("https://room.rakuten.co.jp/my/items", timeout=timeout_ms)
-    page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+    page.goto("https://room.rakuten.co.jp/my/items", timeout=timeout_ms, wait_until="domcontentloaded")
     # angular app render 待ち
     import time
     time.sleep(3)
