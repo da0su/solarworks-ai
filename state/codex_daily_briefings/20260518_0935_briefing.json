@@ -1,0 +1,115 @@
+{
+  "briefing_data": {
+    "briefing_at": "2026-05-18T09:35:57",
+    "window": "前24h (前日 9:00 → 当日 9:00 想定)",
+    "ssot_targets_today_FRESH": {
+      "values": {
+        "post": 55,
+        "follow": 1095,
+        "like": 318,
+        "followback": 30
+      },
+      "source": "gspread:楽天ROOM_デイリーログ (force_refresh=True)",
+      "fetched_at": "2026-05-18T09:35:59"
+    },
+    "room_cumulative_now": {
+      "item_count": 0,
+      "follower_count": 20,
+      "follow_count": 0,
+      "coordinate_count": 0,
+      "collection_count": 0,
+      "like_count": 0,
+      "url": "https://room.rakuten.co.jp/my/items",
+      "fetched_at": "2026-05-18T09:36:08"
+    },
+    "post_24h": {
+      "by_status_24h": {
+        "posted": 5
+      },
+      "failed_breakdown": {},
+      "queued_today_plus": 283
+    },
+    "follow_24h": {
+      "total_24h": 335,
+      "real_24h": 256,
+      "skip_discover_24h": 79,
+      "by_source": {
+        "seed_followers": 256,
+        "skip_discover": 79
+      },
+      "last_7_days_total": {
+        "2026-05-12": 1446,
+        "2026-05-13": 759,
+        "2026-05-14": 535,
+        "2026-05-15": 608,
+        "2026-05-16": 532,
+        "2026-05-17": 286,
+        "2026-05-18": 262
+      }
+    },
+    "profile_health": {
+      "baseline_saved": false,
+      "baseline": {},
+      "note": "現状 fingerprint は browser 起動が必要なので別 step. baseline は CEO 確認済 OK アカウント時の値."
+    },
+    "recent_codex_reviews_24h": {
+      "reviews_24h": 6,
+      "by_verdict": {
+        "REVIEW_NEEDED": 3,
+        "REJECT": 3
+      }
+    },
+    "codex_usage_cumulative": {
+      "month_usd": 1.15,
+      "month_jpy": 178.25,
+      "all_usd": 1.15,
+      "all_jpy": 178.25,
+      "month_calls": 20,
+      "all_calls": 20
+    }
+  },
+  "codex_result": {
+    "verdict": "CRITICAL",
+    "today_priorities": [
+      "1. 直ちに全ジョブ停止→正アカウントにchrome_profileを固定し、『商品画面で確認』(商品>0/フォロワー≒既知水準)→OKならベースラインを保存。",
+      "2. 実アカ確認後、ssot_targets_today_FRESH(投稿55/フォロー1095/いいね318/FB30)を当日目標として再計画。投稿はキュー283で即時消化し、各アクション直後にROOM累計の実増分で成功判定。",
+      "3. スプシ累積(最新)をforce_refreshで取得→ROOM累計と差分計算・監査ログ化。乖離が続く場合は別アカ/DB反映不良として即時エスカレーション。"
+    ],
+    "warnings": [
+      "false success強い疑い: ログ(過去24h post=5, follow(real)=256)に対し、ROOM累計は商品0/フォロー0/フォロワー20。",
+      "profile異常: item_count=0・follower=20は空アカウント相当→chrome_profile切替の可能性大。",
+      "KPI大幅未達: 今日目標(55/1095/318/30)に対し現状進捗は実数反映なし。",
+      "baseline未保存のため自動ガード未作動。『商品画面で確認』の運用徹底が必須。"
+    ],
+    "achievement_forecast": "現状のままでは未達確定。9:45までに是正・実機確認できれば投稿は達成可、フォロー/いいねは上限依存で部分回復見込みだが目標フル達成は厳しめ。",
+    "ssot_vs_room_check": "スプシ累積の取得待ち。ただしROOM側は商品0/フォロワー20で空アカ挙動のため、ログとの乖離疑いは極大。",
+    "mid_term_proposals": [
+      "起動前ガードの常時化: 正アカ指紋(user_id/表示名/商品数閾値/フォロワー閾値)を保存し毎起動・毎時に照合。不一致ならfail-close+通知。",
+      "成果二重記録: アクションの宣言成功とROOM実増分を分離ログ化。N分間実増分=0で自動停止・即時警報・スクショ保存。"
+    ],
+    "summary": "ROOMが空アカウントを指しており実績が反映されていない可能性が極めて高い。まずプロファイル是正と商品ページでの実確認→再実行、並行してSSOTとROOMの整合チェックを最優先。",
+    "usage": {
+      "prompt_tokens": 1254,
+      "completion_tokens": 3305,
+      "total_tokens": 4559,
+      "input_usd": 0.001568,
+      "output_usd": 0.03305,
+      "total_usd": 0.034618,
+      "total_jpy": 5.3657,
+      "rate_used": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "usd_jpy": 155.0
+    },
+    "cumulative": {
+      "month_usd": 1.1846,
+      "month_jpy": 183.62,
+      "all_usd": 1.1846,
+      "all_jpy": 183.62,
+      "month_calls": 21,
+      "all_calls": 21
+    }
+  },
+  "saved_at": "2026-05-18T09:35:57.395709"
+}

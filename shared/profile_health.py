@@ -62,28 +62,32 @@ def fetch_my_room_fingerprint(page: "Page", timeout_ms: int = 20000) -> dict:
     fingerprint = page.evaluate(r"""() => {
         const out = {};
         // Codex 19回目 #2 反映: 桁区切り (3,500 / ３，５００) + 全角数字対応
-        // 全角→半角・カンマ除去
         const normalize = (s) => {
             if (!s) return '';
-            // NFKC で 全角→半角
             return s.normalize('NFKC').replace(/[,，]/g, '');
         };
         const text = normalize(document.body.innerText || '');
-        // 「商品\n3500」「フォロー\n0」「フォロワー\n20」 パターン
         const grab = (label) => {
             const re = new RegExp(label + '\\s*\\n?\\s*(\\d+)');
             const m = text.match(re);
             return m ? parseInt(m[1]) : null;
         };
+        // CEO 5/18 指示: ROOM 内のすべての累計を取得 (スプシ突合用)
         out.item_count = grab('商品');
         out.follow_count = grab('フォロー(?!ー)');
         out.follower_count = grab('フォロワー');
+        out.coordinate_count = grab('コーディネート');
+        out.collection_count = grab('コレクション');
+        out.like_count = grab('いいね');
         return out;
     }""")
     return {
         "item_count": fingerprint.get("item_count"),
         "follower_count": fingerprint.get("follower_count"),
         "follow_count": fingerprint.get("follow_count"),
+        "coordinate_count": fingerprint.get("coordinate_count"),
+        "collection_count": fingerprint.get("collection_count"),
+        "like_count": fingerprint.get("like_count"),
         "url": page.url,
         "fetched_at": datetime.now().isoformat(timespec="seconds"),
     }

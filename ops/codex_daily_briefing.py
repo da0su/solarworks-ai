@@ -41,11 +41,53 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 # ============================================================
 
 def _ssot_targets() -> dict:
+    """CEO 5/18 指示: 毎朝必ず force_refresh で gspread fetch.
+    cache に頼らず スプシ最新を取得する.
+    """
     try:
         from ops.notifications.dashboard_report import _load_ssot_targets
-        return _load_ssot_targets() or {}
+        t = _load_ssot_targets(force_refresh=True)
+        return {
+            "values": t or {},
+            "source": "gspread:楽天ROOM_デイリーログ (force_refresh=True)",
+            "fetched_at": datetime.now().isoformat(timespec="seconds"),
+        }
     except Exception as e:
-        return {"_error": str(e)}
+        return {"_error": str(e), "source": "fallback"}
+
+
+def _room_cumulative_via_browser() -> dict:
+    """CEO 5/18 指示: ROOM 内のすべての累計数字 (スプシ突合用).
+
+    chrome_profile_post を起動して my ROOM page から:
+    商品 / フォロー / フォロワー / コーディネート / コレクション / いいね
+    すべて取得.
+
+    profile が壊れていれば 0 / None で記録 (Codex がそれを見て CRITICAL 判定)
+    """
+    try:
+        sys.path.insert(0, str(REPO_ROOT / "rakuten-room" / "bot"))
+        from executor.browser_manager import BrowserManager
+        from shared.profile_health import fetch_my_room_fingerprint
+    except Exception as e:
+        return {"_error": f"import: {e}"}
+    bm = None
+    try:
+        bm = BrowserManager(action="post")
+        bm.start()
+        st = bm.check_login_status()
+        if not st.get("logged_in"):
+            return {"_error": "not logged in", "login_status": st}
+        fp = fetch_my_room_fingerprint(bm.page)
+        return fp
+    except Exception as e:
+        return {"_error": f"fetch: {e}"}
+    finally:
+        if bm:
+            try:
+                bm.stop()
+            except Exception:
+                pass
 
 
 def _post_summary_24h(now: datetime) -> dict:
@@ -170,10 +212,18 @@ CEO は信頼性を最重視. 虚偽報告は厳禁. 過去事例:
 - 5/12-5/17 で 6日間 全 POST/FOLLOW が false success だった (chrome_profile_* が空アカウントへ切替)
 - CEO 「成功してるか商品画面で確認」ルール化済
 
+【CEO 5/18 追加指示: payload の 2 項目を最優先に check】
+1. ssot_targets_today_FRESH: スプシ最新値 (force_refresh で必ず gspread から取得).
+   サイバー (私) が前提を間違える可能性があるため、必ずこの値を 本日目標 として扱う.
+2. room_cumulative_now: ROOM の全累計 (商品/フォロー/フォロワー/コーディネート/コレクション/いいね).
+   - スプシの累積値と この実 ROOM の累積値が合っているか 比較せよ.
+   - 商品数 = 0 or follower 異常に少ない → profile 異常 (別アカウント切替疑い)
+   - スプシ累積値と乖離 → スプシ集計バグ or 投稿実態が DB に正しく反映されていない疑い
+
 本日朝 9:00 の briefing として、以下の過去 24h データを見て:
 1. CEO に伝えるべき最優先 3 アクション (本日 何をすべきか)
-2. 警告: false success 疑い・profile 異常・KPI 大幅未達 等
-3. 達成見込み: 今日の目標達成可否予測
+2. 警告: false success 疑い・profile 異常・KPI 大幅未達・スプシ↔ROOM 累計乖離 等
+3. 達成見込み: 今日の目標達成可否予測 (ssot_targets_today_FRESH を baseline に)
 4. 中期戦略提案 (1-2 個)
 を 簡潔 (各 2-3 行) に提案してください.
 
@@ -183,6 +233,7 @@ CEO は信頼性を最重視. 虚偽報告は厳禁. 過去事例:
     "today_priorities": ["1. ...", "2. ...", "3. ..."],
     "warnings": ["..."],
     "achievement_forecast": "短文",
+    "ssot_vs_room_check": "短文: スプシ累積 vs ROOM 累計 の乖離有無",
     "mid_term_proposals": ["..."],
     "summary": "1-2 行要約"
 }
@@ -190,11 +241,18 @@ CEO は信頼性を最重視. 虚偽報告は厳禁. 過去事例:
 
 
 def build_user_payload(now: datetime) -> dict:
-    """Codex に渡す全データ."""
+    """Codex に渡す全データ (CEO 5/18 指示反映).
+
+    必須 2 点 (CEO 5/18 22:09):
+      1. ssot_targets_today: スプシ最新を force_refresh で必ず取得 (cache 使わない)
+      2. room_cumulative_now: ROOM 内のすべての累計数字 (商品/フォロー/フォロワー/
+         コーディネート/コレクション/いいね) - スプシが合っているかの突合用
+    """
     return {
         "briefing_at": now.isoformat(timespec="seconds"),
         "window": "前24h (前日 9:00 → 当日 9:00 想定)",
-        "ssot_targets_today": _ssot_targets(),
+        "ssot_targets_today_FRESH": _ssot_targets(),  # CEO 5/18: 必ず最新
+        "room_cumulative_now": _room_cumulative_via_browser(),  # CEO 5/18: ROOM 全累計突合
         "post_24h": _post_summary_24h(now),
         "follow_24h": _follow_summary_24h(now),
         "profile_health": _profile_health(),
@@ -274,13 +332,29 @@ def post_to_slack(briefing: dict, codex_result: dict) -> None:
             msg_lines.append("■ 中期戦略提案")
             for p in codex_result.get("mid_term_proposals", []):
                 msg_lines.append(f"  💡 {p}")
-        # data snippet
+        # data snippet (CEO 5/18 必須 2 項目を 強調)
+        ssot = briefing.get('ssot_targets_today_FRESH', {})
+        room = briefing.get('room_cumulative_now', {})
+        msg_lines += [
+            "",
+            "■ 【CEO 5/18 必須】スプシ最新目標 (force_refresh)",
+            f"  {ssot.get('values', ssot.get('_error', '?'))}",
+            f"  source: {ssot.get('source', '?')}",
+            "",
+            "■ 【CEO 5/18 必須】ROOM 内 全累計 (スプシ突合用)",
+        ]
+        if "_error" in room:
+            msg_lines.append(f"  ❌ 取得失敗: {room['_error']}")
+        else:
+            msg_lines.append(f"  商品 {room.get('item_count')} / フォロー {room.get('follow_count')} / フォロワー {room.get('follower_count')}")
+            msg_lines.append(f"  コーディネート {room.get('coordinate_count')} / コレクション {room.get('collection_count')} / いいね {room.get('like_count')}")
+        if codex_result.get('ssot_vs_room_check'):
+            msg_lines += ["", f"■ スプシ↔ROOM 突合: {codex_result['ssot_vs_room_check']}"]
         msg_lines += [
             "",
             "■ 過去 24h データ サマリ",
             f"  POST: {briefing.get('post_24h', {}).get('by_status_24h', {})}",
             f"  FOLLOW: real {briefing.get('follow_24h', {}).get('real_24h')} / total {briefing.get('follow_24h', {}).get('total_24h')}",
-            f"  SSOT 目標: {briefing.get('ssot_targets_today')}",
         ]
         # Codex 使用
         u = codex_result.get("usage", {})
@@ -301,7 +375,7 @@ def main():
     now = datetime.now()
     print(f"[{now}] Codex 朝 briefing 開始")
     payload = build_user_payload(now)
-    print(f"[data] ssot={payload.get('ssot_targets_today')}, post={payload.get('post_24h')}, follow_real={payload.get('follow_24h', {}).get('real_24h')}")
+    print(f"[data] ssot_FRESH={payload.get('ssot_targets_today_FRESH', {}).get('values')}, room={payload.get('room_cumulative_now')}, post={payload.get('post_24h')}, follow_real={payload.get('follow_24h', {}).get('real_24h')}")
     codex = request_codex_briefing(payload)
     print(f"\n=== Codex verdict: {codex.get('verdict','?')} ===")
     print(f"summary: {codex.get('summary','?')}")

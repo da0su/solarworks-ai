@@ -45,18 +45,21 @@ SSOT_CACHE = REPO_ROOT / "state" / "daily_targets_ssot.json"
 GSPREAD_CREDS = REPO_ROOT / "credentials" / "sheets_service_account.json"
 
 
-def _load_ssot_targets() -> dict:
+def _load_ssot_targets(force_refresh: bool = False) -> dict:
     """SSOT スプシから今日の目標値を取得 (cache 6時間).
 
+    Args:
+        force_refresh: True なら cache 無視で必ず gspread 取得 (CEO 5/18 朝 briefing 用)
+
     Returns:
-        dict {date, post_target, follow_target, like_target, fb_target}
+        dict {post, follow, like, followback}
         失敗時は空 dict (呼び側で fallback)
     """
     today = datetime.now().strftime("%Y-%m-%d")
     today_slash = datetime.now().strftime("%Y/%m/%d")
 
-    # Cache check (6h以内なら再利用)
-    if SSOT_CACHE.exists():
+    # Cache check (6h以内なら再利用) - force_refresh なら skip
+    if not force_refresh and SSOT_CACHE.exists():
         try:
             cache = json.loads(SSOT_CACHE.read_text(encoding="utf-8"))
             if cache.get("date") == today:
