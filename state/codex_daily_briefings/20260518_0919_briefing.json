@@ -1,0 +1,101 @@
+{
+  "briefing_data": {
+    "briefing_at": "2026-05-18T09:19:27",
+    "window": "前24h (前日 9:00 → 当日 9:00 想定)",
+    "ssot_targets_today": {
+      "post": 55,
+      "follow": 1095,
+      "like": 318,
+      "followback": 30
+    },
+    "post_24h": {
+      "by_status_24h": {
+        "posted": 5
+      },
+      "failed_breakdown": {},
+      "queued_today_plus": 283
+    },
+    "follow_24h": {
+      "total_24h": 340,
+      "real_24h": 260,
+      "skip_discover_24h": 80,
+      "by_source": {
+        "seed_followers": 260,
+        "skip_discover": 80
+      },
+      "last_7_days_total": {
+        "2026-05-12": 1446,
+        "2026-05-13": 759,
+        "2026-05-14": 535,
+        "2026-05-15": 608,
+        "2026-05-16": 532,
+        "2026-05-17": 286,
+        "2026-05-18": 262
+      }
+    },
+    "profile_health": {
+      "baseline_saved": false,
+      "baseline": {},
+      "note": "現状 fingerprint は browser 起動が必要なので別 step. baseline は CEO 確認済 OK アカウント時の値."
+    },
+    "recent_codex_reviews_24h": {
+      "reviews_24h": 6,
+      "by_verdict": {
+        "REVIEW_NEEDED": 3,
+        "REJECT": 3
+      }
+    },
+    "codex_usage_cumulative": {
+      "month_usd": 1.1167,
+      "month_jpy": 173.09,
+      "all_usd": 1.1167,
+      "all_jpy": 173.09,
+      "month_calls": 19,
+      "all_calls": 19
+    }
+  },
+  "codex_result": {
+    "verdict": "CRITICAL",
+    "today_priorities": [
+      "1. 即時のグラウンドトゥルース確認: 直近の投稿5件とフォロー20件を商品ページ/相手プロフィールで手動確認 (CEOルール徹底)。一致しない/未反映が1件でも出たら全ジョブ即停止→chrome_profile復旧。10:00迄に結果共有。",
+      "2. baseline確立とガード実装: CEO承認アカウントでブラウザ起動→fingerprint/IDを保存しbaseline_saved=true化。実行前アサート(アカウント一致/クッキー/プロキシ)＋不一致時のサーキットブレーカ有効化。",
+      "3. 安全な回復運転プラン: 検証OK後に投稿5-6件/時・フォロー90-120件/時で再開(ブロック兆候監視)。キュー283件は当日分を優先、失敗/スキップ理由をログ化しレート最適化。"
+    ],
+    "warnings": [
+      "KPI大幅未達: 投稿5/55、フォロー実績260/1095ペースで不足が顕著。",
+      "フォロー数が7日で急減(1446→286→262)。ブロック/スロットリング/ソース枯渇の兆候。",
+      "profile_health.baseline_saved=falseのまま。過去の空アカ切替の再発リスク高。",
+      "skip_discover_24h=80が継続し発見系が抑制、成長鈍化の一因の可能性。",
+      "CodexレビューでREJECT 3/REVIEW_NEEDED 3。デプロイ不安定により挙動不一致リスク。"
+    ],
+    "achievement_forecast": "午前の検証/復旧を優先すると本日フル達成は困難(達成確度<30%)。回復後でも約70%が現実的。",
+    "mid_term_proposals": [
+      "アカウント同一性センチネル: fingerprint/ID/セッション三点照合＋前後スクショ/HTMLスナップ保存。異常時は即停止・通知・証跡添付。",
+      "KPIガードレール: 目標対実績と7日移動平均の自動監視で閾値逸脱時にレート自動調整/ソース切替。商品ページ自動サンプリング検証を1時間毎に実施。"
+    ],
+    "summary": "KPIは急減かつbaseline未保存のまま運転中。まず事実確認とアカウント固定を最優先し、午後に安全な回復運転へ。",
+    "usage": {
+      "prompt_tokens": 839,
+      "completion_tokens": 3224,
+      "total_tokens": 4063,
+      "input_usd": 0.001049,
+      "output_usd": 0.03224,
+      "total_usd": 0.033289,
+      "total_jpy": 5.1598,
+      "rate_used": {
+        "input": 1.25,
+        "output": 10.0
+      },
+      "usd_jpy": 155.0
+    },
+    "cumulative": {
+      "month_usd": 1.15,
+      "month_jpy": 178.25,
+      "all_usd": 1.15,
+      "all_jpy": 178.25,
+      "month_calls": 20,
+      "all_calls": 20
+    }
+  },
+  "saved_at": "2026-05-18T09:19:27.824872"
+}
