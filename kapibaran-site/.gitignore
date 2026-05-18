@@ -6,6 +6,9 @@ state/*.json
 logs/
 screenshots/
 
+# v3: ZIP 展開した素材 (約 82MB, アセット原本は別途 Box 管理)
+materials_v3/
+
 # python cache
 __pycache__/
 *.pyc
