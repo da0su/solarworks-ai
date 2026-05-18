@@ -160,8 +160,9 @@ CSS_V3_EXTRA = """
 .kbv3-pd__support-note p:last-child { margin: 0; }
 .kbv3-pd__support-note a { color: var(--kb-navy); text-decoration: underline; }
 
-/* ---- v2 の kbv2-pd__benefits を完全非表示 (法令違反バッジ撤去) ---- */
-.kbv2-pd__benefits { display: none !important; }
+/* ---- v2 の kbv2-pd__benefits は DOM markup ごと削除済 (display:none 隠蔽禁止 / Codex #1) ---- */
+/* benefits markup は deploy_v3_compliance.py が <ul class="kbv2-pd__benefits">…</ul> を */
+/* 物理 strip して残らないことを verify_v3 で陽性 assert します。CSS rule は不要。 */
 
 /* ---- CTA email ---- */
 .kbv3-cta__email,
@@ -181,6 +182,21 @@ CSS_V3_EXTRA = """
 .kbv3-cat-card .kbv2-cat-card__art { display: none !important; }
 .kbv3-prod-card .kbv2-prod-card__art { display: none !important; }
 .kbv3-plist__card .kbv2-plist__art { display: none !important; }
+
+/* ---- v3.1 (Codex #4) EC ボタン 準備中 = disabled 表示 ---- */
+.kbv3-cta--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+  filter: grayscale(0.4);
+  position: relative;
+}
+.kbv3-cta--disabled::after {
+  content: " (準備中)";
+  font-size: 0.78em;
+  opacity: 0.9;
+}
+.kbv3-cta--disabled:hover { opacity: 0.55; }
 """
 
 

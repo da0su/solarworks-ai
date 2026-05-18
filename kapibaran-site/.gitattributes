@@ -1,0 +1,19 @@
+# KAPIBARAN v3.1 (Codex review #8 / 2026-05-18) — LF 統一
+# Windows ローカルでの CRLF 変換 warning を抑止 + 監査ログのバイト一致を保証
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.js    text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# バイナリ
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.pdf   binary
+*.zip   binary

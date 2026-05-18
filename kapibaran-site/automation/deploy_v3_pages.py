@@ -27,6 +27,50 @@ from pages_v3 import (  # noqa
 )
 
 
+def _redirect_legacy_privacy(rest: WPRest, new_privacy_pid: int):
+    """Codex #8: 旧 ?page_id=3 直リンクの privacy ページが残っている場合、
+    新しい slug=privacy ページを正規 URL とし、旧ページは draft 化する。
+
+    Codex #5 (5 回目): id=3 ハードコード固有判定は危険.
+    必須安全条件を全て満たした場合のみ draft 化する:
+      - slug が privacy-policy または privacy_old など privacy 系の旧 slug
+      - または title に「プライバシー」を含む
+      - かつ slug != "privacy" (新ページとの衝突回避)
+      - かつ id != new_privacy_pid (自分自身を draft 化しない)
+    """
+    if not new_privacy_pid:
+        return
+    try:
+        # id=3 を直接探す
+        legacy = rest.get("/wp/v2/pages/3")
+        if not (isinstance(legacy, dict) and legacy.get("id") == 3):
+            _log("  · page_id=3 が存在しない (legacy 処理 skip)")
+            return
+
+        slug = legacy.get("slug", "")
+        title_rendered = (legacy.get("title", {}) or {}).get("rendered", "")
+        title_raw = (legacy.get("title", {}) or {}).get("raw", "") or title_rendered
+        legacy_id = legacy.get("id", 0)
+
+        # 安全条件
+        is_privacy_slug = slug.startswith("privacy") and slug != "privacy"
+        is_privacy_title = ("プライバシー" in title_raw) or ("Privacy" in title_raw)
+        is_not_new = (legacy_id != new_privacy_pid)
+        is_not_canonical = (slug != "privacy")
+
+        if (is_privacy_slug or is_privacy_title) and is_not_new and is_not_canonical:
+            rest.patch("/wp/v2/pages/3", {"status": "draft"})
+            _log(f"  · legacy page_id=3 (slug='{slug}', title='{title_raw[:30]}') "
+                 f"-> draft (privacy slug='privacy' に統一 / 安全条件全 OK)")
+        else:
+            _log(f"  · page_id=3 (slug='{slug}', title='{title_raw[:30]}') "
+                 f"は privacy 関連 page ではない可能性. draft 化 skip "
+                 f"(privacy_slug={is_privacy_slug} privacy_title={is_privacy_title} "
+                 f"not_new={is_not_new} not_canonical={is_not_canonical})")
+    except Exception as e:
+        _log(f"  ! legacy page_id=3 処理 skip: {e}")
+
+
 LEGACY_PRODUCT_SLUGS = [
     "footcare-device",
     "smart-treadmill",
@@ -102,6 +146,9 @@ def main():
          "content": build_tokushoho()},
         {"slug": "terms",     "title": "利用規約",
          "content": build_terms()},
+        # Codex #8: privacy を slug-based 正規 URL に統一 (旧 ?page_id=3 直リンク廃止)
+        {"slug": "privacy",   "title": "プライバシーポリシー",
+         "content": build_privacy()},
     ]
 
     slug_to_id: dict[str, int] = {}
@@ -148,6 +195,9 @@ def main():
         for s in LEGACY_PRODUCT_SLUGS:
             set_page_status(rest, s, "draft")
             time.sleep(0.3)
+
+        # 3.5) 旧 ?page_id=3 privacy を draft 化 (Codex #8)
+        _redirect_legacy_privacy(rest, slug_to_id.get("privacy", 0))
 
         # 4) ホームページ設定
         if home_pid:

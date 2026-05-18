@@ -445,7 +445,7 @@ def build_product_detail(product: dict, media_urls: Dict[str, str]):
         <p class="kbv2-step__body">{b}</p>
       </div>"""
 
-    # EC ボタン — pending なら data-todo マーカー
+    # EC ボタン — pending は disabled span として描画 (Codex #4: href="#" 残置による誤誘導禁止)
     ec_buttons = ""
     for label, key, cls in [
         ("Amazon で購入",        "amazon",  "kbv2-ec-btn--amazon"),
@@ -453,11 +453,18 @@ def build_product_detail(product: dict, media_urls: Dict[str, str]):
         ("Yahoo! ショッピングで購入", "yahoo",   "kbv2-ec-btn--yahoo"),
     ]:
         ec = p["ec_urls"].get(key, {"url": "#", "pending": True})
-        todo_attr = ' data-todo="ec-url-pending"' if ec.get("pending") else ""
-        ec_buttons += (
-            f'<a href="{ec["url"]}" class="kbv2-ec-btn {cls}"{todo_attr} '
-            f'rel="nofollow noopener" target="_blank">{label}</a>\n        '
-        )
+        if ec.get("pending") or not ec.get("url") or ec["url"] in ("", "#"):
+            # 無効化: クリック不可 + ARIA で明示
+            ec_buttons += (
+                f'<span class="kbv2-ec-btn {cls} kbv3-cta--disabled" '
+                f'aria-disabled="true" role="link" tabindex="-1" '
+                f'data-todo="ec-url-pending">{label}（準備中）</span>\n        '
+            )
+        else:
+            ec_buttons += (
+                f'<a href="{ec["url"]}" class="kbv2-ec-btn {cls}" '
+                f'rel="nofollow noopener" target="_blank">{label}</a>\n        '
+            )
 
     # 商品ギャラリー
     gallery_html = (

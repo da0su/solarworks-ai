@@ -390,11 +390,9 @@ def build_product_detail(product: dict):
           <a href="#" class="kbv2-ec-btn kbv2-ec-btn--yahoo" rel="nofollow noopener" target="_blank">Yahoo! ショッピングで購入</a>
         </div>
 
-        <ul class="kbv2-pd__benefits">
-          <li>全国 送料無料</li>
-          <li>1 年メーカー保証</li>
-          <li>国内サポート対応</li>
-        </ul>
+        <!-- v3.1 (Codex #1 / 2026-05-18): 確定表記の benefits リストは markup ごと削除 -->
+        <!-- 旧: <ul class="kbv2-pd__benefits"> 全国 送料無料 / 1 年メーカー保証 / 国内サポート対応 </ul> -->
+        <!-- 代替: 商品詳細ページ側で kbv3-pd__support-note (販売店規定に準じる旨) を表示 -->
       </div>
     </div>
   </div>
