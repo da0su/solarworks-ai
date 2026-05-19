@@ -59,35 +59,54 @@ def _ssot_targets() -> dict:
 def _room_cumulative_via_browser() -> dict:
     """CEO 5/18 指示: ROOM 内のすべての累計数字 (スプシ突合用).
 
-    chrome_profile_post を起動して my ROOM page から:
-    商品 / フォロー / フォロワー / コーディネート / コレクション / いいね
-    すべて取得.
+    Codex 29回目 #8 反映 (CEO 5/20 累計突合):
+    chrome_profile_post が空アカウントへ切替の疑い → profile fallback chain で取得.
+    試行順: post → follow → like → followback. 商品数 >= 50 を valid 判定.
 
-    profile が壊れていれば 0 / None で記録 (Codex がそれを見て CRITICAL 判定)
+    Returns: {profile_used, fingerprint, tried, errors} or {_error, tried, errors}
+    Codex 32回目 #5 fix: Task Scheduler 起動 dir 異常時の import フォールバック
     """
     try:
-        sys.path.insert(0, str(REPO_ROOT / "rakuten-room" / "bot"))
-        from executor.browser_manager import BrowserManager
-        from shared.profile_health import fetch_my_room_fingerprint
+        from shared.profile_health import fetch_room_cumulative_via_fallback_chain
+    except ImportError:
+        # Task Scheduler の cwd が想定外 → REPO_ROOT を強制 insert して再 try
+        sys.path.insert(0, str(REPO_ROOT))
+        try:
+            from shared.profile_health import fetch_room_cumulative_via_fallback_chain
+        except Exception as e:
+            return {"_error": f"import (post sys.path retry): {e}",
+                    "_tried": [], "_errors": {}, "_profile_used": None,
+                    "tried": [], "errors": {}}
     except Exception as e:
-        return {"_error": f"import: {e}"}
-    bm = None
-    try:
-        bm = BrowserManager(action="post")
-        bm.start()
-        st = bm.check_login_status()
-        if not st.get("logged_in"):
-            return {"_error": "not logged in", "login_status": st}
-        fp = fetch_my_room_fingerprint(bm.page)
-        return fp
-    except Exception as e:
-        return {"_error": f"fetch: {e}"}
-    finally:
-        if bm:
-            try:
-                bm.stop()
-            except Exception:
-                pass
+        return {"_error": f"import: {e}",
+                "_tried": [], "_errors": {}, "_profile_used": None,
+                "tried": [], "errors": {}}
+
+    result = fetch_room_cumulative_via_fallback_chain()
+    # 古い shape との互換: 成功時 fingerprint を top-level merge (downstream の
+    # room.get("item_count") などの参照を壊さないため)
+    # Codex 31回目 #1 fix: 成功/失敗 shape を統一 (_tried/_errors/_profile_used で固定)
+    if "_error" not in result:
+        fp = result.get("fingerprint", {})
+        out = dict(fp)
+        out["_profile_used"] = result.get("profile_used")
+        out["_tried"] = result.get("tried", [])
+        out["_errors"] = result.get("errors", {})
+        # Codex 32回目 #3: 後方互換 (旧 key 'tried'/'errors' を読む既存コード対策)
+        # 段階的移行用 - 確認後削除予定
+        out["tried"] = out["_tried"]
+        out["errors"] = out["_errors"]
+        return out
+    # 失敗時も _tried/_errors を underscore key で揃える (downstream 一貫性)
+    return {
+        "_error": result.get("_error"),
+        "_tried": result.get("tried", []),
+        "_errors": result.get("errors", {}),
+        "_profile_used": None,
+        # 後方互換 (Codex 32 #3)
+        "tried": result.get("tried", []),
+        "errors": result.get("errors", {}),
+    }
 
 
 def _post_summary_24h(now: datetime) -> dict:
@@ -240,6 +259,79 @@ CEO は信頼性を最重視. 虚偽報告は厳禁. 過去事例:
 """
 
 
+def _compute_ssot_vs_room_diff(ssot: dict, room: dict) -> dict:
+    """SSOT スプシ累積 vs ROOM 累計 の乖離計算 (Codex 29回目 #8 反映 CEO 5/20).
+
+    Returns: {by_field: {field: {ssot, room, delta, status}}, summary}
+
+    Codex 31回目 #1 fix: error path も _tried/_errors の underscore key で統一.
+    Codex 32回目 #2 fix: error path も {by_field, summary} 必須 (shape 不変).
+    """
+    if "_error" in room:
+        return {
+            "_error": room["_error"],
+            "_tried": room.get("_tried", []),
+            "_errors": room.get("_errors", {}),
+            "_profile_used": room.get("_profile_used"),
+            "by_field": {},
+            "summary": f"error: {room['_error']}",
+        }
+    ssot_vals = ssot.get("values", {}) if isinstance(ssot, dict) else {}
+    # スプシ累計 cumulative (列名は環境依存。一旦 follow/post/like/followback 名で試行)
+    # 実際の SSOT 列名は ops.notifications.dashboard_report の値構造による
+    out_fields = {}
+    for field, ssot_keys in {
+        "follower_count": ["cumulative_follower", "follower_cumulative", "total_followers"],
+        "follow_count": ["cumulative_follow", "follow_cumulative", "total_follows"],
+        "item_count": ["cumulative_post", "post_cumulative", "total_posts"],
+        "like_count": ["cumulative_like", "like_cumulative", "total_likes"],
+    }.items():
+        room_val = room.get(field)
+        ssot_val = None
+        for k in ssot_keys:
+            if k in ssot_vals:
+                ssot_val = ssot_vals[k]
+                break
+        if room_val is None or ssot_val is None:
+            out_fields[field] = {"ssot": ssot_val, "room": room_val,
+                                  "delta": None, "status": "missing"}
+            continue
+        try:
+            import math
+            delta = int(room_val) - int(ssot_val)
+            # Codex 30回目 #1 + 31回目 #7 fix: 閾値 = max(100, ceil(ssot * 0.05))
+            # 小型値 (ssot < 2000) は 100 件絶対閾値, 大型値 (ssot >= 2000) は 5% 比率閾値
+            # ceil 採用で 小数切り捨てで臨界点が暈けない (Codex 31回目 #8 反映)
+            ssot_int = int(ssot_val)
+            pct_threshold = math.ceil(ssot_int * 0.05) if ssot_int > 0 else 0
+            threshold = max(100, pct_threshold)
+            divergent = abs(delta) > threshold
+            out_fields[field] = {
+                "ssot": ssot_val, "room": room_val, "delta": delta,
+                "threshold": threshold,
+                "status": "diverged" if divergent else "ok",
+            }
+        except (ValueError, TypeError):
+            out_fields[field] = {"ssot": ssot_val, "room": room_val,
+                                  "delta": None, "status": "parse_error"}
+
+    # Codex 32回目 #1 fix: status 別 count は実カウント (parse_error 含む).
+    divergent_count = sum(1 for v in out_fields.values() if v["status"] == "diverged")
+    missing_count = sum(1 for v in out_fields.values() if v["status"] == "missing")
+    ok_count = sum(1 for v in out_fields.values() if v["status"] == "ok")
+    parse_err_count = sum(1 for v in out_fields.values() if v["status"] == "parse_error")
+    # Codex 31回目 #2 fix: key 名を _profile_used (underscore prefix) で統一
+    return {
+        "_profile_used": room.get("_profile_used"),
+        "by_field": out_fields,
+        "summary": (
+            f"divergent={divergent_count}, missing={missing_count}, "
+            f"ok={ok_count}, parse_err={parse_err_count} "
+            f"/ profile={room.get('_profile_used')}"
+        ),
+    }
+
+
 def build_user_payload(now: datetime) -> dict:
     """Codex に渡す全データ (CEO 5/18 指示反映).
 
@@ -247,12 +339,17 @@ def build_user_payload(now: datetime) -> dict:
       1. ssot_targets_today: スプシ最新を force_refresh で必ず取得 (cache 使わない)
       2. room_cumulative_now: ROOM 内のすべての累計数字 (商品/フォロー/フォロワー/
          コーディネート/コレクション/いいね) - スプシが合っているかの突合用
+
+    Codex 29回目 #8 (CEO 5/20): profile fallback chain + ssot vs room diff 追加
     """
+    ssot = _ssot_targets()
+    room = _room_cumulative_via_browser()
     return {
         "briefing_at": now.isoformat(timespec="seconds"),
         "window": "前24h (前日 9:00 → 当日 9:00 想定)",
-        "ssot_targets_today_FRESH": _ssot_targets(),  # CEO 5/18: 必ず最新
-        "room_cumulative_now": _room_cumulative_via_browser(),  # CEO 5/18: ROOM 全累計突合
+        "ssot_targets_today_FRESH": ssot,  # CEO 5/18: 必ず最新
+        "room_cumulative_now": room,  # CEO 5/18: ROOM 全累計突合 + Codex 29 fallback chain
+        "ssot_vs_room_diff": _compute_ssot_vs_room_diff(ssot, room),  # Codex 29 #8
         "post_24h": _post_summary_24h(now),
         "follow_24h": _follow_summary_24h(now),
         "profile_health": _profile_health(),

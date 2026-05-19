@@ -1,13 +1,15 @@
-"""FOLLOW rate gate v2 unit tests (Codex 5/16 8回目 review 反映).
+"""FOLLOW rate gate v4 unit tests (Codex 29回目 #4 反映 CEO 5/20).
 
 カバー:
-- 通常動作 (empty / record / hourly cap / daily cap)
+- 通常動作 (empty / record / hourly cap / daily cap / MINUTE cap NEW v4)
 - 25h 前 prune
 - legacy ISO string event migration
 - state 破損 fail-closed (GateError)
 - ENV 不正値 fail-closed
 - 日次境界 (0:00 跨ぎ)
 - record_follow 内 lock 保護 + 再 check
+- 回路遮断 (NEW v4): 失敗 threshold 超で cooldown
+- 指数バックオフ計算
 """
 from __future__ import annotations
 
@@ -25,11 +27,14 @@ from shared.follow_rate_gate import (
     can_follow, record_follow, get_status, reset_state,
     GateError, STATE_PATH, _caps, _DEFAULTS,
     _compute_counts, _prune_old,
+    record_failure, compute_backoff_sec,
+    EXIT_CIRCUIT_BREAKER,
 )
 
 # テスト中は default 値を使う (ENV 未設定時)
 DEFAULT_DAILY_CAP = _DEFAULTS["FOLLOW_DAILY_CAP"]
 DEFAULT_HOURLY_CAP = _DEFAULTS["FOLLOW_HOURLY_CAP"]
+DEFAULT_MINUTE_CAP = _DEFAULTS["FOLLOW_MINUTE_CAP"]
 
 
 def test_empty_state_allows_follow():
@@ -49,19 +54,26 @@ def test_record_increments_counts():
 
 
 def test_hourly_cap_blocks():
-    reset_state()
-    for _ in range(DEFAULT_HOURLY_CAP):
-        record_follow()
-    s = get_status()
-    assert s["last_hour"] == DEFAULT_HOURLY_CAP
-    assert s["can_follow"] is False
-    # 再 record しようとすると GateError (Codex 8回目 #2 cap recheck)
-    raised = False
+    """hourly cap 到達で block. v4 では minute_cap が先に発動するため
+    minute_cap を高く設定して hourly のみ check.
+    """
+    os.environ["FOLLOW_MINUTE_CAP"] = "9999"  # minute disable
     try:
-        record_follow()
-    except GateError:
-        raised = True
-    assert raised, "cap 到達後 record_follow は GateError raise すべき"
+        reset_state()
+        for _ in range(DEFAULT_HOURLY_CAP):
+            record_follow()
+        s = get_status()
+        assert s["last_hour"] == DEFAULT_HOURLY_CAP
+        assert s["can_follow"] is False
+        # 再 record しようとすると GateError (Codex 8回目 #2 cap recheck)
+        raised = False
+        try:
+            record_follow()
+        except GateError:
+            raised = True
+        assert raised, "cap 到達後 record_follow は GateError raise すべき"
+    finally:
+        del os.environ["FOLLOW_MINUTE_CAP"]
 
 
 def test_old_events_pruned_via_compute_counts():
@@ -82,11 +94,11 @@ def test_day_boundary():
     now_ts = int(now_jst.timestamp())
     # JST 昨日 23:00
     yesterday_23 = (now_jst.replace(hour=23, minute=0, second=0, microsecond=0) - timedelta(days=1)).timestamp()
-    today, _ = _compute_counts([int(yesterday_23)], now_ts)
+    today, _, _ = _compute_counts([int(yesterday_23)], now_ts)
     assert today == 0, f"昨日の event は today に含めない (got {today})"
     # JST 今日 0:10
     today_event = now_jst.replace(hour=0, minute=10, second=0, microsecond=0).timestamp()
-    today, _ = _compute_counts([int(today_event)], now_ts)
+    today, _, _ = _compute_counts([int(today_event)], now_ts)
     assert today == 1, f"今日 0:10 の event は today に含む (got {today})"
 
 
@@ -139,7 +151,7 @@ def test_daily_cap_blocks_via_simulation():
     now_ts = int(datetime.now().timestamp())
     # 日内 ts を生成 (1秒間隔)
     events = [now_ts - i for i in range(DEFAULT_DAILY_CAP)]
-    today, _ = _compute_counts(events, now_ts)
+    today, _, _ = _compute_counts(events, now_ts)
     assert today == DEFAULT_DAILY_CAP, f"got {today} expected {DEFAULT_DAILY_CAP}"
     # last_hour も同等で cap (hourly cap < daily なので hourly が先に block)
 
@@ -211,6 +223,151 @@ with _file_lock(timeout_sec=10):
     assert "today" in s
 
 
+def test_minute_cap_blocks_v4():
+    """v4 minute_cap: minute_cap 件を 60s 内に record → block.
+    Codex 29回目 #4 反映 (バースト制御).
+    """
+    reset_state()
+    for _ in range(DEFAULT_MINUTE_CAP):
+        record_follow()
+    s = get_status()
+    assert s["last_minute"] == DEFAULT_MINUTE_CAP
+    assert s["minute_remaining"] == 0
+    assert s["can_follow"] is False, "minute_cap で block されるべき"
+    raised = False
+    try:
+        record_follow()
+    except GateError:
+        raised = True
+    assert raised, "minute_cap 到達後 GateError 必須"
+
+
+def test_circuit_breaker_triggers_v4():
+    """v4 回路遮断: 直近 60s 失敗が threshold 超 → cooldown 中 can_follow=False.
+    Codex 29回目 #4 反映.
+    """
+    reset_state()
+    from shared.follow_rate_gate import _DEFAULTS
+    threshold = _DEFAULTS["FOLLOW_CIRCUIT_FAIL_THRESHOLD"]
+    # threshold-1 件失敗: 回路は trigger しない
+    for _ in range(threshold - 1):
+        r = record_failure()
+        assert r["circuit_triggered"] is False
+    s = get_status()
+    assert s["circuit_open"] is False, "threshold 未満では circuit open しない"
+    # threshold 件目で trigger
+    r = record_failure()
+    assert r["circuit_triggered"] is True
+    s = get_status()
+    assert s["circuit_open"] is True, "threshold 到達で circuit_open=True"
+    assert s["can_follow"] is False, "circuit open 中は can_follow=False"
+    assert s["circuit_remaining_sec"] > 0
+
+
+def test_circuit_breaker_blocks_record_v4():
+    """v4: 回路 open 中 record_follow は GateError."""
+    reset_state()
+    from shared.follow_rate_gate import _DEFAULTS
+    threshold = _DEFAULTS["FOLLOW_CIRCUIT_FAIL_THRESHOLD"]
+    for _ in range(threshold):
+        record_failure()
+    raised = False
+    try:
+        record_follow()
+    except GateError as e:
+        raised = True
+        assert "circuit" in str(e).lower()
+    assert raised, "circuit open 中 record_follow は GateError 必須"
+
+
+def test_compute_backoff_sec_v4():
+    """v4 指数バックオフ: 1→1s, 2→2s, 3→4s, 4→8s, 5→16s, 6→30s cap."""
+    assert compute_backoff_sec(0) == 0.0
+    assert compute_backoff_sec(1) == 1.0
+    assert compute_backoff_sec(2) == 2.0
+    assert compute_backoff_sec(3) == 4.0
+    assert compute_backoff_sec(4) == 8.0
+    assert compute_backoff_sec(5) == 16.0
+    assert compute_backoff_sec(6) == 30.0  # cap
+    assert compute_backoff_sec(100) == 30.0  # cap
+
+
+def test_v4_defaults_match_ceo_5_20_spec():
+    """v4 default: 1200/120/4 (CEO 5/20: 1095/日達成設計)."""
+    assert _DEFAULTS["FOLLOW_DAILY_CAP"] == 1200
+    assert _DEFAULTS["FOLLOW_HOURLY_CAP"] == 120
+    assert _DEFAULTS["FOLLOW_MINUTE_CAP"] == 4
+
+
+def test_gate_error_kind_v4():
+    """v4 (Codex 30回目 #4): GateError.kind で構造判定. 文字列マッチ廃止."""
+    # rate_cap kind: minute cap で発火
+    reset_state()
+    for _ in range(DEFAULT_MINUTE_CAP):
+        record_follow()
+    raised_kind = None
+    try:
+        record_follow()
+    except GateError as e:
+        raised_kind = getattr(e, "kind", "unknown")
+    assert raised_kind == "rate_cap", f"expected 'rate_cap', got {raised_kind}"
+
+    # circuit kind: 失敗 threshold で発火
+    reset_state()
+    from shared.follow_rate_gate import _DEFAULTS
+    for _ in range(_DEFAULTS["FOLLOW_CIRCUIT_FAIL_THRESHOLD"]):
+        record_failure()
+    raised_kind = None
+    try:
+        record_follow()
+    except GateError as e:
+        raised_kind = getattr(e, "kind", "unknown")
+    assert raised_kind == "circuit", f"expected 'circuit', got {raised_kind}"
+
+
+def test_record_success_resets_failures_v4():
+    """v4 (Codex 30回目 #5): 成功記録時に直近失敗を reset."""
+    from shared.follow_rate_gate import record_success_resets_failures
+    reset_state()
+    # 4 失敗
+    for _ in range(4):
+        record_failure()
+    # reset
+    record_success_resets_failures()
+    # まだ circuit triggered していないはず
+    s = get_status()
+    assert s["circuit_open"] is False
+    # 5 失敗まで貯めても trigger しない (reset 効いてる)
+    for _ in range(4):
+        record_failure()
+    s = get_status()
+    assert s["circuit_open"] is False, "reset 後 4 失敗だけでは circuit 開かない"
+
+
+def test_record_failure_return_shape_v4():
+    """v4 + Codex 31 #5: record_failure 返り値 shape.
+    recent_failures = state 反映後 (triggered で 0),
+    recent_failures_before_reset = trigger 直前の生 count, circuit_open フラグあり.
+    """
+    reset_state()
+    from shared.follow_rate_gate import _DEFAULTS
+    threshold = _DEFAULTS["FOLLOW_CIRCUIT_FAIL_THRESHOLD"]
+    # 通常 (まだ trigger しない)
+    r = record_failure()
+    assert r["recent_failures"] == 1
+    assert r["recent_failures_before_reset"] == 1
+    assert r["circuit_triggered"] is False
+    assert r["circuit_open"] is False
+    # threshold 到達 (trigger)
+    for _ in range(threshold - 1):
+        rr = record_failure()
+    assert rr["circuit_triggered"] is True
+    assert rr["recent_failures_before_reset"] == threshold
+    # 反映後は failure_events がリセットされる
+    assert rr["recent_failures"] == 0
+    assert rr["circuit_open"] is True
+
+
 if __name__ == "__main__":
     tests = [
         test_empty_state_allows_follow,
@@ -225,6 +382,17 @@ if __name__ == "__main__":
         test_env_invalid_fails_closed_lazy,
         test_env_zero_or_negative_fails_closed,
         test_windows_lock_contention,
+        # v4 (Codex 29回目 #4)
+        test_minute_cap_blocks_v4,
+        test_circuit_breaker_triggers_v4,
+        test_circuit_breaker_blocks_record_v4,
+        test_compute_backoff_sec_v4,
+        test_v4_defaults_match_ceo_5_20_spec,
+        # v4 + Codex 30回目 (kind 構造化 / fail reset)
+        test_gate_error_kind_v4,
+        test_record_success_resets_failures_v4,
+        # Codex 31回目 (return shape 厳密化)
+        test_record_failure_return_shape_v4,
     ]
     failed = []
     for fn in tests:

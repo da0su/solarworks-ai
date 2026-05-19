@@ -78,13 +78,19 @@ def _normalize_for_persona(s: str) -> str:
     return unicodedata.normalize("NFKC", s).lower()
 
 
-def _persona_check(title: str, comment: str = "") -> tuple[str, str]:
+def _persona_check(title: str, comment: str = "",
+                   shop_name: str = "", description: str = "",
+                   tags: str = "") -> tuple[str, str]:
     """ペルソナ NG keyword に該当すれば ('fail', reason).
     boost keyword 含む場合は ('boost', reason).
     どちらでもなければ ('pass', '').
 
     Codex 12回目 #5 反映: override keyword (チャイルドシート 等) があれば
     NG check を skip して boost 優先 (例: 「車載 チャイルドシート ISOFIX」)
+
+    Codex 29回目 #3 反映 (CEO 5/20):
+    - title だけでなく shop_name / description / tags も評価
+    - メンズ系/紳士 ベルト + メンズ等 表記揺れ network (ベルト×メンズ等)
     """
     try:
         ng_kw = getattr(config, "PERSONA_NG_KEYWORDS", [])
@@ -93,7 +99,10 @@ def _persona_check(title: str, comment: str = "") -> tuple[str, str]:
     except Exception:
         return ("pass", "")
     # NFKC + lower で表記ゆれ吸収
-    text = _normalize_for_persona(f"{title or ''} {comment or ''}")
+    # Codex 29回目 #3: shop_name / description / tags も評価対象に拡張
+    combined = " ".join([title or "", comment or "", shop_name or "",
+                          description or "", tags or ""])
+    text = _normalize_for_persona(combined)
     # Override check: あれば NG skip (例: チャイルドシート は car 系 NG を override)
     has_override = any(
         kw and _normalize_for_persona(kw) in text
@@ -104,6 +113,24 @@ def _persona_check(title: str, comment: str = "") -> tuple[str, str]:
         for kw in ng_kw:
             if kw and _normalize_for_persona(kw) in text:
                 return ("fail", f"persona NG keyword '{kw}'")
+        # Codex 29回目 #3: 「ベルト × メンズ」「ゴルフ × メンズ」 表記揺れ network 検出
+        # NG kw 単体ではないが NG コンテキスト (メンズ / 紳士 / men's etc)
+        # ただし「メンズ・レディース 兼用」「ユニセックス」等で gender-neutral 表記が
+        # 同時にあれば false-positive を避けるため pass.
+        masculine_markers = ["メンズ", "men's", "mens", "紳士"]
+        masculine_context = ["ベルト", "腕時計", "革靴", "ネクタイ", "ワイシャツ",
+                              "礼服", "髭剃り", "ヒゲ剃り", "ひげ剃り"]
+        # gender-neutral 表記 (女性 OK の signal)
+        # Codex 30回目 #6 fix: 「兼」単体は誤マッチ多発 (兼任/兼任務/兼任機能 等) → 削除.
+        # 複合語 (兼用 / 男女兼用) は残す.
+        neutral_markers = ["レディース", "ladies", "women", "ユニセックス",
+                            "兼用", "男女兼用", "ウィメンズ", "女性用"]
+        has_masculine_marker = any(_normalize_for_persona(m) in text for m in masculine_markers)
+        has_neutral_marker = any(_normalize_for_persona(m) in text for m in neutral_markers)
+        if has_masculine_marker and not has_neutral_marker:
+            for ctx in masculine_context:
+                if _normalize_for_persona(ctx) in text:
+                    return ("fail", f"masculine context: '{ctx}' + male marker (no neutral)")
     # Boost check (override 経由でも 普通 check でも)
     for kw in boost_kw:
         if kw and _normalize_for_persona(kw) in text:
@@ -213,9 +240,16 @@ def audit_single(item: dict, check_url: bool = True) -> dict:
 
     # --- Check 4.5: ペルソナ check (CEO 2026-05-16: 31歳・0歳新米ママ) ---
     # default 値で下流 Null 安全保証 (Codex 11回目 #5 反映)
+    # Codex 29回目 #3 (CEO 5/20): title 以外 (shop_name/description/tags) も評価
     result["persona_boost"] = False
     result["persona_reason"] = ""
-    persona_status, persona_reason = _persona_check(title, item.get("comment", ""))
+    persona_status, persona_reason = _persona_check(
+        title,
+        item.get("comment", ""),
+        shop_name=item.get("shop_name", ""),
+        description=item.get("description", "") or item.get("itemCaption", ""),
+        tags=" ".join(item.get("tags", [])) if isinstance(item.get("tags"), list) else (item.get("tags", "") or ""),
+    )
     result["checks"]["persona"] = persona_status
     if persona_status == "fail":
         result["audit_result"] = "fail"

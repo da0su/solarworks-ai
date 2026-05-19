@@ -361,6 +361,9 @@ def main():
             EXIT_RATE_LIMITED_NOOP,
             EXIT_RATE_LIMITED_PARTIAL,
             EXIT_GATE_INIT_ERROR,
+            EXIT_CIRCUIT_BREAKER,  # v4 (Codex 29回目 #4)
+            record_failure as _rate_record_failure,
+            compute_backoff_sec as _rate_backoff,
         )
     except Exception as e:
         # import 自体が失敗 → fail-closed (Codex #2 反映で import 例外は無いはずだが念のため)
@@ -369,13 +372,31 @@ def main():
 
     try:
         _initial_gate = _rate_status()
-        logger.info(f"[rate_gate] today={_initial_gate['today']}/{_initial_gate['daily_cap']}, last_hour={_initial_gate['last_hour']}/{_initial_gate['hourly_cap']}")
+        logger.info(
+            f"[rate_gate v4] min={_initial_gate['last_minute']}/{_initial_gate['minute_cap']}, "
+            f"hour={_initial_gate['last_hour']}/{_initial_gate['hourly_cap']}, "
+            f"day={_initial_gate['today']}/{_initial_gate['daily_cap']}, "
+            f"circuit_open={_initial_gate['circuit_open']}"
+        )
         if not _initial_gate["can_follow"]:
+            # circuit breaker か rate cap か区別 (v4)
+            if _initial_gate.get("circuit_open"):
+                logger.error(
+                    f"[rate_gate] CIRCUIT BREAKER OPEN before start: "
+                    f"remaining {_initial_gate['circuit_remaining_sec']}s → noop"
+                )
+                _hb_update("circuit_breaker_open_at_start", problem=True,
+                           circuit_remaining_sec=_initial_gate["circuit_remaining_sec"])
+                return EXIT_CIRCUIT_BREAKER
             logger.warning(
-                f"[rate_gate] RATE LIMITED before browser start: hourly={_initial_gate['last_hour']}/{_initial_gate['hourly_cap']}, "
-                f"daily={_initial_gate['today']}/{_initial_gate['daily_cap']} → noop exit ({EXIT_RATE_LIMITED_NOOP})"
+                f"[rate_gate] RATE LIMITED before browser start: "
+                f"min={_initial_gate['last_minute']}/{_initial_gate['minute_cap']}, "
+                f"hour={_initial_gate['last_hour']}/{_initial_gate['hourly_cap']}, "
+                f"day={_initial_gate['today']}/{_initial_gate['daily_cap']} "
+                f"→ noop exit ({EXIT_RATE_LIMITED_NOOP})"
             )
             _hb_update("rate_limited_noop", problem=False,
+                       minute_count=_initial_gate["last_minute"],
                        hourly_count=_initial_gate["last_hour"],
                        daily_count=_initial_gate["today"])
             return EXIT_RATE_LIMITED_NOOP
@@ -418,6 +439,7 @@ def main():
     success = 0
     skipped = 0
     failed = 0
+    consecutive_fails = 0  # v4 (Codex 29回目 #4): 指数バックオフ + circuit breaker 用
     visited_seeds = set()
 
     # 2026-05-12 残月達成プラン (CEO 指示): harvest 短縮 + pool target 軽量化で
@@ -512,16 +534,27 @@ def main():
         status, reason = follow_one(bm, username)
         if status == "success":
             success += 1
+            consecutive_fails = 0  # v4 reset on success
             already.add(username)
             append_followed(username, username)
             try:
                 _rate_record()  # lock + recheck (GateError 可能)
+                # Codex 30回目 #5: 成功時 直近失敗カウンタを reset
+                try:
+                    from shared.follow_rate_gate import record_success_resets_failures as _rate_reset_fails
+                    _rate_reset_fails()
+                except Exception:
+                    pass
             except GateError as e:
                 logger.warning(f"[rate_gate] record_follow lock cap reached: {e} → stop")
                 _hb_update("rate_limited_record", problem=False,
                            success_so_far=success, error=str(e)[:200])
-                # Codex 10回目 #1: success>0 でも非0で報告 (虚偽成功 0 排除)
-                exit_code = EXIT_RATE_LIMITED_PARTIAL
+                # Codex 30回目 #4: 文字列マッチ廃止 → GateError.kind で構造判定
+                if getattr(e, "kind", "") == "circuit":
+                    exit_code = EXIT_CIRCUIT_BREAKER
+                else:
+                    # Codex 10回目 #1: success>0 でも非0で報告 (虚偽成功 0 排除)
+                    exit_code = EXIT_RATE_LIMITED_PARTIAL
                 break
             elapsed = time.time() - t_start
             rate = success / max(elapsed/60, 0.01)
@@ -535,8 +568,30 @@ def main():
             if reason and "already_following" in str(reason):
                 append_followed(username, username, source="skip_discover")
         else:
+            # v4 (Codex 29回目 #4): 失敗 record → 連続失敗で circuit breaker 発動
             failed += 1
-            logger.warning(f"failed {username}: {reason}")
+            consecutive_fails += 1
+            logger.warning(f"failed {username}: {reason} (consecutive_fails={consecutive_fails})")
+            try:
+                fr = _rate_record_failure()
+                if fr.get("circuit_triggered"):
+                    logger.error(
+                        f"[rate_gate] CIRCUIT BREAKER triggered "
+                        f"(recent_failures={fr['recent_failures']}/{fr['fail_threshold']}) "
+                        f"→ stop"
+                    )
+                    _hb_update("circuit_breaker_open", problem=True,
+                               success_so_far=success,
+                               recent_failures=fr.get("recent_failures"))
+                    exit_code = EXIT_CIRCUIT_BREAKER
+                    break
+            except Exception as e:
+                logger.warning(f"[rate_gate] record_failure err: {e}")
+            # 指数バックオフ
+            backoff = _rate_backoff(consecutive_fails)
+            if backoff > 0:
+                logger.info(f"[backoff] {backoff:.1f}s sleep (consecutive_fails={consecutive_fails})")
+                time.sleep(backoff)
 
     _hb_update("follow_done", problem=False,
                success_total=success, skipped=skipped, failed=failed,
