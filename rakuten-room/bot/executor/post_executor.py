@@ -221,12 +221,73 @@ class PostExecutor:
             self._human_delay(1.0, 2.0)
             result["screenshots"].append(str(self.bm.take_screenshot("04_review_entered")))
 
-            # 入力確認
-            entered = textarea.input_value()
-            if not entered or len(entered) < 10:
-                result["error"] = f"入力テキストが短すぎます（{len(entered or '')}文字）"
+            # 入力確認 v9.1 (CEO 5/20 指示「省略禁止」+ Codex 28回目 review 反映)
+            # ・改行 \r\n → \n 正規化 (textarea は \n に統一されるため)
+            # ・Unicode NFC 正規化 (ブラウザ側 NFC 変換に合わせる)
+            # ・文字数完全一致 + 全文一致 (中間 1-2 文字改変も検知)
+            # ・空入力 / mismatch すべて screenshot 必須 (監査性)
+            # ・SHA-256 ハッシュ ログ + maxlength 記録
+            # 関連: memory/comment_full_text_rule.md
+            import hashlib
+            import unicodedata
+
+            def _normalize(s: str) -> str:
+                # \r\n / \r → \n + NFC
+                return unicodedata.normalize("NFC", (s or "").replace("\r\n", "\n").replace("\r", "\n"))
+
+            entered_raw = textarea.input_value() or ""
+            entered = _normalize(entered_raw)
+            expected = _normalize(review_text)
+            expected_len = len(expected)
+            entered_len = len(entered)
+            try:
+                maxlength = textarea.get_attribute("maxlength") or "?"
+            except Exception:
+                maxlength = "?"
+            exp_hash = hashlib.sha256(expected.encode("utf-8")).hexdigest()[:12]
+            ent_hash = hashlib.sha256(entered.encode("utf-8")).hexdigest()[:12]
+
+            # ハッシュ + maxlength を evidence に記録
+            result["comment_verify"] = {
+                "expected_len": expected_len,
+                "entered_len": entered_len,
+                "expected_sha256_12": exp_hash,
+                "entered_sha256_12": ent_hash,
+                "maxlength": maxlength,
+                "expected_head": expected[:20],
+                "expected_tail": expected[-20:],
+                "entered_head": entered[:20],
+                "entered_tail": entered[-20:],
+            }
+
+            # 空入力 check (空でも screenshot 必須)
+            if not entered:
+                result["error"] = f"入力テキストが空 (fill 失敗) expected_len={expected_len} maxlength={maxlength}"
+                logger.error(f"COMMENT 空入力検知: expected={expected_len}文字 / maxlength={maxlength}")
+                result["screenshots"].append(str(self.bm.take_screenshot("04_comment_empty")))
                 return result
-            logger.info(f"入力完了: {len(entered)}文字")
+
+            # 長さ check
+            if entered_len != expected_len:
+                result["error"] = (f"入力テキスト長 mismatch: expected={expected_len}, "
+                                    f"entered={entered_len}, maxlength={maxlength} (省略 risk)")
+                logger.error(f"COMMENT 省略検知: expected={expected_len}文字, entered={entered_len}文字 "
+                              f"(差={expected_len-entered_len}), maxlength={maxlength}, "
+                              f"exp_hash={exp_hash}, ent_hash={ent_hash}")
+                result["comment_length_mismatch"] = True
+                result["screenshots"].append(str(self.bm.take_screenshot("04_comment_truncated")))
+                return result
+
+            # 全文一致 check (Codex #4 反映: 中間 1-2 文字改変も検知)
+            if entered != expected:
+                result["error"] = f"入力テキスト中間改変疑い: 長さ一致だが内容不一致 (exp_hash={exp_hash} ent_hash={ent_hash})"
+                logger.error(f"COMMENT 中間改変検知: head={entered[:20]!r} vs {expected[:20]!r}, "
+                              f"tail={entered[-20:]!r} vs {expected[-20:]!r}")
+                result["comment_content_mismatch"] = True
+                result["screenshots"].append(str(self.bm.take_screenshot("04_comment_mid_modified")))
+                return result
+
+            logger.info(f"入力完了 (full match): {entered_len}文字 / sha={ent_hash} / maxlength={maxlength}")
 
             # Step 6: 「完了」ボタンをクリック
             logger.info("「完了」ボタンを探しています...")
