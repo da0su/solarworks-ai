@@ -56,6 +56,20 @@ def _ssot_targets() -> dict:
         return {"_error": str(e), "source": "fallback"}
 
 
+def _ssot_cumulative() -> dict:
+    """CEO 5/20 指示: スプシ累計実績 N/O/P/Q 列 も毎朝取得.
+
+    「累計数値スプシ分とアカウント分どちらも毎日報告して GPT にアドバイスもらう」
+    要件. ROOM 累計 (room_cumulative_now) と突合可能にする.
+    """
+    try:
+        from ops.notifications.dashboard_report import _load_ssot_cumulative
+        c = _load_ssot_cumulative(force_refresh=True)
+        return c if c else {"_error": "empty"}
+    except Exception as e:
+        return {"_error": str(e)}
+
+
 def _room_cumulative_via_browser() -> dict:
     """CEO 5/18 指示: ROOM 内のすべての累計数字 (スプシ突合用).
 
@@ -231,13 +245,16 @@ CEO は信頼性を最重視. 虚偽報告は厳禁. 過去事例:
 - 5/12-5/17 で 6日間 全 POST/FOLLOW が false success だった (chrome_profile_* が空アカウントへ切替)
 - CEO 「成功してるか商品画面で確認」ルール化済
 
-【CEO 5/18 追加指示: payload の 2 項目を最優先に check】
-1. ssot_targets_today_FRESH: スプシ最新値 (force_refresh で必ず gspread から取得).
+【CEO 5/18 + 5/20 追加指示: payload の 4 項目を最優先 check】
+1. ssot_targets_today_FRESH: スプシ最新「目標値」(B/E/H/K列・force_refresh で gspread).
    サイバー (私) が前提を間違える可能性があるため、必ずこの値を 本日目標 として扱う.
-2. room_cumulative_now: ROOM の全累計 (商品/フォロー/フォロワー/コーディネート/コレクション/いいね).
-   - スプシの累積値と この実 ROOM の累積値が合っているか 比較せよ.
-   - 商品数 = 0 or follower 異常に少ない → profile 異常 (別アカウント切替疑い)
-   - スプシ累積値と乖離 → スプシ集計バグ or 投稿実態が DB に正しく反映されていない疑い
+2. ssot_cumulative_today_FRESH: スプシ「累計実績」(N/O/P/Q列・force_refresh) ← CEO 5/20 NEW
+   投稿/フォロー/いいね/フォローバック の 累計 (前日累計+当日実績の formula 自動計算).
+3. room_cumulative_now: ROOM 実際の全累計 (商品/フォロー/フォロワー/コーディネート/コレクション/いいね).
+4. ssot_cum_vs_room_diff: ② と ③ の乖離 (各項目 delta + warning フラグ).
+   - 大きな乖離 = スプシ集計バグ or 投稿実態が ROOM 反映されてない (false success 再発疑い)
+   - 商品数 = 0 or follower 異常少 → profile 異常 (別アカ切替疑い)
+   - delta が abs(s * 0.05) 超過なら警告必須
 
 本日朝 9:00 の briefing として、以下の過去 24h データを見て:
 1. CEO に伝えるべき最優先 3 アクション (本日 何をすべきか)
@@ -335,27 +352,60 @@ def _compute_ssot_vs_room_diff(ssot: dict, room: dict) -> dict:
 def build_user_payload(now: datetime) -> dict:
     """Codex に渡す全データ (CEO 5/18 指示反映).
 
-    必須 2 点 (CEO 5/18 22:09):
-      1. ssot_targets_today: スプシ最新を force_refresh で必ず取得 (cache 使わない)
-      2. room_cumulative_now: ROOM 内のすべての累計数字 (商品/フォロー/フォロワー/
-         コーディネート/コレクション/いいね) - スプシが合っているかの突合用
+    必須 (CEO 5/18 + 5/20 指示):
+      1. ssot_targets_today_FRESH: スプシ最新目標 (B/E/H/K 列) force_refresh
+      2. ssot_cumulative_today_FRESH: スプシ累計実績 (N/O/P/Q 列) force_refresh  ← CEO 5/20 NEW
+      3. room_cumulative_now: ROOM 内すべての累計数字 (browser 起動 fallback chain)
+      4. ssot_vs_room_diff: ① と ③ の乖離 + NEW ② と ③ の乖離
 
-    Codex 29回目 #8 (CEO 5/20): profile fallback chain + ssot vs room diff 追加
+    CEO 5/20 09:30 指示「累計数値スプシ分とアカウント分どちらも毎日報告」を満たす.
     """
     ssot = _ssot_targets()
+    ssot_cum = _ssot_cumulative()  # CEO 5/20 NEW
     room = _room_cumulative_via_browser()
     return {
         "briefing_at": now.isoformat(timespec="seconds"),
         "window": "前24h (前日 9:00 → 当日 9:00 想定)",
-        "ssot_targets_today_FRESH": ssot,  # CEO 5/18: 必ず最新
-        "room_cumulative_now": room,  # CEO 5/18: ROOM 全累計突合 + Codex 29 fallback chain
-        "ssot_vs_room_diff": _compute_ssot_vs_room_diff(ssot, room),  # Codex 29 #8
+        "ssot_targets_today_FRESH": ssot,           # CEO 5/18: 目標値 (B/E/H/K)
+        "ssot_cumulative_today_FRESH": ssot_cum,    # CEO 5/20: 累計実績 (N/O/P/Q) ← NEW
+        "room_cumulative_now": room,                # ROOM 全累計
+        "ssot_vs_room_diff": _compute_ssot_vs_room_diff(ssot, room),
+        "ssot_cum_vs_room_diff": _compute_ssot_cum_vs_room_diff(ssot_cum, room),  # NEW
         "post_24h": _post_summary_24h(now),
         "follow_24h": _follow_summary_24h(now),
         "profile_health": _profile_health(),
         "recent_codex_reviews_24h": _recent_codex_reviews(),
         "codex_usage_cumulative": _usage_cumulative(),
     }
+
+
+def _compute_ssot_cum_vs_room_diff(ssot_cum: dict, room: dict) -> dict:
+    """スプシ累計 (N/O/P/Q) と ROOM 実際の累計 の乖離計算 (CEO 5/20)."""
+    if not isinstance(ssot_cum, dict) or "_error" in ssot_cum:
+        return {"_error": "ssot_cum invalid", "ssot_cum": ssot_cum}
+    if not isinstance(room, dict) or "_error" in room:
+        return {"_error": "room invalid", "room_error": room.get("_error") if isinstance(room, dict) else "?"}
+    # mapping: post_cum vs item_count (ROOM item count = 投稿累計)
+    #          follow_cum vs follow_count (ROOM フォロー数)
+    #          like_cum vs like_count (ROOM いいね数)
+    #          fb_cum vs follower_count? (フォロワー = followback されたユーザ含む)
+    diff = {}
+    pairs = [
+        ("post_cum", "item_count", "投稿"),
+        ("follow_cum", "follow_count", "フォロー"),
+        ("like_cum", "like_count", "いいね"),
+        ("fb_cum", "follower_count", "フォロワー (fb 累計の代理)"),
+    ]
+    for ssot_key, room_key, label in pairs:
+        s = ssot_cum.get(ssot_key, 0) or 0
+        r = room.get(room_key, 0) or 0
+        diff[label] = {
+            "ssot_cumulative": s,
+            "room_actual": r,
+            "delta": r - s,  # positive = ROOM が多い (= スプシ集計遅れ可能性)
+            "warning": abs(r - s) > max(100, int(s * 0.05)) if s else False,
+        }
+    return diff
 
 
 def request_codex_briefing(payload: dict) -> dict:

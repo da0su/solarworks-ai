@@ -106,6 +106,53 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
     return targets
 
 
+def _load_ssot_cumulative(force_refresh: bool = True) -> dict:
+    """スプシから 今日の 累計実績 (N/O/P/Q列) を取得 (CEO 5/20 指示).
+
+    CEO 「累計数値スプシ分とアカウント分どちらも毎日報告」要件:
+    - N列 = 投稿累計
+    - O列 = フォロー累計
+    - P列 = いいね累計
+    - Q列 = フォローバック累計
+    (formula 自動計算済: 前日累計 + 当日実績)
+
+    Returns: {"post_cum": int, "follow_cum": int, "like_cum": int, "fb_cum": int,
+              "date": str, "source": str, "fetched_at": str}
+    """
+    today = datetime.now().strftime("%Y-%m-%d")
+    today_slash = datetime.now().strftime("%Y/%m/%d")
+    cumulative = {}
+    try:
+        import gspread
+        gc = gspread.service_account(filename=str(GSPREAD_CREDS))
+        sh = gc.open_by_key(SSOT_SPREADSHEET_ID)
+        ws = next(w for w in sh.worksheets() if w.id == SSOT_SHEET_GID)
+        rows = ws.get_all_values()
+        for row in rows:
+            if not row or not row[0]:
+                continue
+            if row[0] == today_slash or row[0] == today:
+                # N=投稿累計, O=フォロー累計, P=いいね累計, Q=フォローバック累計
+                # row[13] = N, row[14] = O, row[15] = P, row[16] = Q (0-indexed)
+                def _i(v):
+                    try: return int(str(v).replace(",", "").strip())
+                    except: return 0
+                cumulative = {
+                    "post_cum":   _i(row[13]) if len(row) > 13 else 0,
+                    "follow_cum": _i(row[14]) if len(row) > 14 else 0,
+                    "like_cum":   _i(row[15]) if len(row) > 15 else 0,
+                    "fb_cum":     _i(row[16]) if len(row) > 16 else 0,
+                    "date": today,
+                    "source": "gspread:楽天ROOM_デイリーログ N/O/P/Q列",
+                    "fetched_at": datetime.now().isoformat(timespec="seconds"),
+                }
+                break
+    except Exception as e:
+        print(f"[ssot_cum] gspread fetch failed: {e}", file=sys.stderr)
+        cumulative = {"_error": str(e)}
+    return cumulative
+
+
 def _readonly(path: Path) -> sqlite3.Connection | None:
     if not path.exists():
         return None
