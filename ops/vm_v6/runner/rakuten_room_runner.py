@@ -21,7 +21,7 @@ from pathlib import Path
 def main():
     parser = argparse.ArgumentParser(description="楽天ROOM VM v6 unified runner")
     parser.add_argument("--mode", required=True,
-                        choices=["post", "like", "follow", "followback"])
+                        choices=["post", "like", "follow", "followback", "comment_edit"])
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--batch", type=int, default=1, help="POST batch index")
     parser.add_argument("--force", action="store_true", help="force (FOLLOW dead_zone bypass)")
@@ -52,6 +52,10 @@ def main():
         elif args.mode == "followback":
             from ops.vm_v6.runner.followback_executor_v6 import run_followback
             result = run_followback(limit=args.limit, hb=hb, log=log)
+        elif args.mode == "comment_edit":
+            # CEO 5/21 自立対応: 空 comment 投稿の append 修正
+            from ops.vm_v6.runner.comment_edit_executor_v6 import run_comment_edit
+            result = run_comment_edit(hb=hb, log=log)
         else:
             log.log(f"[ERROR] unknown mode: {args.mode}")
             return 1
@@ -59,6 +63,9 @@ def main():
         # 結果を JSON で stdout に出力 (HTTP server がパースする)
         print(json.dumps(result, ensure_ascii=False))
         log.log(f"=== rakuten_room_runner end: {result} ===")
+        # comment_edit mode: job_success (Codex 42 #1) で判定
+        if args.mode == "comment_edit":
+            return 0 if result.get("job_success") else 4
         return 0 if result.get("success", 0) > 0 or result.get("stop_reason") in ("target_reached", "all_seeds_done", "completed") else 4
 
     except Exception as e:
