@@ -256,13 +256,47 @@ class QueueExecutor:
                     result = executor.execute(url, comment)
 
                     if result["success"]:
+                        # v9.2: degraded_empty_comment は「成功カウントしない」(CEO 偽装報告防止)
+                        is_degraded = bool(result.get("degraded_empty_comment"))
                         # 成功
                         room_url = result.get("room_url", "")
-                        qm.mark_posted(queue_id, room_url=room_url,
-                                       result_message="OK")
-                        posted_count += 1
+                        msg = "OK_DEGRADED_EMPTY_COMMENT" if is_degraded else "OK"
+                        qm.mark_posted(queue_id, room_url=room_url, result_message=msg)
+                        if not is_degraded:
+                            posted_count += 1
                         consecutive_failures = 0
-                        logger.info(f"  ✅ 成功 (成功{posted_count}{target_label}) -> {room_url}")
+                        if is_degraded:
+                            logger.error(f"  ⚠️ DEGRADED (投稿は成立したが ROOM 表示 comment 異常) -> {room_url}")
+                        else:
+                            logger.info(f"  ✅ 成功 (成功{posted_count}{target_label}) -> {room_url}")
+
+                        # v9.2: post_after_check で auto_fix_pending なら pending_comment_edit=1 SET
+                        # (CEO 5/22 指示: 投稿文無し投稿の auto-detect + auto-fix)
+                        pac = result.get("post_after_check", {})
+                        if pac.get("auto_fix_pending"):
+                            try:
+                                import sqlite3
+                                from .. import config as _cfg
+                                _db_path = getattr(_cfg, "DB_PATH", None) or \
+                                    (_cfg.DATA_DIR / "room_bot.db")
+                                _con = sqlite3.connect(str(_db_path), timeout=15.0)
+                                _con.execute(
+                                    "UPDATE post_queue SET pending_comment_edit=1, "
+                                    "comment_edit_status='auto_flag_post_after_truncated' "
+                                    "WHERE id=?",
+                                    (queue_id,),
+                                )
+                                _con.commit()
+                                _con.close()
+                                logger.error(
+                                    f"  ⚠️ post_after_check: ROOM 表示 comment が "
+                                    f"期待と不一致 ({pac.get('verdict')}). "
+                                    f"pending_comment_edit=1 SET. "
+                                    f"displayed_len={pac.get('displayed_len')} "
+                                    f"expected_len={pac.get('expected_len')}"
+                                )
+                            except Exception as _ae:
+                                logger.warning(f"  pending_comment_edit SET 失敗: {_ae}")
 
                         # post_history.json にも記録
                         _append_post_history(

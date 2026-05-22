@@ -235,6 +235,25 @@ class PostExecutor:
                 # \r\n / \r → \n + NFC
                 return unicodedata.normalize("NFC", (s or "").replace("\r\n", "\n").replace("\r", "\n"))
 
+            def _normalize_loose(s: str) -> str:
+                """post_after_check 用 緩い正規化 (HTML 起因の不可視/全角 SP/nbsp 等を吸収).
+
+                Codex v9.2 review #9: HTML 内の改行/nbsp、前後空白、不可視文字を正規化.
+                """
+                import re as _re_n
+                t = unicodedata.normalize(
+                    "NFC",
+                    (s or "").replace("\r\n", "\n").replace("\r", "\n"),
+                )
+                # nbsp/全角SP/zwsp/zwj/zwnj/word joiner を半角 SP に
+                for ch, rep in [(" ", " "), ("　", " "),
+                                 ("​", ""), ("‌", ""),
+                                 ("‍", ""), ("⁠", "")]:
+                    t = t.replace(ch, rep)
+                # 連続空白を 1 つに、前後 trim
+                t = _re_n.sub(r"\s+", " ", t).strip()
+                return t
+
             entered_raw = textarea.input_value() or ""
             entered = _normalize(entered_raw)
             expected = _normalize(review_text)
@@ -626,6 +645,129 @@ class PostExecutor:
                 result["degraded_success"] = True
             logger.info(f"投稿真の成功 confirmed! evidence={success_evidence} | verify={real_verify_msg} | room_url={room_url}")
             result["screenshots"].append(str(self.bm.take_screenshot("06_success_verified")))
+
+            # ==========================================================
+            # (F) v9.2: read-after-post (CEO 5/22 指示 / 5/17・5/10 空 comment 投稿事案)
+            # 投稿成功 confirmed 後、ROOM 公開ページで comment 表示を実検証.
+            # 不一致 (空 or 省略 or 違う) なら success=True 維持しつつ
+            # auto_fix_pending flag を立て、queue_executor が pending_comment_edit=1 を SET.
+            # 関連: memory/comment_full_text_rule.md
+            # ==========================================================
+            expected_comment = _normalize(review_text)
+            result["post_after_check"] = {"performed": False}
+            try:
+                ctx = self.page.context
+                after_page = ctx.new_page()
+                try:
+                    # 検証先 URL 決定: room_url 取得済ならそれ / 無ければ my/items から直近 1 件
+                    target_url = room_url
+                    if not target_url:
+                        try:
+                            after_page.goto("https://room.rakuten.co.jp/my/items",
+                                            timeout=30000, wait_until="domcontentloaded")
+                            self._human_delay(2.0, 3.0)
+                            latest = after_page.evaluate(r"""() => {
+                                const a = document.querySelector('a[href*="/items/"]');
+                                if (!a) return null;
+                                const h = a.getAttribute('href') || '';
+                                return h.startsWith('http') ? h : ('https://room.rakuten.co.jp' + h);
+                            }""")
+                            target_url = latest
+                        except Exception as _ee:
+                            logger.warning(f"[post_after_check] my/items 経由 URL 取得失敗: {_ee}")
+
+                    if target_url:
+                        after_page.goto(target_url, timeout=30000,
+                                          wait_until="domcontentloaded")
+                        try:
+                            after_page.wait_for_load_state("networkidle", timeout=10000)
+                        except Exception:
+                            pass
+                        self._human_delay(2.0, 3.0)
+
+                        # comment 表示テキスト取得 (複数 selector を試す)
+                        displayed_comment = ""
+                        sel_used = None
+                        for sel in ['[data-test*="comment"]', '.item-comment',
+                                    '[class*="ItemComment"]', '[class*="item_comment"]',
+                                    '[class*="comment-body"]', 'p.comment',
+                                    '[class*="description"]']:
+                            try:
+                                loc = after_page.locator(sel).first
+                                if loc.count() > 0:
+                                    t = loc.text_content(timeout=2000) or ""
+                                    if t.strip():
+                                        displayed_comment = t
+                                        sel_used = sel
+                                        break
+                            except Exception:
+                                continue
+                        # Codex v9.2 #9: HTML 起因の不可視文字も吸収する緩い正規化で再比較
+                        displayed_norm = _normalize(displayed_comment)
+                        displayed_loose = _normalize_loose(displayed_comment)
+                        expected_loose = _normalize_loose(review_text)
+                        check_info = {
+                            "performed": True,
+                            "target_url": target_url,
+                            "selector_used": sel_used,
+                            "displayed_len_strict": len(displayed_norm),
+                            "displayed_len_loose": len(displayed_loose),
+                            "expected_len_strict": len(expected_comment),
+                            "expected_len_loose": len(expected_loose),
+                            "displayed_head": displayed_loose[:60],
+                            "expected_head": expected_loose[:60],
+                        }
+                        # 判定:
+                        # (1) strict 完全一致 → EXACT_MATCH
+                        # (2) loose 完全一致 (空白/nbsp 違いのみ) → EXACT_LOOSE_MATCH
+                        # (3) 末尾 30 char loose 一致 + 表示長 >= 期待 * 0.9 → TAIL_MATCH_OK
+                        # (4) その他 → EMPTY_OR_TRUNCATED + degraded
+                        tail_min = max(30, min(50, len(expected_loose) // 3))
+                        if displayed_norm == expected_comment:
+                            check_info["verdict"] = "EXACT_MATCH"
+                        elif displayed_loose == expected_loose:
+                            check_info["verdict"] = "EXACT_LOOSE_MATCH"
+                        elif (expected_loose
+                              and len(displayed_loose) >= len(expected_loose) * 0.9
+                              and displayed_loose.endswith(expected_loose[-tail_min:])):
+                            check_info["verdict"] = "TAIL_MATCH_OK"
+                        else:
+                            check_info["verdict"] = "EMPTY_OR_TRUNCATED"
+                            check_info["auto_fix_pending"] = True
+                            # Codex v9.2 review #8: success=True 維持しつつ degraded を強く立てる.
+                            # KPI/集計で「成功」に数えないよう queue_executor 側に通知.
+                            result["degraded_empty_comment"] = True
+                            logger.error(
+                                f"[post_after_check] 投稿後 ROOM 表示 comment 不一致 (DEGRADED): "
+                                f"displayed_loose_len={len(displayed_loose)} "
+                                f"expected_loose_len={len(expected_loose)} "
+                                f"displayed_head={displayed_loose[:60]!r} "
+                                f"expected_head={expected_loose[:60]!r} "
+                                f"selector={sel_used}"
+                            )
+                            try:
+                                result["screenshots"].append(
+                                    str(self.bm.take_screenshot("07_post_after_truncated"))
+                                )
+                            except Exception:
+                                pass
+                        result["post_after_check"] = check_info
+                    else:
+                        result["post_after_check"] = {
+                            "performed": False,
+                            "error": "target_url 不明 (room_url None かつ my/items 取得失敗)",
+                        }
+                finally:
+                    try:
+                        after_page.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning(f"[post_after_check] 例外 (post 自体は success 維持): {e}")
+                result["post_after_check"] = {
+                    "performed": False,
+                    "error": str(e)[:200],
+                }
 
             self.bm.save_session()
             return result
