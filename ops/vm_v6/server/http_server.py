@@ -75,7 +75,7 @@ async def status(authorization: str = Header(None)):
 async def run(payload: dict, authorization: str = Header(None)):
     check_auth(authorization)
     mode = payload.get("mode")
-    if mode not in ["post", "like", "follow", "followback"]:
+    if mode not in ["post", "like", "follow", "followback", "comment_edit"]:
         raise HTTPException(status_code=400, detail="invalid mode")
     if mode in RUNNING_MODES:
         return {"status": "already_running", "pid": RUNNING_MODES[mode]["pid"]}
