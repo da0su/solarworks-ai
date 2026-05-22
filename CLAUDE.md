@@ -2,6 +2,46 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🚨🚨 ROOM 4 機能 状況把握フロー (必須・2026-05-22 CEO 指示・再発防止)
+
+**「ROOM どう?」「フォロー / POST / LIKE / FOLLOWBACK 状況」「停止してる?」**
+等の質問を受けたら **必ず最初に** 以下を実行する.
+
+### Step 1: SSOT 確認 (絶対遵守・例外なし)
+```bash
+python ops/room_status.py --human
+```
+これだけ. host のレガシー JSON を最初に見ない.
+
+### Step 2: 禁忌ファイル (状況判断目的では絶対禁止)
+- ✗ `rakuten-room/bot/data/follow_history.json` (Plan v6 cutover 凍結)
+- ✗ `rakuten-room/bot/data/like_history.json` (同上)
+- ✗ `rakuten-room/bot/data/post_history.json` (同上)
+- ✗ `rakuten-room/bot/data/fl_daily_log.json` (さらに古い)
+- ✗ `rakuten-room/bot/data/chrome_profile_post/` 等の Cookies/Preferences mtime
+
+これらの mtime や last_entry を見て「停止」と判断するのは **禁止**.
+
+### Step 3: SSOT (これしか見ない)
+- `state/follow_runtime_state.json` (patrol 15分毎 update / 4機能まとめ)
+- `state/patrol_v6_state.json`
+- `state/daily_targets_ssot.json`
+- `state/follow_rate_state.json`
+- スプシ `楽天ROOM_検証管理` / シート `楽天ROOM_デイリーログ` (gid=1447646534)
+
+### 過去の失敗例 (印象付け)
+- 2026-05-20: chrome_profile_post (host) を見て「全 profile 空アカ」誤判定 → CEO「VBでやってるんだよ」
+- 2026-05-22: follow_history.json (5/20 凍結) を見て「FOLLOW 2日停止」誤判定 → CEO「フォローは毎日順調に増えている」
+
+**同じ失敗 2 回**. Codex 相談で再発防止フロー確立 (2026-05-22). 次に間違えたら 3 回目.
+
+### 関連 memory
+- `memory/rakuten_machine_split.md` - VM vs host 役割分担
+- `memory/vm_headless_only_rule.md` - VM 起動方式
+- `memory/rakuten_room_targets_ssot.md` - 目標値 SSOT
+
+---
+
 ## Codex (GPT-5) Critical Review (必須・2026-05-16 CEO 指示)
 
 **「君一人では信頼できない。ChatGPT (Codex) と連携してブラッシュアップ」** (CEO 指示)

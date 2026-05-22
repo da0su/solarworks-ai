@@ -1,4 +1,4 @@
-{
+﻿{
   "permissions": {
     "allow": [
       "Read(//c/Program Files/Google/Chrome/**)",
@@ -26,20 +26,54 @@
       "Bash(cscript //nologo \"C:\\\\scripts\\\\test_vbs_debug.vbs\")",
       "Bash(cscript //nologo \"C:\\\\scripts\\\\test_vbs_async.vbs\")",
       "Bash(cscript //nologo \"C:\\\\scripts\\\\notify_dev_done.vbs\")",
-      "Bash(cmd.exe /c \"C:\\\\scripts\\\\notify_approval.bat\")"
+      "Bash(cmd.exe /c \"C:\\\\scripts\\\\notify_approval.bat\")",
+      "Bash(python -X utf8 ops/notifications/slack_reporter.py --mark-pending \"Slack閾ｪ蜍募ｱ蜻翫す繧ｹ繝・Β讒狗ｯ峨ユ繧ｹ繝・")",
+      "Bash(python -X utf8 ops/notifications/slack_reporter.py --status)",
+      "Bash(python -X utf8 ops/notifications/slack_reporter.py \"縲舌し繧､繝舌・蝣ｱ蜻・#019縲全lack閾ｪ蜍募ｱ蜻翫す繧ｹ繝・Β讒狗ｯ牙ｮ御ｺ・ｼ・lack_reporter.py繝ｻstop_hook.py螳溯｣・・Stop Hook險ｭ螳壹・CLAUDE.md螳御ｺ・ヵ繝ｭ繝ｼ霑ｽ險假ｼ噂")",
+      "Bash(python -X utf8 ops/notifications/stop_hook.py)",
+      "Bash(python -X utf8 ops/slack_monitor/check_unread.py)",
+      "Bash(python -X utf8 ops/slack_monitor/unread_hook.py)",
+      "Bash(echo \"hook exit code: $?\")"
     ]
   },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:/Users/infoa/Documents/solarworks-ai/ops/slack_monitor/unread_hook.py"
+          },
+          {
+            "type": "command",
+            "command": "python C:/Users/infoa/Documents/solarworks-ai/ops/room_status_guard_hook.py"
+          }
+        ]
+      }
+    ],
     "PermissionRequest": [
       {
         "matcher": "",
         "hooks": [
           {
             "type": "command",
-            "command": "python ops/notifications/notifier.py approval --no-delay"
+            "command": "python C:/Users/infoa/Documents/solarworks-ai/ops/notifications/notifier.py approval --no-delay"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:/Users/infoa/Documents/solarworks-ai/ops/notifications/stop_hook.py"
           }
         ]
       }
     ]
   }
 }
+
