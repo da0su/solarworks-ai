@@ -182,6 +182,14 @@ def auto_recover(action: str, context: dict) -> dict:
 # ============================================================
 
 def main():
+    # Windows cp932 stdout で UnicodeEncodeError 発生 → state file 書き込み未到達
+    # を防ぐため stdout を utf-8 に reconfigure
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--check-only", action="store_true",
                         help="auto recover を実行せず判定のみ (--auto-recover を override)")
