@@ -152,6 +152,7 @@ def run_preflight() -> tuple[bool, str]:
             [sys.executable, str(PREFLIGHT_SCRIPT), "--verbose"],
             capture_output=True, text=True, timeout=60,
             creationflags=_NO_WINDOW,
+            encoding="utf-8", errors="replace",
         )
         tail = "\n".join(r.stdout.splitlines()[-15:])
         return (r.returncode == 0, tail)

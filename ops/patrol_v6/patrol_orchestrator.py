@@ -71,7 +71,8 @@ def auto_recover(action: str, context: dict) -> dict:
         if action == "vm_startvm":
             r = subprocess.run([
                 r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe", "startvm", "RoomBot", "--type", "headless"
-            ], capture_output=True, text=True, timeout=60, creationflags=NO_WIN)
+            ], capture_output=True, text=True, timeout=60, creationflags=NO_WIN,
+                encoding="utf-8", errors="replace")
             result["rc"] = r.returncode
 
         elif action == "vm_http_restart":

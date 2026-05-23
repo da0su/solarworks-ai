@@ -16,7 +16,8 @@ def check() -> dict:
 
     try:
         r = subprocess.run([VBOXMANAGE, "showvminfo", "RoomBot", "--machinereadable"],
-                          capture_output=True, text=True, timeout=10, creationflags=NO_WIN)
+                          capture_output=True, text=True, timeout=10, creationflags=NO_WIN,
+                          encoding="utf-8", errors="replace")
         if r.returncode != 0:
             alerts.append({"level": "CRITICAL", "message": f"VBoxManage error rc={r.returncode}"})
             return {"layer": "L2_vm", "status": "error", "alerts": alerts}
