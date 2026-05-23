@@ -433,6 +433,13 @@ def main():
             time.sleep(10)
     if not login_ok:
         logger.error("not logged in (after 2 attempts)")
+        # 2026-05-24: CEO 通知 (approval_needed) + 未ログイン理由を明示
+        try:
+            from notifier import notify, NotifyType
+            notify(NotifyType.APPROVAL,
+                   detail="フォローBOT: 未ログイン (cookie 期限切れ？) → python run.py login を実行してください")
+        except Exception:
+            pass
         bm.stop()
         return 1
 
