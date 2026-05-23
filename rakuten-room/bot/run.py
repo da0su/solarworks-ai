@@ -30,6 +30,7 @@
 import argparse
 import io
 import json
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -51,15 +52,59 @@ from logger.logger import setup_logger, save_post_result
 logger = setup_logger()
 
 
+def _propagate_cookies_to_all_profiles(src_profile: Path) -> dict:
+    """ログイン後、全アクションプロファイルに cookie を自動複製する。
+
+    2026-05-24 追加: ログイン後に1回呼ぶだけで全プロファイル更新。
+    - 複製元: ログイン成功した profile (src_profile)
+    - 複製先: chrome_profile (legacy), chrome_profile_like, chrome_profile_follow,
+              chrome_profile_followback (src と異なるもの全て)
+    """
+    data_dir = src_profile.parent
+    targets = [
+        "chrome_profile",
+        "chrome_profile_post",
+        "chrome_profile_like",
+        "chrome_profile_follow",
+        "chrome_profile_followback",
+    ]
+    results: dict[str, str] = {}
+    for t in targets:
+        dst_p = data_dir / t
+        if dst_p.resolve() == src_profile.resolve():
+            results[t] = "source (skip)"
+            continue
+        dst_dir = dst_p / "Default" / "Network"
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        success = True
+        for fname in ("Cookies", "Cookies-journal"):
+            src_f = src_profile / "Default" / "Network" / fname
+            if not src_f.exists():
+                continue
+            tmp = dst_dir / (fname + ".propagate_tmp")
+            try:
+                shutil.copy2(src_f, tmp)
+                tmp.replace(dst_dir / fname)
+            except Exception as e:
+                logger.error(f"[login_propagate] {t}/{fname} 複製失敗: {e}")
+                success = False
+        results[t] = "ok" if success else "partial_fail"
+        logger.info(f"[login_propagate] {t}: {results[t]}")
+    return results
+
+
 def cmd_login(action: str = "post"):
-    """CEOの手動ログイン → セッション保存
+    """CEOの手動ログイン → セッション保存 → 全プロファイルへ自動複製
+
+    2026-05-24 改善: ログイン成功後に全 chrome_profile_* へ cookie を自動伝播。
+    一度ログインすれば post/like/follow/followback すべてが有効になる。
 
     Args:
-        action: "post" / "like" / "followback" (2026-05-05 Phase A-2)
-                profile が機能別に分離したため、各 profile で個別にログインが必要
+        action: "post" / "like" / "followback" / "follow" (2026-05-05 Phase A-2)
     """
     logger.info(f"=== ログインモード [action={action}] ===")
     bm = BrowserManager(action=action)
+    login_success = False
     try:
         bm.start()
         bm.login_manual()
@@ -68,6 +113,7 @@ def cmd_login(action: str = "post"):
         status = bm.check_login_status()
         print("\n" + "=" * 60)
         if status["logged_in"]:
+            login_success = True
             print(f"ログイン成功! (判定: {status['method']})")
             print(f"  URL:   {status['url']}")
             print(f"  Title: {status['title']}")
@@ -87,6 +133,24 @@ def cmd_login(action: str = "post"):
     finally:
         bm.stop()
         print("\npersistent contextのcookieはブラウザ終了時に自動保存されています。")
+
+    # ログイン成功時は全プロファイルに cookie を自動伝播 (2026-05-24)
+    if login_success:
+        print("\n[自動複製] 全プロファイルに cookie を伝播中...")
+        prop_result = _propagate_cookies_to_all_profiles(bm._profile_dir)
+        for p, r in prop_result.items():
+            print(f"  {p}: {r}")
+        print("[自動複製] 完了 — post/like/follow/followback が有効化されました")
+        # Slack に成功報告
+        try:
+            import subprocess
+            slack_script = Path(__file__).resolve().parents[2] / "ops" / "notifications" / "slack_reporter.py"
+            if slack_script.exists():
+                msg = "✅ 楽天ROOM 再ログイン成功 — cookie を全プロファイルに複製完了。FOLLOW/LIKE/POST が自動復旧します。"
+                subprocess.run([sys.executable, str(slack_script), msg],
+                               capture_output=True, timeout=15)
+        except Exception as e:
+            logger.warning(f"[login_propagate] Slack 通知失敗: {e}")
 
 
 def cmd_post(product_url: str, review_text: str):
