@@ -41,6 +41,11 @@ SESSION_COOKIE_NAMES = (
     "Rses", "Raut", "rr_session", "Rat",  # legacy
 )
 
+# 2026-05-24 Fix: "本物の" 認証 cookie — これが1つ以上なければ session 切れと判断
+# ODID は device identifier (追跡用) で認証には使えない
+# s_user は ROOM marker だが OSSO/Im なしでは follow/like ボタンが非表示になる
+SESSION_REAL_AUTH_COOKIES = frozenset(("OSSO", "Im", "Re", "Rg", "Rz", "Rses", "Raut", "rr_session", "Rat"))
+
 
 class BrowserManager:
     """Playwright ブラウザ管理（persistent context版）
@@ -108,10 +113,15 @@ class BrowserManager:
         return names
 
     def _has_session_cookies(self) -> bool:
-        """自 profile に rakuten session cookie が含まれているか判定。"""
+        """自 profile に rakuten 認証 session cookie が含まれているか判定。
+
+        2026-05-24 Fix: ODID (device ID) や s_user (ROOM marker) だけでは
+        follow/like ボタンが非表示になる。OSSO/Im/Re 等の本物の auth cookie が
+        1つ以上必要。SESSION_REAL_AUTH_COOKIES で厳格に判定する。
+        """
         cookies_db = self._profile_dir / "Default" / "Network" / "Cookies"
         names = self._read_cookie_names_from_sqlite(cookies_db)
-        return any(n in SESSION_COOKIE_NAMES for n in names)
+        return any(n in SESSION_REAL_AUTH_COOKIES for n in names)
 
     def _copy_cookies_from(self, src_profile: Path) -> bool:
         """src_profile/Default/Network/Cookies* を自 profile に複製する。
@@ -124,9 +134,9 @@ class BrowserManager:
         """
         src_cookies = src_profile / "Default" / "Network" / "Cookies"
         src_names = self._read_cookie_names_from_sqlite(src_cookies)
-        if not any(n in SESSION_COOKIE_NAMES for n in src_names):
+        if not any(n in SESSION_REAL_AUTH_COOKIES for n in src_names):
             logger.warning(
-                f"[profile_init] legacy {src_profile.name} にも session cookie 不在 "
+                f"[profile_init] legacy {src_profile.name} にも real auth cookie 不在 "
                 f"(detected={src_names[:10]}) → 手動 login 必要"
             )
             return False
@@ -280,7 +290,7 @@ class BrowserManager:
             一度も入らずに 5/6 09:00〜5/7 全 batch が "未ログイン" abort した。
             launch_persistent_context() の前に必ず check + copy する。
         """
-        # follow profile は VM 側が独立 login するので skip (HOST 側 fallback のみ)
+        # 2026-05-24 Fix: follow も含む全 action で real auth cookie を確認
         if self._has_session_cookies():
             logger.debug(f"[profile_init] {self._action}: session cookie OK (skip copy)")
             return
@@ -322,12 +332,12 @@ class BrowserManager:
             logger.info(f"[focus_safe] BOT_HEADLESS=1 → headless 強制 (HOST 入力非干渉)")
 
         # 2026-05-07 P0-1 (Plan v5 真因 #1): launch 前に session cookie の存在を保証
-        # follow は VM 側 login なので host 側 chrome_profile_follow には触らない
-        if self._action != "follow":
-            try:
-                self._ensure_session_cookies()
-            except Exception as e:
-                logger.error(f"[profile_init] _ensure_session_cookies 例外: {e}")
+        # 2026-05-24 Fix: follow も HOST BrowserManager で動くので除外条件を撤廃
+        # (旧: follow は VM login なので除外 → follow が HOST 移行後も除外が残りセッション切れ再発)
+        try:
+            self._ensure_session_cookies()
+        except Exception as e:
+            logger.error(f"[profile_init] _ensure_session_cookies 例外: {e}")
 
         chrome_path = config.CHROME_EXECUTABLE_PATH
         logger.info(f"Chrome 実行ファイル: {chrome_path}")
@@ -425,12 +435,14 @@ class BrowserManager:
             cookies_rakuten = self._context.cookies("https://www.rakuten.co.jp")
             all_cookies = cookies_room + cookies_login + cookies_id + cookies_rakuten
             cookie_names = list({c["name"] for c in all_cookies})
+            # 2026-05-24 Fix: ODID/s_user だけでは follow/like ボタン非表示になる
+            # SESSION_REAL_AUTH_COOKIES (OSSO/Im/Re/Rg/Rz 等) が必要
             has_session_cookie = any(
-                name in cookie_names for name in SESSION_COOKIE_NAMES
+                name in cookie_names for name in SESSION_REAL_AUTH_COOKIES
             )
             logger.info(f"  Cookie: {cookie_names[:10]}")
             if has_session_cookie:
-                logger.info(f"  -> セッションcookie検出")
+                logger.info(f"  -> 認証cookie検出 (real auth)")
 
             # --- ログインページにリダイレクトされていないか ---
             is_on_login_page = "grp01.id.rakuten.co.jp" in result["url"] or "/nid/" in result["url"]
