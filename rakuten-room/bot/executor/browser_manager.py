@@ -44,7 +44,10 @@ SESSION_COOKIE_NAMES = (
 # 2026-05-24 Fix: "本物の" 認証 cookie — これが1つ以上なければ session 切れと判断
 # ODID は device identifier (追跡用) で認証には使えない
 # s_user は ROOM marker だが OSSO/Im なしでは follow/like ボタンが非表示になる
-SESSION_REAL_AUTH_COOKIES = frozenset(("OSSO", "Im", "Re", "Rg", "Rz", "Rses", "Raut", "rr_session", "Rat"))
+# 注意: Rses/Raut/rr_session/Rat は旧(廃止)cookie — stale の可能性が高いので除外
+#       Re/Rg/Rz は rakuten.co.jp session だが OSSO または Im なしでは不十分な可能性あり
+# 優先: OSSO (主 SSO token) または Im (id auth) が最低限必要
+SESSION_REAL_AUTH_COOKIES = frozenset(("OSSO", "Im", "Re", "Rg", "Rz"))
 
 
 class BrowserManager:
@@ -291,8 +294,15 @@ class BrowserManager:
             launch_persistent_context() の前に必ず check + copy する。
         """
         # 2026-05-24 Fix: follow も含む全 action で real auth cookie を確認
-        if self._has_session_cookies():
-            logger.debug(f"[profile_init] {self._action}: session cookie OK (skip copy)")
+        # 注: SQLite の name のみチェック (expiry は Chrome 起動時に自動除外される)
+        cookies_db = self._profile_dir / "Default" / "Network" / "Cookies"
+        names = self._read_cookie_names_from_sqlite(cookies_db)
+        found_real = [n for n in names if n in SESSION_REAL_AUTH_COOKIES]
+        if found_real:
+            logger.debug(
+                f"[profile_init] {self._action}: real auth cookie OK → skip copy "
+                f"(found={found_real})"
+            )
             return
 
         legacy = config.DATA_DIR / "chrome_profile"
