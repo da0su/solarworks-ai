@@ -44,9 +44,11 @@ SESSION_COOKIE_NAMES = (
 # 2026-05-24 Fix: "本物の" 認証 cookie — これが1つ以上なければ session 切れと判断
 # ODID は device identifier (追跡用) で認証には使えない
 # s_user は ROOM marker だが OSSO/Im なしでは follow/like ボタンが非表示になる
-# 注意: Rses/Raut/rr_session/Rat は旧(廃止)cookie — stale の可能性が高いので除外
-#       Re/Rg/Rz は rakuten.co.jp session だが OSSO または Im なしでは不十分な可能性あり
-# 優先: OSSO (主 SSO token) または Im (id auth) が最低限必要
+# Rses/Raut/rr_session/Rat は旧(廃止)cookie — stale の可能性が高いので除外
+# Re/Rg/Rz は rakuten.co.jp session だが OSSO/Im なしでは不十分 (session upgrade 不通過)
+# → PRIMARY: OSSO (login.account.rakuten.com 主 SSO) または Im (id.rakuten.co.jp)
+SESSION_PRIMARY_AUTH_COOKIES = frozenset(("OSSO", "Im"))
+# Re/Rg/Rz は session 補助 (PRIMARY が無ければ copy 実行)
 SESSION_REAL_AUTH_COOKIES = frozenset(("OSSO", "Im", "Re", "Rg", "Rz"))
 
 
@@ -116,15 +118,17 @@ class BrowserManager:
         return names
 
     def _has_session_cookies(self) -> bool:
-        """自 profile に rakuten 認証 session cookie が含まれているか判定。
+        """自 profile に rakuten 主認証 cookie が含まれているか判定。
 
-        2026-05-24 Fix: ODID (device ID) や s_user (ROOM marker) だけでは
-        follow/like ボタンが非表示になる。OSSO/Im/Re 等の本物の auth cookie が
-        1つ以上必要。SESSION_REAL_AUTH_COOKIES で厳格に判定する。
+        2026-05-24 Fix:
+          - ODID (device ID) / s_user (ROOM marker) は auth に使えない
+          - Re/Rg/Rz のみ → session/upgrade は通過できず follow/like ボタン非表示
+          - OSSO または Im の存在を必須とする (SESSION_PRIMARY_AUTH_COOKIES)
+        注: SQLite 上の存在確認のみ (expiry 不検査)。有効性は Chrome 起動後に確定。
         """
         cookies_db = self._profile_dir / "Default" / "Network" / "Cookies"
         names = self._read_cookie_names_from_sqlite(cookies_db)
-        return any(n in SESSION_REAL_AUTH_COOKIES for n in names)
+        return any(n in SESSION_PRIMARY_AUTH_COOKIES for n in names)
 
     def _copy_cookies_from(self, src_profile: Path) -> bool:
         """src_profile/Default/Network/Cookies* を自 profile に複製する。
@@ -137,12 +141,14 @@ class BrowserManager:
         """
         src_cookies = src_profile / "Default" / "Network" / "Cookies"
         src_names = self._read_cookie_names_from_sqlite(src_cookies)
-        if not any(n in SESSION_REAL_AUTH_COOKIES for n in src_names):
+        src_primary = [n for n in src_names if n in SESSION_PRIMARY_AUTH_COOKIES]
+        if not src_primary:
             logger.warning(
-                f"[profile_init] legacy {src_profile.name} にも real auth cookie 不在 "
+                f"[profile_init] legacy {src_profile.name} にも PRIMARY auth cookie 不在 "
                 f"(detected={src_names[:10]}) → 手動 login 必要"
             )
             return False
+        logger.info(f"[profile_init] legacy {src_profile.name}: primary auth OK (found={src_primary})")
 
         dst_dir = self._profile_dir / "Default" / "Network"
         dst_dir.mkdir(parents=True, exist_ok=True)
@@ -293,15 +299,17 @@ class BrowserManager:
             一度も入らずに 5/6 09:00〜5/7 全 batch が "未ログイン" abort した。
             launch_persistent_context() の前に必ず check + copy する。
         """
-        # 2026-05-24 Fix: follow も含む全 action で real auth cookie を確認
+        # 2026-05-24 Fix: follow も含む全 action で PRIMARY auth cookie を確認
+        # (OSSO または Im が必須。Re/Rg/Rz のみでは session/upgrade を通過不能)
         # 注: SQLite の name のみチェック (expiry は Chrome 起動時に自動除外される)
         cookies_db = self._profile_dir / "Default" / "Network" / "Cookies"
         names = self._read_cookie_names_from_sqlite(cookies_db)
-        found_real = [n for n in names if n in SESSION_REAL_AUTH_COOKIES]
-        if found_real:
+        found_primary = [n for n in names if n in SESSION_PRIMARY_AUTH_COOKIES]
+        found_session = [n for n in names if n in SESSION_REAL_AUTH_COOKIES]
+        if found_primary:
             logger.debug(
-                f"[profile_init] {self._action}: real auth cookie OK → skip copy "
-                f"(found={found_real})"
+                f"[profile_init] {self._action}: primary auth cookie OK → skip copy "
+                f"(primary={found_primary}, session={found_session})"
             )
             return
 
