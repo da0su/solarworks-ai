@@ -37,6 +37,28 @@ HEARTBEAT_DIR.mkdir(parents=True, exist_ok=True)
 NO_WIN = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
 
+def _cleanup_finished_modes():
+    """RUNNING_MODES から終了済みプロセスを除去 (2026-05-25 fix: stale entry 防止)."""
+    for m in list(RUNNING_MODES.keys()):
+        proc = RUNNING_MODES[m].get("_proc")
+        if proc is not None:
+            if proc.poll() is not None:  # process has terminated
+                del RUNNING_MODES[m]
+        else:
+            # _proc なし (古いエントリ or PID のみ) → PID 存在確認
+            pid = RUNNING_MODES[m].get("pid")
+            if pid:
+                try:
+                    r = subprocess.run(
+                        ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+                        capture_output=True, text=True, timeout=5, creationflags=NO_WIN
+                    )
+                    if str(pid) not in (r.stdout or ""):
+                        del RUNNING_MODES[m]
+                except Exception:
+                    pass
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Quiet (don't print every req)
@@ -74,6 +96,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._check_auth():
                 self._send(401, {"error": "invalid token"})
                 return
+            _cleanup_finished_modes()  # 終了済みプロセスを除去
             out = {"running": list(RUNNING_MODES.keys()), "heartbeats": {}}
             for mode in ["post", "like", "follow", "followback"]:
                 hb_path = HEARTBEAT_DIR / f"heartbeat_{mode}.json"
@@ -98,6 +121,7 @@ class Handler(BaseHTTPRequestHandler):
             if mode not in ["post", "like", "follow", "followback", "comment_edit"]:
                 self._send(400, {"error": "invalid mode"})
                 return
+            _cleanup_finished_modes()  # stale entries を除去
             if mode in RUNNING_MODES:
                 self._send(200, {"status": "already_running", "pid": RUNNING_MODES[mode]["pid"]})
                 return
@@ -123,7 +147,8 @@ class Handler(BaseHTTPRequestHandler):
                 proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT,
                                         cwd=cwd,
                                         creationflags=NO_WIN | DETACHED, close_fds=True)
-                RUNNING_MODES[mode] = {"pid": proc.pid, "started_at": datetime.now().isoformat(),
+                RUNNING_MODES[mode] = {"pid": proc.pid, "_proc": proc,
+                                       "started_at": datetime.now().isoformat(),
                                        "log": str(log_path)}
                 self._send(200, {"status": "launched", "mode": mode, "pid": proc.pid,
                                  "log": str(log_path)})
