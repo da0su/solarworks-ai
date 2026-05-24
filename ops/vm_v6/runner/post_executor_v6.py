@@ -87,7 +87,23 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             compat = CompatBM(bm)
             # 2026-05-24 fix: QueueExecutor は (queue_date, limit, ...) 仕様
             # bm は run() 内で参照されるため class attr で渡す
-            qe = QueueExecutor(limit=limit)
+            # 2026-05-25 fix: 今日の queue が空なら直近の pending を持つ日付を使う
+            import sqlite3 as _sqlite3
+            _db = HOST_BOT_DIR / "data" / "room_bot.db"
+            _qdate = None
+            try:
+                _con = _sqlite3.connect(str(_db), timeout=5)
+                _r = _con.execute(
+                    "SELECT queue_date FROM post_queue WHERE status='queued' "
+                    "ORDER BY queue_date DESC LIMIT 1"
+                ).fetchone()
+                _con.close()
+                if _r:
+                    _qdate = _r[0]
+                    log.log(f"queue_date auto-detect: {_qdate}")
+            except Exception as _qd_err:
+                log.log(f"queue_date detect err: {_qd_err}")
+            qe = QueueExecutor(queue_date=_qdate, limit=limit) if _qdate else QueueExecutor(limit=limit)
             qe._external_bm = compat  # may be unused; queue_executor opens own bm
             summary = qe.run()
 

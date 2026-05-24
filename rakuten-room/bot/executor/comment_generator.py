@@ -848,6 +848,61 @@ def _extract_category(title: str) -> str | None:
     return None
 
 
+_DISCOUNT_RE = re.compile(
+    r"[\d,０-９]+円OFF|[\d０-９]+[%％]OFF|円引き|割引クーポン|OFFクーポン|OFF♪",
+    re.IGNORECASE,
+)
+
+# ジャンル別フォールバックヘッドライン（割引情報しか取れなかった場合の代替）
+_GENRE_FALLBACK_HEADLINES = {
+    "beauty":   "コスメ",
+    "appliance": "家電",
+    "kitchen":  "キッチングッズ",
+    "living":   "暮らし雑貨",
+    "fashion":  "ファッション",
+    "book":     "おすすめ本",
+    "pet":      "ペットグッズ",
+    "kids":     "キッズグッズ",
+    "food":     "スイーツ",
+    "general":  "おすすめ商品",
+}
+
+# 2026-05-25 修正: 割引・プロモ文字列をタイトルから除去する関数
+# 根本原因: ＼クーポンで500円OFF♪／ のようなタイトル冒頭プロモが
+#           _make_headline() でそのままヘッドラインになり誤った割引情報を投稿してしまう
+def _strip_promo_from_title(text: str) -> str:
+    """タイトルから割引・プロモーション記述を除去して純粋な商品名テキストを返す
+    2026-05-25: 「＼500円OFF♪／ミニ財布」→「ミニ財布」のような誤記を防ぐ
+    """
+    # 全角括弧系: ＼...／  《...》  〔...〕  〈...〉
+    text = re.sub(r"＼[^／]{0,50}／", "", text)
+    text = re.sub(r"《[^》]{0,50}》", "", text)
+    text = re.sub(r"〔[^〕]{0,50}〕", "", text)
+    text = re.sub(r"〈[^〉]{0,50}〉", "", text)
+    # 半角括弧でOFF/クーポンを含むもの: (500円OFF) / (10%OFFクーポン)
+    text = re.sub(r"\([^)]{0,40}(?:OFF|クーポン|割引|セール)[^)]{0,40}\)", "", text, flags=re.IGNORECASE)
+    # 数字+円OFF / 数字+%OFF パターン (前後の記号・スペース含む)
+    text = re.sub(r"(?:クーポンで|クーポン使用で)?[\d,０-９]+円OFF[♪！!✨🎁\s　]*", "", text)
+    text = re.sub(r"[\d０-９]+[%％]OFF(?:クーポン)?[♪！!✨\s　]*", "", text)
+    # 只今/爆安/激安 + 価格 パターン
+    text = re.sub(r"只今[\d,０-９]+円OFF[^\s　]*\s*", "", text)
+    text = re.sub(r"只今\s*", "", text)          # 「只今」が残った場合も削除
+    text = re.sub(r"爆安[\d,０-９,円〜～]+\s*", "", text)
+    text = re.sub(r"激安[\d,０-９,円〜～]+\s*", "", text)
+    # 「クーポンで/使って」単独や後ろに来る価格
+    text = re.sub(r"クーポンで[\d,０-９]+円[^\s　]*\s*", "", text)
+    text = re.sub(r"[\d,０-９]+円[〜～][\d,０-９]+円クーポン[^\s　]*\s*", "", text)
+    # 孤立した「クーポンで/クーポン使って」パターン
+    text = re.sub(r"クーポン(?:で|使って|利用で|適用で)?\s*", "", text)
+    # P倍キャンペーン / ポイント表記
+    text = re.sub(r"[＆&]?[Ｐp　 ]*[\d０-９]+倍[♪！!\s　＆&]*", "", text, flags=re.IGNORECASE)
+    # 先頭の !  ★ ＆ / 記号
+    text = re.sub(r"^[!！★☆♪♡♥\s　/／\\＼＆&・]+", "", text)
+    # 末尾の孤立した記号
+    text = re.sub(r"[!！♪\s　]+$", "", text)
+    return text.strip()
+
+
 def _make_headline(title: str, genre: str = "general") -> str:
     """商品タイトルから1行目用の短いフレーズを作る
 
@@ -863,6 +918,8 @@ def _make_headline(title: str, genre: str = "general") -> str:
         r"送料無料|ポイント\d+倍|あす楽|即日発送|ランキング\d+位|レビュー.*?件|★.*",
         "", cleaned
     )
+    # 2026-05-25: 割引・プロモ文字列を除去 (＼500円OFF♪／ 等がヘッドラインに混入防止)
+    cleaned = _strip_promo_from_title(cleaned)
     cleaned = cleaned.strip()
 
     brand = _extract_brand(cleaned)
@@ -888,7 +945,14 @@ def _make_headline(title: str, genre: str = "general") -> str:
     # タイトルから短縮
     if len(cleaned) > 25:
         parts = re.split(r"[　\s/／]", cleaned)
-        shortened = parts[0]
+        # 2026-05-25: parts[0] に割引情報が残っていれば次のパーツを探す
+        shortened = ""
+        for part in parts:
+            if part and not _DISCOUNT_RE.search(part):
+                shortened = part
+                break
+        if not shortened:
+            shortened = parts[0] if parts else cleaned[:25]
         # ブランド名だけだと短すぎる場合、2ワード目を追加
         if brand and len(parts) > 1 and shortened.lower() == brand.lower():
             candidate = f"{parts[0]} {parts[1]}"
@@ -896,8 +960,14 @@ def _make_headline(title: str, genre: str = "general") -> str:
                 shortened = candidate
         if len(shortened) > 25:
             shortened = shortened[:25]
+        # 最終安全チェック: まだ割引情報が含まれる場合はジャンル名で代替
+        if _DISCOUNT_RE.search(shortened):
+            shortened = _GENRE_FALLBACK_HEADLINES.get(genre, "おすすめ商品")
         return shortened
 
+    # 2026-05-25: 短いタイトルでも割引情報チェック
+    if _DISCOUNT_RE.search(cleaned):
+        return _GENRE_FALLBACK_HEADLINES.get(genre, "おすすめ商品")
     return cleaned if cleaned else title[:25]
 
 
@@ -996,6 +1066,17 @@ def generate_comment(title: str, url: str = "", genre: str = None) -> str:
 
     _last_template_index = idx
     _record_opening(first_line)
+
+    # 2026-05-25 安全チェック: コメントに割引・価格クレームが含まれていないか確認
+    # 含まれている場合は CRITICAL ログを出力 (= _make_headline の除去が不十分な場合に気づける)
+    if _DISCOUNT_RE.search(first_line):
+        import logging as _logging
+        _logging.getLogger(__name__).critical(
+            f"[DISCOUNT_CLAIM_IN_COMMENT] headline contains discount info — "
+            f"title={title[:60]!r} headline={first_line[:60]!r}. "
+            f"Check _make_headline() / _strip_promo_from_title() logic."
+        )
+
     return comment
 
 
