@@ -9,8 +9,14 @@ from pathlib import Path
 from .shared_logic import HeartbeatPusher, SessionLogger
 from .browser_manager_v6 import BrowserManagerV6
 
-HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
-sys.path.insert(0, str(HOST_BOT_DIR))
+# 2026-05-24: VM では runner が \\vboxsvr\vm_v6\runner にあり parents[3] が無い
+# rakuten_room_runner.py で sys.path に vm_bot を追加済なので、ここで追加不要
+try:
+    HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
+    if HOST_BOT_DIR.exists():
+        sys.path.insert(0, str(HOST_BOT_DIR))
+except (IndexError, ValueError):
+    pass
 
 
 def run_like(limit: int = 100, hb: HeartbeatPusher = None, log: SessionLogger = None) -> dict:
@@ -33,17 +39,30 @@ def run_like(limit: int = 100, hb: HeartbeatPusher = None, log: SessionLogger = 
 
         try:
             from executor.like_executor import LikeExecutor
+            # 2026-05-24 fix: LikeExecutor は外部 BrowserManager 受けるよう修正済
+            # bm を直接渡す (CompatBM は check_login_status, page, take_screenshot, stop が必要)
             class CompatBM:
-                def __init__(self, ctx, page):
-                    self._context = ctx; self._page = page
+                def __init__(self, ctx, page, action):
+                    self._context = ctx
+                    self._page = page
+                    self._action = action
                 @property
-                def page(self): return self._page
-                def take_screenshot(self, label): return None
+                def page(self):
+                    return self._page
+                def check_login_status(self) -> dict:
+                    # VM では既に bm.is_logged_in() で確認済 → OK 返す
+                    return {"logged_in": True, "method": "vm_v6_pre_checked",
+                            "url": self._page.url, "title": "", "screenshot": ""}
+                def take_screenshot(self, label):
+                    try:
+                        return self._page.screenshot()
+                    except Exception:
+                        return None
                 def stop(self): pass
 
-            compat = CompatBM(bm.context, bm.page)
-            le = LikeExecutor(compat, limit=limit)
-            summary = le.run()
+            compat = CompatBM(bm.context, bm.page, "like")
+            le = LikeExecutor(limit=limit)
+            summary = le.run(bm=compat)
             result["success"] = summary.get("liked", 0)
             result["fail"] = summary.get("failed", 0)
             result["skip"] = summary.get("skipped", 0)

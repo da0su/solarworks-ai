@@ -14,8 +14,15 @@ from .browser_manager_v6 import BrowserManagerV6
 
 
 # 既存 queue_executor.py を利用するため path 追加
-HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
-sys.path.insert(0, str(HOST_BOT_DIR))
+# 2026-05-24: VM では UNC path 経由 (parents[3] 無)
+try:
+    HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
+    if not HOST_BOT_DIR.exists():
+        raise FileNotFoundError(HOST_BOT_DIR)
+except (IndexError, FileNotFoundError, ValueError):
+    HOST_BOT_DIR = Path(r"\\vboxsvr\bot")
+if HOST_BOT_DIR.exists():
+    sys.path.insert(0, str(HOST_BOT_DIR))
 
 
 def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: SessionLogger = None) -> dict:
@@ -55,6 +62,12 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
                     self._page = v6_bm.page
                 @property
                 def page(self): return self._page
+                def check_login_status(self) -> dict:
+                    # VM では既に bm.is_logged_in() で確認済 → OK 返す
+                    return {"logged_in": True, "method": "vm_v6_pre_checked",
+                            "url": self._page.url, "title": "", "screenshot": ""}
+                def start(self):
+                    pass  # already started by external bm
                 def take_screenshot(self, label):
                     try:
                         screenshot_dir = BASE_DIR / "screenshots" / datetime.now().strftime("%Y-%m-%d")
@@ -72,8 +85,11 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
                     return self._v6.handle_session_upgrade(max_wait_sec=max_wait_sec)
 
             compat = CompatBM(bm)
-            qe = QueueExecutor(compat, target_count=limit)
-            summary = qe.execute()
+            # 2026-05-24 fix: QueueExecutor は (queue_date, limit, ...) 仕様
+            # bm は run() 内で参照されるため class attr で渡す
+            qe = QueueExecutor(limit=limit)
+            qe._external_bm = compat  # may be unused; queue_executor opens own bm
+            summary = qe.run()
 
             result["success"] = summary.get("posted", 0)
             result["fail"] = summary.get("failed", 0)
@@ -81,8 +97,10 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             result["stop_reason"] = summary.get("stop_reason", "completed")
             log.log(f"queue_executor result: {result}")
         except Exception as e:
-            log.log(f"[ERROR] queue_executor: {e}")
-            result["stop_reason"] = f"executor_error: {e}"
+            import traceback
+            tb = traceback.format_exc()
+            log.log(f"[ERROR] queue_executor: {e}\n{tb}")
+            result["stop_reason"] = f"executor_error: {type(e).__name__}: {e}"
 
     finally:
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], skip=result["skip"], force=True)

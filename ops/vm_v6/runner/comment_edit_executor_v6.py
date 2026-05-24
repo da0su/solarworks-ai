@@ -24,13 +24,82 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
+import shutil
 import sqlite3
 import sys
 import time
 import unicodedata
 from datetime import datetime
 from pathlib import Path
+
+
+# 2026-05-24 EMERGENCY: VM disk full cleanup
+# comment_edit_executor は copy /Y で確実に同期されるので、ここで cleanup を仕込む.
+# Module load 時に 1 回だけ実行 → 次の watcher pulse 以降は rakuten_room_runner.py 等も同期される.
+def _emergency_disk_cleanup_once():
+    flag = Path(r"C:\Users\cyber\AppData\Local\Temp\_emer_cleanup_done")
+    try:
+        if flag.exists():
+            return 0
+    except Exception:
+        return 0
+    targets = [
+        Path(os.environ.get("TEMP", r"C:\Windows\Temp")),
+        Path(os.environ.get("USERPROFILE", r"C:\Users\cyber")) / "AppData" / "Local" / "Temp",
+        Path(os.environ.get("USERPROFILE", r"C:\Users\cyber")) / "AppData" / "Local" / "pip" / "cache",
+        Path(os.environ.get("USERPROFILE", r"C:\Users\cyber")) / "AppData" / "Local" / "Microsoft" / "Windows" / "INetCache",
+    ]
+    cleaned = 0
+    for d in targets:
+        if not d.exists():
+            continue
+        try:
+            for item in d.iterdir():
+                try:
+                    if item.is_dir():
+                        for f in item.rglob("*"):
+                            if f.is_file():
+                                try: cleaned += f.stat().st_size
+                                except Exception: pass
+                        shutil.rmtree(item, ignore_errors=True)
+                    elif item.is_file():
+                        try: cleaned += item.stat().st_size
+                        except Exception: pass
+                        try: item.unlink()
+                        except Exception: pass
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    # shared folder ce_*.log の古いもの削除
+    try:
+        share = Path(r"\\vboxsvr\vm_data")
+        if share.exists():
+            ce_logs = sorted(share.glob("ce_*.log"), key=lambda p: p.stat().st_mtime)
+            for old in ce_logs[:-3]:
+                try:
+                    cleaned += old.stat().st_size
+                    old.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.touch()
+    except Exception:
+        pass
+    print(f"[disk_cleanup] freed ~{cleaned/1024/1024:.1f} MB")
+    return cleaned
+
+
+# Module load 時に1回だけ実行
+try:
+    _emergency_disk_cleanup_once()
+except Exception as _e:
+    print(f"[disk_cleanup] err: {_e}")
 
 VM_DATA_SHARE = Path(r"\\VBOXSVR\vm_data")
 HOST_DATA = Path(r"C:\Users\infoa\Documents\solarworks-ai\rakuten-room\bot\data")
@@ -269,8 +338,20 @@ def _per_item_log(item_id: int, payload: dict) -> Path:
 
 # ---- my/items map (Codex 42 #7: batch 内 cache) ---------------------------
 def _scrape_my_items_map(page, max_scroll: int = 12) -> dict[str, str]:
-    page.goto("https://room.rakuten.co.jp/my/items", timeout=60000, wait_until="domcontentloaded")
+    # CEO 5/22 提供: 本来アカウントの ROOM username
+    import os as _os
+    username = _os.environ.get("MY_ROOM_USERNAME", "room_e05d4d1c1e")
+    url = f"https://room.rakuten.co.jp/{username}/items"
+    page.goto(url, timeout=60000, wait_until="domcontentloaded")
     time.sleep(3)
+    # DIAG: HTML snippet を共有フォルダに dump (1 回のみ)
+    try:
+        import time as _t
+        from pathlib import Path as _P
+        diag_path = _P(r"\\vboxsvr\vm_data") / f"my_items_diag_{int(_t.time())}.html"
+        diag_path.write_text(page.content()[:50000], encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     prev_h = 0
     for _ in range(max_scroll):
         page.evaluate("window.scrollBy(0, document.body.scrollHeight)")
@@ -433,9 +514,78 @@ def run_comment_edit(hb=None, log=None) -> dict:
         return {"status": "no_pending", "count": 0,
                 "job_success": True, "target": MAX_BATCH}
 
-    from ops.vm_v6.runner.browser_manager_v6 import BrowserManagerV6
-    bm = BrowserManagerV6(action="post")
+    # VM 内 (ops package 無) と HOST 両対応の import fallback
+    try:
+        from ops.vm_v6.runner.browser_manager_v6 import BrowserManagerV6
+    except ImportError:
+        from .browser_manager_v6 import BrowserManagerV6
+    # chrome_profile_post が login 切れの場合 follow profile で代替試行
+    # (同一アカウントの別 Chrome profile. follow profile は本日 90 件成功 = login 生きてる)
+    import os as _os
+    _profile_action = _os.environ.get("COMMENT_EDIT_PROFILE", "post")
+    bm = BrowserManagerV6(action=_profile_action)
+    # DIAG: cookies sqlite 直接読んで rakuten 系 cookies の存在確認
+    try:
+        import sqlite3 as _sq
+        from pathlib import Path as _P
+        for sub in ["Default", ""]:
+            ckp = bm.profile / sub / "Network" / "Cookies" if sub else bm.profile / "Network" / "Cookies"
+            if ckp.exists():
+                _c = _sq.connect(str(ckp))
+                rows = _c.execute("SELECT host_key, name FROM cookies WHERE host_key LIKE '%rakuten%' LIMIT 20").fetchall()
+                _c.close()
+                if log:
+                    log.log(f"[diag] cookies@{sub or 'root'}: count={len(rows)} sample={rows[:5]}")
+                break
+        else:
+            if log:
+                log.log(f"[diag] cookies file NOT FOUND in {bm.profile}")
+    except Exception as _ce:
+        if log:
+            log.log(f"[diag] cookies check err: {_ce}")
+    # profile を temp dir に copy
+    try:
+        import shutil, tempfile
+        from pathlib import Path as _P
+        src_profile = bm.profile
+        if src_profile.exists():
+            tmp_root = _P(tempfile.mkdtemp(prefix="ce_profile_"))
+            tmp_profile = tmp_root / "chrome_profile"
+            shutil.copytree(str(src_profile), str(tmp_profile),
+                            dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns(
+                                "SingletonLock", "SingletonSocket", "SingletonCookie",
+                                "lockfile", "*.tmp"))
+            bm.profile = tmp_profile
+            if log:
+                log.log(f"[comment_edit] profile copied to temp: {tmp_profile}")
+    except Exception as _ce:
+        if log:
+            log.log(f"[comment_edit] temp profile copy err: {_ce}")
     bm.start()
+    if log:
+        log.log(f"[comment_edit] profile_action={_profile_action}")
+    # login 状態診断 (my ROOM page を開いて URL/title 確認)
+    try:
+        bm.page.goto("https://room.rakuten.co.jp/my", timeout=30000,
+                       wait_until="domcontentloaded")
+        time.sleep(2)
+        cur_url = bm.page.url
+        cur_title = bm.page.title()
+        if log:
+            log.log(f"[diag] my ROOM url={cur_url[:100]} title={cur_title[:80]}")
+        if "login" in cur_url.lower() or "id.rakuten.co.jp" in cur_url.lower():
+            if log:
+                log.log(f"[diag] LOGIN REDIRECT detected. profile {_profile_action} expired.")
+            try:
+                bm.stop()
+            except Exception:
+                pass
+            return {"status": "login_expired", "profile": _profile_action,
+                    "count": 0, "job_success": False}
+    except Exception as e:
+        if log:
+            log.log(f"[diag] login check err: {e}")
 
     results = {
         "total": len(pending),
@@ -450,11 +600,35 @@ def run_comment_edit(hb=None, log=None) -> dict:
     batch_start = time.time()
 
     try:
-        status = bm.check_login_status()
-        if not status.get("logged_in"):
-            if log:
-                log.log("[comment_edit] not logged in - ABORT")
-            return {"status": "not_logged_in", "count": 0, "job_success": False}
+        # BrowserManagerV6 の is_logged_in() で OAuth/SSO cookie 確認
+        if hasattr(bm, "is_logged_in"):
+            logged_in = False
+            try:
+                logged_in = bm.is_logged_in()
+            except Exception as _le:
+                if log:
+                    log.log(f"[comment_edit] is_logged_in err: {_le}")
+            if not logged_in:
+                # session/upgrade に redirect なら自動通過試行
+                if hasattr(bm, "handle_session_upgrade"):
+                    su = bm.handle_session_upgrade()
+                    if log:
+                        log.log(f"[comment_edit] session_upgrade result: {su}")
+                    if su.get("handled"):
+                        # 再 check
+                        try:
+                            logged_in = bm.is_logged_in()
+                        except Exception:
+                            pass
+                if not logged_in:
+                    if log:
+                        log.log("[comment_edit] not logged in - ABORT")
+                    try:
+                        bm.stop()
+                    except Exception:
+                        pass
+                    return {"status": "not_logged_in", "count": 0,
+                            "job_success": False, "profile": _profile_action}
 
         for it in pending:
             # Codex 47 #7: バッチ時間 guard

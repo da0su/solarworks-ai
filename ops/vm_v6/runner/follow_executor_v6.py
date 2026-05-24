@@ -19,7 +19,13 @@ from .browser_manager_v6 import BrowserManagerV6
 
 
 # 既存 follow_host_runner.py のロジックを VM v6 に移植
-HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
+# 2026-05-24: VM では \\vboxsvr\bot 経由でアクセス (parents[3] が無い)
+try:
+    HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
+    if not HOST_BOT_DIR.exists():
+        raise FileNotFoundError(HOST_BOT_DIR)
+except (IndexError, FileNotFoundError, ValueError):
+    HOST_BOT_DIR = Path(r"\\vboxsvr\bot")
 EXECUTOR_DIR = HOST_BOT_DIR / "executor"
 SEED_USERS_PATH = EXECUTOR_DIR / "seed_users.json"
 HISTORY_PATH = HOST_BOT_DIR / "data" / "follow_history.json"

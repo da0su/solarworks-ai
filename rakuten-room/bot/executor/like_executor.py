@@ -98,17 +98,26 @@ class LikeExecutor:
         with open(config.LIKE_HISTORY_PATH, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
 
-    def run(self) -> dict:
-        """いいねセッションを実行する"""
+    def run(self, bm=None) -> dict:
+        """いいねセッションを実行する.
+
+        Args:
+            bm: 外部から既に start 済の BrowserManager を渡す場合は使う.
+                None なら自前で BrowserManager(action="like") を開く.
+                2026-05-24: VM v6 wrapper から呼ばれる時は VM-local BrowserManager を渡す.
+        """
         logger.info("=" * 60)
         logger.info(f"=== いいねBOT 開始 (目標: {self.limit}件) ===")
         logger.info("=" * 60)
 
-        bm = BrowserManager(action="like")
+        external_bm = bm is not None
+        if not external_bm:
+            bm = BrowserManager(action="like")
         abort_reason = None
 
         try:
-            bm.start()
+            if not external_bm:
+                bm.start()
 
             # ログイン確認
             login_status = bm.check_login_status()
@@ -145,7 +154,8 @@ class LikeExecutor:
             abort_reason = f"予期しないエラー: {e}"
             logger.error(abort_reason)
         finally:
-            bm.stop()
+            if not external_bm:
+                bm.stop()
 
         return self._make_summary(abort_reason is not None, abort_reason)
 

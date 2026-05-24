@@ -172,7 +172,13 @@ class QueueExecutor:
         logger.info(f"=== キュー実行開始: {self.queue_date} (目標: {target_count or total_available}件成功) ===")
         logger.info(f"  待機キュー: {total_available}件 | 投稿間隔: {self.min_wait:.0f}〜{self.max_wait:.0f}秒")
 
-        bm = BrowserManager(action="post")
+        # 2026-05-24: VM v6 wrapper から外部 bm を渡される場合は再利用
+        # (sync_playwright の二重起動を避ける)
+        external_bm = getattr(self, "_external_bm", None)
+        if external_bm is not None:
+            bm = external_bm
+        else:
+            bm = BrowserManager(action="post")
         consecutive_failures = 0
         posted_count = 0
         failed_count = 0
@@ -183,8 +189,11 @@ class QueueExecutor:
         processed_ids = set()
 
         try:
-            logger.info("[フェーズ] ブラウザ起動中...")
-            bm.start()
+            if external_bm is None:
+                logger.info("[フェーズ] ブラウザ起動中...")
+                bm.start()
+            else:
+                logger.info("[フェーズ] 外部 BrowserManager を再利用 (VM v6 経由)")
 
             # ログイン確認
             logger.info("[フェーズ] ログイン確認中...")
@@ -374,8 +383,11 @@ class QueueExecutor:
                     time.sleep(interval)
 
         finally:
-            logger.info("[フェーズ] ブラウザ終了中...")
-            bm.stop()
+            if external_bm is None:
+                logger.info("[フェーズ] ブラウザ終了中...")
+                bm.stop()
+            else:
+                logger.info("[フェーズ] 外部 BrowserManager は呼び出し元が管理")
             # デイリーサマリー更新
             qm.save_daily_summary(self.queue_date)
             qm.close()

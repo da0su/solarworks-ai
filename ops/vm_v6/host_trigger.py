@@ -37,6 +37,11 @@ NO_WIN = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") 
 TRIGGER_QUEUE = REPO_ROOT / "state" / "host_trigger_queue.jsonl"
 TRIGGER_GUESTPROP = "/RakutenBot/Trigger"
 
+# Git Bash 経由実行時 MSYS2 が `/path` を Windows path に変換してしまうのを抑止.
+# Python subprocess は通常 MSYS 介さないが、安全のため明示 disable.
+os.environ.setdefault("MSYS_NO_PATHCONV", "1")
+os.environ.setdefault("MSYS2_ARG_CONV_EXCL", "*")
+
 
 def _http_trigger(mode: str, payload: dict) -> tuple[bool, dict]:
     """HTTP 経由で trigger."""
@@ -183,7 +188,8 @@ def status() -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode",
-                    choices=["post", "like", "follow", "followback", "comment_edit"])
+                    choices=["post", "like", "follow", "followback",
+                             "comment_edit", "bootstrap", "http_server"])
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--batch", type=int, default=None)
     ap.add_argument("--force", action="store_true", default=None)

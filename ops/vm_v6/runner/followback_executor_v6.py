@@ -9,8 +9,15 @@ from pathlib import Path
 from .shared_logic import HeartbeatPusher, SessionLogger
 from .browser_manager_v6 import BrowserManagerV6
 
-HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
-sys.path.insert(0, str(HOST_BOT_DIR))
+# 2026-05-24: VM では UNC path 経由 (parents[3] 無)
+try:
+    HOST_BOT_DIR = Path(__file__).resolve().parents[3] / "rakuten-room" / "bot"
+    if not HOST_BOT_DIR.exists():
+        raise FileNotFoundError(HOST_BOT_DIR)
+except (IndexError, FileNotFoundError, ValueError):
+    HOST_BOT_DIR = Path(r"\\vboxsvr\bot")
+if HOST_BOT_DIR.exists():
+    sys.path.insert(0, str(HOST_BOT_DIR))
 
 
 def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogger = None) -> dict:
@@ -32,25 +39,19 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
             return result
 
         try:
-            from executor.followback_executor import FollowbackExecutor
-            class CompatBM:
-                def __init__(self, ctx, page):
-                    self._context = ctx; self._page = page
-                @property
-                def page(self): return self._page
-                def take_screenshot(self, label): return None
-                def stop(self): pass
-
-            compat = CompatBM(bm.context, bm.page)
-            fbe = FollowbackExecutor(compat)
-            summary = fbe.execute(limit=limit) if hasattr(fbe, 'execute') else fbe.run(limit=limit)
+            # 2026-05-24: followback_executor は module-level execute() 関数
+            # (class FollowbackExecutor は存在しない)
+            from executor import followback_executor as fbe_mod
+            summary = fbe_mod.execute(limit=limit, include_unfollowed=False, dry_run=False)
             result["success"] = summary.get("success", summary.get("followed", 0))
-            result["fail"] = summary.get("fail", 0)
-            result["stop_reason"] = summary.get("stop_reason", "completed")
+            result["fail"] = summary.get("fail", summary.get("processed", 0) - summary.get("success", 0))
+            result["stop_reason"] = summary.get("stop_reason", summary.get("status", "completed"))
             log.log(f"followback_executor result: {result}")
         except Exception as e:
-            log.log(f"[ERROR] followback_executor: {e}")
-            result["stop_reason"] = f"executor_error: {e}"
+            import traceback
+            tb = traceback.format_exc()
+            log.log(f"[ERROR] followback_executor: {e}\n{tb}")
+            result["stop_reason"] = f"executor_error: {type(e).__name__}: {e}"
     finally:
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         bm.stop()
