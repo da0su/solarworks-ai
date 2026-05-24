@@ -439,8 +439,11 @@ def _get_today_target_ssot(key: str) -> int:
         try:
             cache = json.loads(path.read_text(encoding="utf-8"))
             if cache.get("date") in (today, yesterday):
-                val = cache.get("targets", {}).get(key, 0)
-                if val:
+                # 2026-05-25 fix (Codex REJECT #1): 旧 `if val:` は 0 が falsy なため
+                # SSOT が 0 を明示設定しても daily_targets.json へ fallback していた。
+                # None (key 不在) のみ次 source へ移行し、存在する値 (0 含む) を優先する。
+                val = cache.get("targets", {}).get(key)
+                if val is not None:
                     return int(val)
         except Exception:
             pass
@@ -467,13 +470,14 @@ def _get_today_liked_count() -> int:
 
 def _get_today_post_count() -> int:
     """今日の投稿済み件数を room_bot.db (post_queue) から取得。"""
+    import sqlite3 as _sq  # 2026-05-25 fix (Codex REJECT #2): 明示 import
     from datetime import date
     today = date.today().isoformat()
     db = REPO_ROOT / "rakuten-room" / "bot" / "data" / "room_bot.db"
     if not db.exists():
         return 0
     try:
-        con = sqlite3.connect(str(db), timeout=5)
+        con = _sq.connect(str(db), timeout=5)
         count = con.execute(
             "SELECT COUNT(*) FROM post_queue WHERE queue_date=? AND status='posted'",
             (today,)
@@ -499,10 +503,11 @@ def _get_today_follow_count() -> int:
 
 def _get_today_followback_count() -> int:
     """今日のフォローバック済み件数を room_bot_v5.db (followback_queue) から取得。"""
+    import sqlite3 as _sq  # 2026-05-25 fix (Codex REJECT #2): 明示 import
     if not DB_PATH.exists():
         return 0
     try:
-        con = sqlite3.connect(str(DB_PATH), timeout=5)
+        con = _sq.connect(str(DB_PATH), timeout=5)
         count = con.execute(
             "SELECT COUNT(*) FROM followback_queue"
             " WHERE status='completed' AND followed_at >= date('now','localtime')"
