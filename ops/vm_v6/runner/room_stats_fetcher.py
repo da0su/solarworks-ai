@@ -62,11 +62,12 @@ def _parse_room_stats(html: str) -> dict:
         """ラベル直後の数値を全件収集して最大値を返す.
 
         楽天 ROOM SPA は大きな数値を「21K」「11K」「24K」のように K サフィックス
-        で表示するため、K を捕捉して 1000倍する。
+        で表示するため、K を捕捉して 1000倍する。小数 K (1.2K = 1200) も対応。
         例: フォロー 21K → 21000 / フォロワー 11K → 11000 / いいね 24K → 24000
         コンマ区切り整数も対応: 商品 3,531 → 3531
         """
-        matches = _re.findall(label + r'[^0-9]*?([\d,]+[Kk]?)', html)
+        # \d[\d,.]* で整数・コンマ区切り・小数点を含む数値を捕捉、末尾 Kk はオプション
+        matches = _re.findall(label + r'[^0-9]*?([\d][\d,.]*[Kk]?)', html)
         if not matches:
             return None
         values: list[int] = []
@@ -74,10 +75,12 @@ def _parse_room_stats(html: str) -> dict:
             m = m.strip()
             try:
                 if m.upper().endswith('K'):
-                    values.append(int(m[:-1].replace(',', '')) * 1000)
+                    # "1.2K" → 1200, "21K" → 21000
+                    num_str = m[:-1].replace(',', '')
+                    values.append(int(float(num_str) * 1000))
                 else:
-                    values.append(int(m.replace(',', '')))
-            except ValueError:
+                    values.append(int(float(m.replace(',', ''))))
+            except (ValueError, OverflowError):
                 pass
         return max(values) if values else None
 
@@ -124,6 +127,11 @@ def fetch() -> dict:
             page.wait_for_timeout(5000)
 
             final_url = page.url
+
+            # URL 検証: ROOM_ID が含まれない場合はログインページ等に遷移した可能性
+            if ROOM_ID not in final_url:
+                ctx.close()
+                return {"_error": f"unexpected final URL (ROOM_ID not found): {final_url[:200]}"}
 
             # page.inner_text("body") は navigate 中でも比較的安定して動作する
             # page.evaluate (JS context 依存) / page.content() (HTML のみ) より堅牢

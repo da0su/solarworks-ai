@@ -59,16 +59,19 @@ class PreflightCheck:
         """全13項目チェック"""
         print("=== V5 Preflight Check ===\n")
 
-        # 1. ログイン状態（簡易: storage_state.jsonの存在と更新日時）
-        # 2026-05-25 fix: Plan v6 cutover 後は HOST storage_state は参照しない (VM 内 Chrome が
-        # 独立セッションを持つ)。閾値 warning に降格して false positive による block を解消。
-        # 旧: critical 168h → 新: warning 720h (30日)
-        ss_path = REPO_ROOT / "rakuten-room" / "bot" / "data" / "state" / "storage_state.json"
-        if ss_path.exists():
-            age_hours = (datetime.now().timestamp() - ss_path.stat().st_mtime) / 3600
-            self.check("login_state", "warning", age_hours < 720, f"storage_state age={age_hours:.1f}h (host session, VM-managed)")
-        else:
-            self.check("login_state", "warning", False, "storage_state.json not found (ok if VM-managed)")
+        # 1. ログイン状態 (2026-05-25 v6 対応: VM HTTP /healthz に変更)
+        # Plan v6 cutover 後は VM が独立した Chrome session を管理する。
+        # HOST の storage_state.json（旧設計）は今後更新されないため、
+        # VM HTTP /healthz の応答を「VM + session が生きている」証拠とする。
+        # VM が応答しない場合は critical block（unreachable VM では bot 動作不可）。
+        try:
+            import urllib.request as _ureq
+            _req = _ureq.Request("http://localhost:18765/healthz")
+            _r = _ureq.urlopen(_req, timeout=5)
+            _vm_ok = _r.getcode() == 200
+            self.check("login_state", "critical", _vm_ok, "VM HTTP /healthz OK")
+        except Exception as _e:
+            self.check("login_state", "critical", False, f"VM HTTP /healthz unreachable: {str(_e)[:60]}")
 
         # 2. 共有フォルダ書込可否
         try:
