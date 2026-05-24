@@ -36,7 +36,18 @@ SESSION_COOKIE_NAMES = (
 )
 
 # session/upgrade fragment (POST 等の sensitive 操作で楽天が強制 redirect する URL)
+# 2026-05-24: /sso/authorize?...sign_in 経路も追加 (POST mix で頻発)
 SESSION_UPGRADE_URL_FRAGMENT = "login.account.rakuten.com/session/upgrade"
+SSO_SIGN_IN_FRAGMENTS = (
+    "login.account.rakuten.com/session/upgrade",
+    "login.account.rakuten.com/sso/authorize",
+    "login.account.rakuten.com/sso/sign_in",
+    "grp01.id.rakuten.co.jp/sign_in",
+)
+
+
+def _is_sso_redirect(url: str) -> bool:
+    return any(frag in url for frag in SSO_SIGN_IN_FRAGMENTS)
 
 
 # Profile path 解決
@@ -170,10 +181,33 @@ class BrowserManagerV6:
         except Exception as e:
             return {"handled": False, "reason": f"url_read_err:{e}"}
 
-        if SESSION_UPGRADE_URL_FRAGMENT not in cur:
+        if not _is_sso_redirect(cur):
             return {"handled": False, "reason": "not_session_upgrade_page"}
 
-        logger.info(f"[session_upgrade] 検知: {cur[:120]}...")
+        logger.info(f"[session_upgrade] SSO redirect 検知: {cur[:120]}...")
+
+        # 2026-05-24 DEBUG: 失敗時の調査用に DOM dump + screenshot
+        try:
+            from datetime import datetime as _dt
+            from pathlib import Path as _P
+            ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+            dbg_dir = _P(r"\\vboxsvr\vm_data\screenshots") / _dt.now().strftime("%Y-%m-%d")
+            dbg_dir.mkdir(parents=True, exist_ok=True)
+            self._page.screenshot(path=str(dbg_dir / f"{ts}_sso_entry.png"))
+            html = self._page.content()
+            (dbg_dir / f"{ts}_sso_entry.html").write_text(html[:30000], encoding="utf-8", errors="replace")
+            # Log key inputs
+            inputs = self._page.locator("input").all()[:10]
+            for i, inp in enumerate(inputs):
+                try:
+                    name = inp.get_attribute("name") or ""
+                    typ = inp.get_attribute("type") or ""
+                    vis = inp.is_visible(timeout=500)
+                    logger.info(f"[session_upgrade] input[{i}]: name={name!r} type={typ!r} visible={vis}")
+                except Exception:
+                    pass
+        except Exception as _de:
+            logger.warning(f"[session_upgrade] dbg dump err: {_de}")
         password = get_credential("RAKUTEN_LOGIN_PASSWORD") or get_credential("RAKUTEN_PASSWORD") \
             or os.environ.get("RAKUTEN_LOGIN_PASSWORD") or os.environ.get("RAKUTEN_PASSWORD")
         if not password:
@@ -184,11 +218,106 @@ class BrowserManagerV6:
             return {"handled": False, "reason": "no_password_in_env"}
 
         try:
+            # 2026-05-24: 楽天 SSO は JS widget で input 描画. networkidle まで待機.
+            try:
+                self._page.wait_for_load_state("networkidle", timeout=15000)
+            except Exception:
+                pass
+            self._page.wait_for_timeout(3000)
+
+            # 何らかの input が visible になるまで待つ
+            try:
+                self._page.locator("input:visible").first.wait_for(state="visible", timeout=15000)
+            except Exception:
+                logger.warning("[session_upgrade] no visible input after 15s wait")
+
+            # Step 1: email/userid 欄を多様な selector で探す
+            email_addr = (get_credential("RAKUTEN_LOGIN_EMAIL")
+                          or os.environ.get("RAKUTEN_LOGIN_EMAIL"))
+            email_selectors = [
+                'input[type="email"]',
+                'input[name="loginid"]',
+                'input[name="u"]',
+                'input[name="username"]',
+                'input[name="userid"]',
+                'input[placeholder*="メールアドレス"]',
+                'input[placeholder*="ユーザID"]',
+                'input[aria-label*="メールアドレス"]',
+                'input[aria-label*="ユーザID"]',
+            ]
+            email_filled = False
+            if email_addr:
+                for sel in email_selectors:
+                    try:
+                        loc = self._page.locator(sel)
+                        if loc.count() > 0 and loc.first.is_visible(timeout=1500):
+                            loc.first.fill(email_addr)
+                            logger.info(f"[session_upgrade] email 入力完了 ({sel})")
+                            email_filled = True
+                            break
+                    except Exception:
+                        continue
+
+                # 楽天 widget の場合 input 名がランダム化 → JS 注入で type=text を直接探す
+                if not email_filled:
+                    try:
+                        # JavaScript で input[type=text] を取得
+                        found = self._page.evaluate("""() => {
+                            const inputs = Array.from(document.querySelectorAll('input'));
+                            for (const inp of inputs) {
+                                const t = (inp.type || '').toLowerCase();
+                                const style = window.getComputedStyle(inp);
+                                if ((t === 'text' || t === 'email' || t === '') && style.display !== 'none' && inp.offsetParent !== null) {
+                                    return true;
+                                }
+                            }
+                            return false;
+                        }""")
+                        if found:
+                            self._page.evaluate(f"""() => {{
+                                const inputs = Array.from(document.querySelectorAll('input'));
+                                for (const inp of inputs) {{
+                                    const t = (inp.type || '').toLowerCase();
+                                    const style = window.getComputedStyle(inp);
+                                    if ((t === 'text' || t === 'email' || t === '') && style.display !== 'none' && inp.offsetParent !== null) {{
+                                        inp.focus();
+                                        inp.value = {json.dumps(email_addr) if False else 'PLACEHOLDER'};
+                                        inp.dispatchEvent(new Event('input', {{bubbles: true}}));
+                                        inp.dispatchEvent(new Event('change', {{bubbles: true}}));
+                                        return;
+                                    }}
+                                }}
+                            }}""".replace("'PLACEHOLDER'", repr(email_addr)))
+                            logger.info("[session_upgrade] email JS injection 試行")
+                            email_filled = True
+                    except Exception as e:
+                        logger.warning(f"[session_upgrade] JS email fill err: {e}")
+
+                if email_filled:
+                    # 「次へ」 click
+                    for sel in ['button:has-text("次へ")', 'button:has-text("ログイン")',
+                                'button[type="submit"]', 'input[type="submit"]']:
+                        try:
+                            b = self._page.locator(sel)
+                            if b.count() > 0 and b.first.is_visible(timeout=1500):
+                                b.first.click()
+                                logger.info(f"[session_upgrade] email submit: {sel}")
+                                break
+                        except Exception:
+                            continue
+                    self._page.wait_for_timeout(4000)
+                    try:
+                        self._page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        pass
+
+            # Step 2: password 入力
             pw_input = self._page.locator('input[type="password"]').first
-            pw_input.wait_for(state="visible", timeout=5000)
+            pw_input.wait_for(state="visible", timeout=15000)
             pw_input.fill(password)
             logger.info("[session_upgrade] password 入力完了")
             for sel in [
+                'button:has-text("ログイン")',
                 'button:has-text("次へ")',
                 'button[type="submit"]',
                 'input[type="submit"]',
@@ -204,7 +333,7 @@ class BrowserManagerV6:
             self._page.wait_for_load_state("domcontentloaded", timeout=max_wait_sec * 1000)
             self._page.wait_for_timeout(2000)
             after = self._page.url
-            ok = SESSION_UPGRADE_URL_FRAGMENT not in after
+            ok = not _is_sso_redirect(after)
             logger.info(f"[session_upgrade] 通過 {'成功' if ok else '失敗'}: {after[:120]}")
             return {"handled": ok, "reason": "completed" if ok else "still_on_upgrade", "after_url": after}
         except Exception as e:

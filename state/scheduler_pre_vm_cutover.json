@@ -1,0 +1,41 @@
+﻿{
+    "saved_at":  "2026-05-24T22:28:13.1309304+09:00",
+    "tasks":  [
+                  {
+                      "name":  "RoomBot_POST_Batch1",
+                      "execute":  "wscript.exe",
+                      "arguments":  "\"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\run_hidden.vbs\" \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\wrap_RoomBot_POST_Batch1.bat\"",
+                      "cwd":  null
+                  },
+                  {
+                      "name":  "RoomBot_POST_Batch2",
+                      "execute":  "wscript.exe",
+                      "arguments":  "\"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\run_hidden.vbs\" \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\wrap_RoomBot_POST_Batch2.bat\"",
+                      "cwd":  null
+                  },
+                  {
+                      "name":  "RoomBot_POST_Batch3",
+                      "execute":  "wscript.exe",
+                      "arguments":  "\"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\run_hidden.vbs\" \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\wrap_RoomBot_POST_Batch3.bat\"",
+                      "cwd":  null
+                  },
+                  {
+                      "name":  "RoomBot_POST_Batch4",
+                      "execute":  "wscript.exe",
+                      "arguments":  "\"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\run_hidden.vbs\" \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\wrap_RoomBot_POST_Batch4.bat\"",
+                      "cwd":  null
+                  },
+                  {
+                      "name":  "RoomBot_LIKE_Hourly",
+                      "execute":  "wscript.exe",
+                      "arguments":  "\"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\run_hidden.vbs\" \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\wrap_RoomBot_LIKE_Hourly.bat\"",
+                      "cwd":  null
+                  },
+                  {
+                      "name":  "RoomBot_FOLLOWBACK_Hourly",
+                      "execute":  "wscript.exe",
+                      "arguments":  "\"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\run_hidden.vbs\" \"C:\\Users\\infoa\\Documents\\solarworks-ai\\ops\\scheduler\\wrap_RoomBot_FOLLOWBACK_Hourly.bat\"",
+                      "cwd":  null
+                  }
+              ]
+}

@@ -150,7 +150,14 @@ class PostExecutor:
             # 楽天は POST 等で login.account.rakuten.com/session/upgrade に強制 redirect し
             # password 再入力 (= session 昇格) を要求する。
             # bot 自律運用には .env の RAKUTEN_LOGIN_PASSWORD で自動通過する。
-            if "login.account.rakuten.com/session/upgrade" in current_url:
+            # 2026-05-24: /sso/authorize?...sign_in 経路も同じ処理 (POST mix で頻発)
+            _sso_fragments = (
+                "login.account.rakuten.com/session/upgrade",
+                "login.account.rakuten.com/sso/authorize",
+                "login.account.rakuten.com/sso/sign_in",
+                "grp01.id.rakuten.co.jp/sign_in",
+            )
+            if any(frag in current_url for frag in _sso_fragments):
                 logger.info("session/upgrade ページ検知 → 自動 password 入力試行")
                 up = self.bm.handle_session_upgrade()
                 if up.get("handled"):

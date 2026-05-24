@@ -39,17 +39,36 @@ from pathlib import Path
 # comment_edit_executor は copy /Y で確実に同期されるので、ここで cleanup を仕込む.
 # Module load 時に 1 回だけ実行 → 次の watcher pulse 以降は rakuten_room_runner.py 等も同期される.
 def _emergency_disk_cleanup_once():
+    # 2026-05-24: flag を毎日リセット (24h で 1 回実行) + disk 残量低い時は即時
     flag = Path(r"C:\Users\cyber\AppData\Local\Temp\_emer_cleanup_done")
     try:
-        if flag.exists():
+        free_mb = shutil.disk_usage("C:\\").free / 1024 / 1024
+    except Exception:
+        free_mb = 9999
+    try:
+        if flag.exists() and free_mb > 500:
+            # 500 MB 以上 free あれば skip (flag age 関係なく)
             return 0
+        if flag.exists() and (time.time() - flag.stat().st_mtime) < 3600:
+            # 1h 以内に実行済なら skip (但し 500MB 未満は強制)
+            if free_mb > 200:
+                return 0
     except Exception:
         return 0
+    user_root = Path(os.environ.get("USERPROFILE", r"C:\Users\cyber"))
     targets = [
         Path(os.environ.get("TEMP", r"C:\Windows\Temp")),
-        Path(os.environ.get("USERPROFILE", r"C:\Users\cyber")) / "AppData" / "Local" / "Temp",
-        Path(os.environ.get("USERPROFILE", r"C:\Users\cyber")) / "AppData" / "Local" / "pip" / "cache",
-        Path(os.environ.get("USERPROFILE", r"C:\Users\cyber")) / "AppData" / "Local" / "Microsoft" / "Windows" / "INetCache",
+        user_root / "AppData" / "Local" / "Temp",
+        user_root / "AppData" / "Local" / "pip" / "cache",
+        user_root / "AppData" / "Local" / "Microsoft" / "Windows" / "INetCache",
+        # 2026-05-24: Chrome profile caches (毎セッション肥大化)
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_post" / "Default" / "Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_post" / "Default" / "Code Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_like" / "Default" / "Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_follow" / "Default" / "Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_followback" / "Default" / "Cache",
+        # Edge cache (unused but generated)
+        user_root / "AppData" / "Local" / "Microsoft" / "Edge" / "User Data" / "Default" / "Cache",
     ]
     cleaned = 0
     for d in targets:

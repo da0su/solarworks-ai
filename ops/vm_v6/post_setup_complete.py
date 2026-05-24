@@ -24,7 +24,11 @@ NO_WIN = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") 
 
 
 def log(msg: str):
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    # cp932 にencode できない char を ascii safe にして出力
+    try:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
+    except UnicodeEncodeError:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg.encode('ascii', errors='replace').decode('ascii')}", flush=True)
 
 
 def step1_wait_http_alive(timeout: int = 60) -> bool:
@@ -41,12 +45,12 @@ def step1_wait_http_alive(timeout: int = 60) -> bool:
         try:
             r = requests.get("http://localhost:18765/healthz", timeout=2)
             if r.status_code == 200:
-                log(f"  ✅ HTTP alive")
+                log(f"  [OK] HTTP alive")
                 return True
         except Exception:
             pass
         time.sleep(3)
-    log(f"  ❌ TIMEOUT: HTTP unreachable")
+    log(f"  [FAIL] TIMEOUT: HTTP unreachable")
     return False
 
 
@@ -118,7 +122,7 @@ def step6_slack_report() -> int:
     msg = """【サイバー報告 #362】Plan v4 P1 (VB完結化) 本日中 完全稼働開始
 
 CEO 手動 1分 (VM 内 setup_vm_v6.bat 実行) 完了確認後、HOST 自動で以下完了:
-- VM HTTP server 疎通確認 ✅
+- VM HTTP server 疎通確認 [OK]
 - Task Scheduler refactor (vm_controller 経由)
 - 全 RoomBot task 再有効化
 - patrol_v6 8 Layer 動作確認
@@ -165,7 +169,7 @@ def main():
     step6_slack_report()
 
     log("=" * 60)
-    log("post_setup_complete DONE ✅")
+    log("post_setup_complete DONE [OK]")
     log("=" * 60)
     return 0
 

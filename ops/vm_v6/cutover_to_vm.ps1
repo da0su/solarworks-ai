@@ -1,4 +1,4 @@
-# Plan v6 Phase C: HOST Task Scheduler を vm_controller 経由に切替.
+﻿# Plan v6 Phase C: HOST Task Scheduler を vm_controller 経由に切替.
 #
 # CEO 指示「全てをVB内で実装する形なはず」に対する Phase C cutover:
 # 旧 ops\orchestrator_run.bat → 新 ops\orchestrator_run_vm.bat に Action 切替。
