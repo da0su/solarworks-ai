@@ -178,12 +178,89 @@ def _run_sub(cmd, timeout):
 
 
 def runner_follow(limit: int) -> tuple[int, str, dict]:
-    """Dispatch to follow via existing vm_follow_launcher (VM machine)."""
-    script = REPO_ROOT / "ops" / "vm_follow_launcher.py"
-    cmd = [sys.executable, str(script), "--force", "--limit", str(limit)]
-    rc, out, err = _run_sub(cmd, timeout=600)
-    return (rc, "ok" if rc == 0 else "launcher_fail",
-            {"stdout_tail": out[-500:], "stderr_tail": err[-500:]})
+    """Dispatch to follow via VM v6 HTTP /run endpoint (Plan v6 完結化).
+
+    2026-05-25 fix: 旧 vm_follow_launcher.py → VM v6 HTTP endpoint に切り替え。
+    日次精密キャップ: follow_history.json の今日エントリ数と SSOT 目標値を比較し
+    remaining 件数のみ実行。達成済みなら即 skip。
+    """
+    import urllib.request as _ureq
+    import time as _time
+
+    POLL_INTERVAL = 30   # follow は1件に時間かかるため POST より長め
+    MAX_WAIT = 3600
+
+    # ── 日次精密キャップ ────────────────────────────────────────────────────────
+    today_target = _get_today_target_ssot("follow")
+    today_count  = _get_today_follow_count()
+    if today_target > 0:
+        remaining = today_target - today_count
+        if remaining <= 0:
+            msg = f"FOLLOW daily_target達成済 ({today_count}/{today_target}) → skip"
+            print(f"[runner_follow] {msg}")
+            return (0, "daily_target_reached",
+                    {"today_count": today_count, "today_target": today_target, "note": msg})
+        effective_limit = remaining if limit <= 0 else min(limit, remaining)
+        print(f"[runner_follow] today={today_count}/{today_target} remaining={remaining} → --limit {effective_limit}")
+    else:
+        effective_limit = limit if limit > 0 else 200
+    # ────────────────────────────────────────────────────────────────────────────
+
+    before_count = today_count   # follow_history 取得済みを再利用
+
+    # ── 1. VM で FOLLOW 起動 ─────────────────────────────────────────────────
+    payload_data = json.dumps({
+        "mode": "follow",
+        "limit": effective_limit,
+    }).encode("utf-8")
+    try:
+        req = _ureq.Request(
+            f"{_VM_BASE}/run",
+            data=payload_data,
+            headers={"Authorization": f"Bearer {_VM_TOKEN}", "Content-Type": "application/json"}
+        )
+        r = _ureq.urlopen(req, timeout=30)
+        launch_result = json.loads(r.read())
+        status_str = launch_result.get("status", "")
+        print(f"[runner_follow] VM HTTP /run → {launch_result}")
+        if status_str not in ("launched", "already_running"):
+            raise RuntimeError(f"unexpected status: {launch_result}")
+    except Exception as e:
+        print(f"[runner_follow] VM HTTP launch fail: {e} — NO fallback")
+        return (1, "vm_http_unavailable", {"error": str(e)})
+
+    # ── 2. 完了まで /status ポーリング ───────────────────────────────────────
+    deadline = _time.time() + MAX_WAIT
+    while _time.time() < deadline:
+        _time.sleep(POLL_INTERVAL)
+        try:
+            req = _ureq.Request(
+                f"{_VM_BASE}/status",
+                headers={"Authorization": f"Bearer {_VM_TOKEN}"}
+            )
+            r = _ureq.urlopen(req, timeout=10)
+            s = json.loads(r.read())
+            if "follow" not in s.get("running", []):
+                print("[runner_follow] VM FOLLOW mode finished")
+                break
+        except Exception:
+            pass
+    else:
+        print(f"[runner_follow] timed out after {MAX_WAIT}s")
+
+    # ── 3. follow_history.json の今日エントリで結果取得 ─────────────────────
+    after_count = _get_today_follow_count()
+    session_followed = after_count - before_count
+    rc = 0 if session_followed > 0 else 1
+    stop_reason = "completed" if session_followed > 0 else "zero_followed"
+    today_display = today_target if today_target > 0 else "?"
+    print(f"[runner_follow] session={session_followed} today_total={after_count}/{today_display}")
+    return (rc, stop_reason, {
+        "session_followed": session_followed,
+        "today_total": after_count,
+        "today_target": today_target,
+        "effective_limit": effective_limit,
+    })
 
 
 def runner_follow_host(limit: int) -> tuple[int, str, dict]:
@@ -246,12 +323,24 @@ def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
     import sqlite3 as _sqlite3
     from datetime import date as _date
 
-    VM_TOKEN = "rakuten-room-v6-secret"
-    VM_BASE = "http://localhost:18765"
     POLL_INTERVAL = 20   # seconds between status polls
     MAX_WAIT = 3600      # max wait for completion
 
-    effective_limit = limit if limit and limit > 0 else 50
+    # ── 日次精密キャップ ────────────────────────────────────────────────────────
+    today_target = _get_today_target_ssot("post")
+    today_count  = _get_today_post_count()
+    if today_target > 0:
+        remaining = today_target - today_count
+        if remaining <= 0:
+            msg = f"POST daily_target達成済 ({today_count}/{today_target}) → skip"
+            print(f"[runner_post] {msg}")
+            return (0, "daily_target_reached",
+                    {"today_count": today_count, "today_target": today_target, "note": msg})
+        effective_limit = remaining if limit <= 0 else min(limit, remaining)
+        print(f"[runner_post] today={today_count}/{today_target} remaining={remaining} → --limit {effective_limit}")
+    else:
+        effective_limit = limit if limit and limit > 0 else 50
+    # ────────────────────────────────────────────────────────────────────────────
 
     # ── 1. VM で POST 起動 ────────────────────────────────────────────────────
     payload_data = json.dumps({
@@ -261,9 +350,9 @@ def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
     }).encode("utf-8")
     try:
         req = _ureq.Request(
-            f"{VM_BASE}/run",
+            f"{_VM_BASE}/run",
             data=payload_data,
-            headers={"Authorization": f"Bearer {VM_TOKEN}", "Content-Type": "application/json"}
+            headers={"Authorization": f"Bearer {_VM_TOKEN}", "Content-Type": "application/json"}
         )
         r = _ureq.urlopen(req, timeout=30)
         launch_result = json.loads(r.read())
@@ -284,8 +373,8 @@ def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
         _time.sleep(POLL_INTERVAL)
         try:
             req = _ureq.Request(
-                f"{VM_BASE}/status",
-                headers={"Authorization": f"Bearer {VM_TOKEN}"}
+                f"{_VM_BASE}/status",
+                headers={"Authorization": f"Bearer {_VM_TOKEN}"}
             )
             r = _ureq.urlopen(req, timeout=10)
             s = json.loads(r.read())
@@ -327,26 +416,40 @@ def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
 
 
 DAILY_TARGETS_CACHE = REPO_ROOT / "ops" / "scheduler" / "daily_targets.json"
-LIKE_HISTORY = REPO_ROOT / "rakuten-room" / "bot" / "data" / "like_history.json"
+SSOT_PATH         = REPO_ROOT / "state" / "daily_targets_ssot.json"
+LIKE_HISTORY      = REPO_ROOT / "rakuten-room" / "bot" / "data" / "like_history.json"
+FOLLOW_HISTORY    = REPO_ROOT / "rakuten-room" / "bot" / "data" / "follow_history.json"
+
+_VM_TOKEN = "rakuten-room-v6-secret"
+_VM_BASE  = "http://localhost:18765"
+
+
+def _get_today_target_ssot(key: str) -> int:
+    """今日の目標値を state/daily_targets_ssot.json (SSOT) から取得。
+    SSOT にない場合は ops/scheduler/daily_targets.json に fallback。
+    0 = 未設定 / キャッシュなし。
+    今日 or 昨日のキャッシュを有効とする（深夜→翌朝日付跨ぎ対策）。
+    """
+    from datetime import date, timedelta
+    today     = date.today().isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    for path in (SSOT_PATH, DAILY_TARGETS_CACHE):
+        if not path.exists():
+            continue
+        try:
+            cache = json.loads(path.read_text(encoding="utf-8"))
+            if cache.get("date") in (today, yesterday):
+                val = cache.get("targets", {}).get(key, 0)
+                if val:
+                    return int(val)
+        except Exception:
+            pass
+    return 0
 
 
 def _get_today_like_target() -> int:
-    """今日のLIKE目標をdaily_targets.jsonキャッシュから取得。0=キャッシュなし/未設定
-    2026-05-02修正: 昨日のキャッシュも有効（patrol が深夜に実行→今朝まで跨ぎ問題を解消）
-    """
-    from datetime import date, timedelta
-    today = date.today().isoformat()
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-    if not DAILY_TARGETS_CACHE.exists():
-        return 0
-    try:
-        cache = json.loads(DAILY_TARGETS_CACHE.read_text(encoding="utf-8"))
-        # 今日 or 昨日のキャッシュを有効とする（日付跨ぎ対策）
-        if cache.get("date") in (today, yesterday):
-            return int(cache.get("targets", {}).get("like", 0) or 0)
-    except Exception:
-        pass
-    return 0
+    """今日のLIKE目標。_get_today_target_ssot の thin wrapper（後方互換維持）."""
+    return _get_today_target_ssot("like")
 
 
 def _get_today_liked_count() -> int:
@@ -358,6 +461,54 @@ def _get_today_liked_count() -> int:
     try:
         data = json.loads(LIKE_HISTORY.read_text(encoding="utf-8"))
         return sum(1 for e in data if e.get("liked_at", "").startswith(today))
+    except Exception:
+        return 0
+
+
+def _get_today_post_count() -> int:
+    """今日の投稿済み件数を room_bot.db (post_queue) から取得。"""
+    from datetime import date
+    today = date.today().isoformat()
+    db = REPO_ROOT / "rakuten-room" / "bot" / "data" / "room_bot.db"
+    if not db.exists():
+        return 0
+    try:
+        con = sqlite3.connect(str(db), timeout=5)
+        count = con.execute(
+            "SELECT COUNT(*) FROM post_queue WHERE queue_date=? AND status='posted'",
+            (today,)
+        ).fetchone()[0]
+        con.close()
+        return count
+    except Exception:
+        return 0
+
+
+def _get_today_follow_count() -> int:
+    """今日のフォロー済み件数を follow_history.json から取得。"""
+    from datetime import date
+    today = date.today().isoformat()
+    if not FOLLOW_HISTORY.exists():
+        return 0
+    try:
+        data = json.loads(FOLLOW_HISTORY.read_text(encoding="utf-8"))
+        return sum(1 for e in data if e.get("followed_at", "").startswith(today))
+    except Exception:
+        return 0
+
+
+def _get_today_followback_count() -> int:
+    """今日のフォローバック済み件数を room_bot_v5.db (followback_queue) から取得。"""
+    if not DB_PATH.exists():
+        return 0
+    try:
+        con = sqlite3.connect(str(DB_PATH), timeout=5)
+        count = con.execute(
+            "SELECT COUNT(*) FROM followback_queue"
+            " WHERE status='completed' AND followed_at >= date('now','localtime')"
+        ).fetchone()[0]
+        con.close()
+        return count
     except Exception:
         return 0
 
@@ -408,9 +559,26 @@ def runner_followback(limit: int) -> tuple[int, str, dict]:
     """
     Dispatch to followback_executor.py --execute --limit N.
     Returns stop_reason from the executor's JSON output.
+    2026-05-25: 日次精密キャップ追加 — SSOT 目標値と今日の完了数を比較して
+    remaining 件数のみ実行。達成済みなら即 skip。
     """
+    # ── 日次精密キャップ ────────────────────────────────────────────────────────
+    today_target = _get_today_target_ssot("followback")
+    today_count  = _get_today_followback_count()
+    if today_target > 0:
+        remaining = today_target - today_count
+        if remaining <= 0:
+            msg = f"FOLLOWBACK daily_target達成済 ({today_count}/{today_target}) → skip"
+            print(f"[runner_followback] {msg}")
+            return (0, "daily_target_reached",
+                    {"today_count": today_count, "today_target": today_target, "note": msg})
+        effective_limit = remaining if limit <= 0 else min(limit, remaining)
+        print(f"[runner_followback] today={today_count}/{today_target} remaining={remaining} → --limit {effective_limit}")
+    else:
+        effective_limit = limit if limit > 0 else 30
+    # ────────────────────────────────────────────────────────────────────────────
     script_mod = "rakuten-room.bot.executor.followback_executor"
-    cmd = [sys.executable, "-m", script_mod, "--execute", "--limit", str(limit)]
+    cmd = [sys.executable, "-m", script_mod, "--execute", "--limit", str(effective_limit)]
     rc, out, err = _run_sub(cmd, timeout=900)
     detail = {"stdout_tail": out[-500:], "stderr_tail": err[-300:]}
     stop_reason = "runner_fail"
@@ -533,7 +701,7 @@ def main(argv=None):
     print(f"[orchestrator_v5] action={action} status={status} stop_reason={stop_reason} rc={rc}")
 
     # --- スプシ即時更新（CEO指示: BOT実行のたびに都度記入） ---
-    if action in ("post", "like", "followback") and status != "blocked":
+    if action in ("post", "like", "follow", "followback") and status != "blocked":
         try:
             _sheet_sync_after_action()
         except Exception as e:
