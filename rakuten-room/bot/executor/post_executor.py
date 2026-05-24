@@ -385,6 +385,57 @@ class PostExecutor:
                         except Exception:
                             pass
 
+            # 2026-05-24 真因 fix (CEO 指摘「投稿文無しで投稿」):
+            # baseline 取得で new_page を開いた間に textarea content が消えるケース確認.
+            # 完了 click 直前に textarea 内容を再 verify → 空なら再 fill + 再 verify.
+            # それでも空なら fail-fast (空投稿絶対禁止).
+            try:
+                textarea_recheck = self.page.locator('textarea[name="content"]').first
+                # Bring focus back
+                try:
+                    textarea_recheck.scroll_into_view_if_needed(timeout=2000)
+                except Exception:
+                    pass
+                current_value = textarea_recheck.input_value() or ""
+                current_norm = _normalize(current_value)
+                if current_norm != expected:
+                    logger.warning(
+                        f"[pre_click_recheck] textarea content drift detected: "
+                        f"expected_len={expected_len} actual_len={len(current_norm)} "
+                        f"→ 再 fill 試行"
+                    )
+                    try:
+                        textarea_recheck.fill(review_text)
+                    except Exception as _re_fill_err:
+                        # JS fallback
+                        self.page.evaluate("""([sel, text]) => {
+                            const el = document.querySelector(sel);
+                            if (!el) return;
+                            el.value = text;
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                            el.dispatchEvent(new Event('blur', {bubbles: true}));
+                        }""", ['textarea[name="content"]', review_text])
+                    self._human_delay(0.5, 1.0)
+                    refilled = _normalize(textarea_recheck.input_value() or "")
+                    if refilled != expected:
+                        result["error"] = (
+                            f"完了 click 直前 textarea 内容欠落 + 再 fill 失敗 "
+                            f"(expected_len={expected_len} actual_len={len(refilled)}). "
+                            f"空コメント投稿絶対禁止のため abort."
+                        )
+                        result["pre_click_recheck_failed"] = True
+                        result["screenshots"].append(
+                            str(self.bm.take_screenshot("05_pre_click_empty"))
+                        )
+                        logger.error(f"POST abort: pre_click_recheck failed: {result['error']}")
+                        return result
+                    logger.info(f"[pre_click_recheck] 再 fill 成功: {len(refilled)}文字")
+                else:
+                    logger.info(f"[pre_click_recheck] textarea content OK ({len(current_norm)}文字)")
+            except Exception as _rc_err:
+                logger.warning(f"[pre_click_recheck] err (続行): {_rc_err}")
+
             logger.info("「完了」ボタンをクリック")
             try:
                 done_btn.click(timeout=5000)
