@@ -114,6 +114,30 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         out["heartbeats"][mode] = None
             self._send(200, out)
+        elif self.path == "/room_stats":
+            # 認証必須
+            if not self._check_auth():
+                self._send(401, {"error": "invalid token"})
+                return
+            # room_stats_fetcher を subprocess で呼び出して ROOM 累計数値を返す
+            cwd = str(Path(__file__).resolve().parent.parent)
+            try:
+                r = subprocess.run(
+                    [sys.executable, "-m", "runner.room_stats_fetcher"],
+                    capture_output=True, text=True, timeout=60,
+                    cwd=cwd, creationflags=NO_WIN,
+                    encoding="utf-8", errors="replace",
+                )
+                if r.returncode == 0 and r.stdout.strip():
+                    # room_stats_fetcher は最終行に JSON を出力する
+                    last_line = r.stdout.strip().splitlines()[-1]
+                    stats = json.loads(last_line)
+                    self._send(200, stats)
+                else:
+                    err = (r.stderr or "")[-500:]
+                    self._send(500, {"_error": f"fetcher rc={r.returncode}: {err}"})
+            except Exception as e:
+                self._send(500, {"_error": f"room_stats error: {e}"})
         else:
             self._send(404, {"error": "not found"})
 

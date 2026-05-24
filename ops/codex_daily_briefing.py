@@ -70,8 +70,38 @@ def _ssot_cumulative() -> dict:
         return {"_error": str(e)}
 
 
+def _room_cumulative_via_vm_http() -> dict | None:
+    """VM HTTP /room_stats エンドポイントから ROOM 累計を取得.
+
+    2026-05-25 追加: HOST Chrome profile は全て空アカウント (商品数 0)
+    のため、VM の KAPIBARAN session 経由で取得する。VM HTTP が死んでいる場合は
+    None を返して呼び元が HOST profile fallback に移行する。
+    """
+    import urllib.request as _ureq
+    VM_TOKEN = "rakuten-room-v6-secret"
+    VM_BASE  = "http://localhost:18765"
+    try:
+        req = _ureq.Request(
+            f"{VM_BASE}/room_stats",
+            headers={"Authorization": f"Bearer {VM_TOKEN}"}
+        )
+        r = _ureq.urlopen(req, timeout=70)   # fetcher timeout=60 + margin
+        data = json.loads(r.read())
+        if "_error" in data:
+            print(f"[_room_cumulative_via_vm_http] VM returned error: {data['_error'][:200]}",
+                  file=sys.stderr)
+            return None
+        return data
+    except Exception as e:
+        print(f"[_room_cumulative_via_vm_http] VM HTTP unreachable: {e}", file=sys.stderr)
+        return None
+
+
 def _room_cumulative_via_browser() -> dict:
     """CEO 5/18 指示: ROOM 内のすべての累計数字 (スプシ突合用).
+
+    2026-05-25 修正: VM HTTP /room_stats を優先試行 (KAPIBARAN 本物 session)。
+    VM HTTP 失敗時に HOST profile fallback chain (旧ロジック) へ移行。
 
     Codex 29回目 #8 反映 (CEO 5/20 累計突合):
     chrome_profile_post が空アカウントへ切替の疑い → profile fallback chain で取得.
@@ -80,6 +110,18 @@ def _room_cumulative_via_browser() -> dict:
     Returns: {profile_used, fingerprint, tried, errors} or {_error, tried, errors}
     Codex 32回目 #5 fix: Task Scheduler 起動 dir 異常時の import フォールバック
     """
+    # ── 優先: VM HTTP /room_stats (KAPIBARAN 本物 session) ───────────────────
+    vm_result = _room_cumulative_via_vm_http()
+    if vm_result is not None:
+        # shape を downstream と揃える (_profile_used, _tried, _errors)
+        vm_result.setdefault("_profile_used", vm_result.get("_profile_used", "vm:follow"))
+        vm_result.setdefault("_tried", ["vm_http"])
+        vm_result.setdefault("_errors", {})
+        vm_result.setdefault("tried", vm_result["_tried"])
+        vm_result.setdefault("errors", vm_result["_errors"])
+        return vm_result
+
+    # ── 後退: HOST profile fallback chain (旧ロジック) ─────────────────────
     try:
         from shared.profile_health import fetch_room_cumulative_via_fallback_chain
     except ImportError:
