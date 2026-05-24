@@ -53,16 +53,13 @@ def _cleanup_finished_modes():
                         ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                         capture_output=True, text=True, timeout=5, creationflags=NO_WIN
                     )
-                    # 2026-05-25 fix: 単純な文字列検索では "1234" が "51234" にもマッチするため
-                    # tasklist /FO CSV + 完全一致でチェック。/NH では "1234" の部分一致リスクあり。
-                    # 代替: /FI "PID eq N" は正確な PID フィルタなので stdout に pid が残れば生存
+                    # 2026-05-25 fix: tasklist /FI "PID eq N" は正確な PID フィルタ。
+                    # 一致プロセスなし → "INFO: No tasks running" を返す。
+                    # 一致あり → プロセス名 + PID 含む行を返す。
+                    # "No tasks" で死亡判定 (PID 部分一致の誤検知回避)。
                     stdout_text = r.stdout or ""
-                    # tasklist は /FI でフィルタ後、一致なし = "INFO: No tasks..." を返す
-                    # 一致あり = プロセス名 PID ... の行を返す
-                    # str(pid) が stdout にあれば生存、なければ死亡
-                    import re as _re
-                    pid_found = bool(_re.search(r'\b' + str(pid) + r'\b', stdout_text))
-                    if not pid_found:
+                    pid_dead = "No tasks" in stdout_text or "タスクは実行されていません" in stdout_text
+                    if pid_dead:
                         del RUNNING_MODES[m]
                 except Exception:
                     pass
