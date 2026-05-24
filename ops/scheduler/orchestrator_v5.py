@@ -272,15 +272,11 @@ def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
         if status_str not in ("launched", "already_running"):
             raise RuntimeError(f"unexpected status: {launch_result}")
     except Exception as e:
-        print(f"[runner_post] VM HTTP launch fail: {e} — falling back to run.py")
-        # fallback: 旧 run.py auto (HOST 側 profile があれば動く)
-        script = REPO_ROOT / "rakuten-room" / "bot" / "run.py"
-        cmd = [sys.executable, str(script), "auto", "--batch", str(batch)]
-        if effective_limit > 0:
-            cmd += ["--limit", str(effective_limit)]
-        rc, out, err = _run_sub(cmd, timeout=3600)
-        return (rc, "ok" if rc == 0 else "runner_fail",
-                {"stdout_tail": out[-800:], "stderr_tail": err[-500:], "path": "fallback_run_py"})
+        # 2026-05-25: HOST fallback を廃止。HOST の chrome_profile_post には KAPIBARAN session が
+        # ないため、fallback しても 7日間停止と同じ失敗が繰り返される。
+        # VM HTTP に到達できない場合は明示的に失敗させ、patrol_v6 に復旧を委ねる。
+        print(f"[runner_post] VM HTTP launch fail: {e} — NO fallback (HOST has no KAPIBARAN session)")
+        return (1, "vm_http_unavailable", {"error": str(e)})
 
     # ── 2. 完了まで /status ポーリング ────────────────────────────────────────
     deadline = _time.time() + MAX_WAIT
@@ -324,8 +320,10 @@ def runner_post(batch: int, limit: int) -> tuple[int, str, dict]:
         print(f"[runner_post] DB result: posted={posted} failed={failed} skipped={skipped}")
         return (rc, stop_reason, {"posted": posted, "failed": failed, "skipped": skipped})
     except Exception as e:
+        # 2026-05-25 fix: DB read 失敗時は rc=1 で返す (Codex REJECT 対応)
+        # rc=0 で返すと「成功」として記録されるため誤報になる
         print(f"[runner_post] DB read err: {e}")
-        return (0, "completed", {"note": f"launched_but_db_read_err: {e}"})
+        return (1, "db_read_error", {"error": str(e), "note": "launched_but_result_unknown"})
 
 
 DAILY_TARGETS_CACHE = REPO_ROOT / "ops" / "scheduler" / "daily_targets.json"
