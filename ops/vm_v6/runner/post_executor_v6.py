@@ -101,8 +101,9 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             _db = HOST_BOT_DIR / "data" / "room_bot.db"
             _today_cnt = 0
             try:
-                _db_uri = f"file:{_db.as_posix()}?mode=ro&cache=shared"
-                with _sqlite3.connect(_db_uri, uri=True, timeout=10) as _con:
+                # resolve().as_uri() で Windows パスを RFC-3986 エンコード済み URI に変換
+                _db_uri = f"{_db.resolve().as_uri()}?mode=ro"
+                with _sqlite3.connect(_db_uri, uri=True, timeout=5) as _con:
                     _con.execute("PRAGMA query_only=ON")
                     _row = _con.execute(
                         "SELECT COUNT(*) FROM post_queue WHERE status='queued' AND queue_date=?",
@@ -115,7 +116,7 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
                 result["success"] = 0
                 result["fail"] = 0
                 result["skip"] = 0
-                result["stop_reason"] = "db_connect_error"
+                result["stop_reason"] = f"db_connect_error: {type(_qd_err).__name__}"
                 raise RuntimeError(f"queue_date DB check failed: {_qd_err}") from _qd_err
 
             if _today_cnt == 0:
