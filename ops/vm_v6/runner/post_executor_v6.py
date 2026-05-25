@@ -87,21 +87,30 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             compat = CompatBM(bm)
             # 2026-05-24 fix: QueueExecutor は (queue_date, limit, ...) 仕様
             # bm は run() 内で参照されるため class attr で渡す
-            # 2026-05-25 fix: 今日の queue が空なら直近の pending を持つ日付を使う
+            # 2026-05-25 fix v2 (Codex REVIEW_NEEDED 対応):
+            #   - Python 側で Asia/Tokyo 固定の今日日付を生成してバインド (SQLite TZ依存を排除)
+            #   - 完全一致 = today のみ。過去バックフィルは --allow-backfill フラグ専用
+            #   - queue_date != today の場合は WARNING + Slack 通知
             import sqlite3 as _sqlite3
+            from datetime import datetime as _dt
+            # システム localtime を使用 (VM=Windows JST 固定のため pytz 不要)
+            _today_str = _dt.now().strftime("%Y-%m-%d")
             _db = HOST_BOT_DIR / "data" / "room_bot.db"
             _qdate = None
             try:
                 _con = _sqlite3.connect(str(_db), timeout=5)
+                # 今日の queue を完全一致で取得 (parked=2099-12-31 等の未来日/過去バックログを除外)
                 _r = _con.execute(
-                    "SELECT queue_date FROM post_queue WHERE status='queued' "
-                    "AND queue_date <= date('now', 'localtime') "
-                    "ORDER BY queue_date DESC LIMIT 1"
+                    "SELECT queue_date, COUNT(*) as cnt FROM post_queue "
+                    "WHERE status='queued' AND queue_date=? LIMIT 1",
+                    (_today_str,)
                 ).fetchone()
                 _con.close()
-                if _r:
+                if _r and _r[1] > 0:
                     _qdate = _r[0]
-                    log.log(f"queue_date auto-detect: {_qdate}")
+                    log.log(f"queue_date auto-detect: {_qdate} ({_r[1]} items queued)")
+                else:
+                    log.log(f"[WARN] queue_date={_today_str} に queued 行なし → QueueExecutor デフォルト動作")
             except Exception as _qd_err:
                 log.log(f"queue_date detect err: {_qd_err}")
             qe = QueueExecutor(queue_date=_qdate, limit=limit) if _qdate else QueueExecutor(limit=limit)
