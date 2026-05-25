@@ -45,6 +45,13 @@ def check_heartbeat(mode: str) -> List[dict]:
         if phase == "shutdown":
             return alerts
 
+        # startup が 3h 以上古い場合: バッチ系 (post/like/followback) は
+        # shutdown 書き込み漏れでも既に完了している。alert 対象外。
+        # (例: POST バッチ 02:06 startup → 9h後に patrol が読んで誤 CRITICAL)
+        _STARTUP_GRACE_SEC = 3 * 3600  # 3 時間
+        if phase == "startup" and age_sec >= _STARTUP_GRACE_SEC:
+            return alerts
+
         if age_sec >= 300:
             alerts.append({
                 "level": "CRITICAL",
