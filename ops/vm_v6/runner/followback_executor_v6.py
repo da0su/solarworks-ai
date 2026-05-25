@@ -117,14 +117,14 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         for c in collected:
             try:
                 con.execute(
-                    "INSERT INTO followback_queue "
+                    "INSERT OR IGNORE INTO followback_queue "
                     "(follower_user_id, follower_username, detected_at, status) "
                     "VALUES (?, ?, ?, 'pending')",
                     (c["user_id"], c["username"], now_iso)
                 )
                 inserted += 1
-            except Exception:
-                pass
+            except Exception as _ie:
+                log.log(f"[scan_followers] INSERT skip {c['user_id']}: {_ie}")
         con.commit()
         log.log(f"[scan_followers] seen={len(seen)} new_pending={inserted}")
         return inserted
@@ -147,6 +147,7 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
     hb.write(phase="startup", force=True)
     bm = BrowserManagerV6(action="followback")
+    con = None  # 例外パスでも finally で close できるよう初期化
 
     try:
         import sqlite3
@@ -267,6 +268,11 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         log.log(f"[ERROR] FB vm-native: {e}\n{tb[:1000]}")
         result["stop_reason"] = f"executor_error: {type(e).__name__}: {e}"
     finally:
+        try:
+            if con:
+                con.close()  # 例外/クラッシュ時の DB 接続リーク防止
+        except Exception:
+            pass
         try:
             bm.stop()
         except Exception:
