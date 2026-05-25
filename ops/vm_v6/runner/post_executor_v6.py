@@ -85,60 +85,30 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
                     return self._v6.handle_session_upgrade(max_wait_sec=max_wait_sec)
 
             compat = CompatBM(bm)
-            # 2026-05-24 fix: QueueExecutor は (queue_date, limit, ...) 仕様
-            # 2026-05-25 fix v4 (Codex REJECT 対応):
+            # 2026-05-25 fix (Codex APPROVE 版):
+            #   核心: 今日日付を明示的に渡すことで parked items (2099-12-31) を除外
             #   - zoneinfo で Asia/Tokyo 固定日付 (OS TZ依存排除)
-            #   - SQLite read-only URI + PRAGMA query_only (不要ロック完全排除)
-            #   - queued=0 なら QueueExecutor を呼ばず即 return result (NO-OP)
-            #   - no-queue/DB エラー時も result 全フィールドを明示的にゼロ初期化
-            import sqlite3 as _sqlite3
+            #   - 0件時は QueueExecutor がそのまま stop_reason="completed" を返す (既存 whitelist 互換)
+            #   - DB アクセス不要: queue_date を決定するだけで QueueExecutor に委ねる
             from datetime import datetime as _dt
             try:
                 from zoneinfo import ZoneInfo as _ZI
                 _today_str = _dt.now(_ZI("Asia/Tokyo")).date().isoformat()
-            except ImportError:  # Python 3.8 以下フォールバック
+            except ImportError:  # Python 3.8 以下フォールバック (VM=Windows JST 固定)
                 _today_str = _dt.now().strftime("%Y-%m-%d")
-            _db = HOST_BOT_DIR / "data" / "room_bot.db"
-            _today_cnt = 0
-            try:
-                # resolve().as_uri() で Windows パスを RFC-3986 エンコード済み URI に変換
-                _db_uri = f"{_db.resolve().as_uri()}?mode=ro"
-                with _sqlite3.connect(_db_uri, uri=True, timeout=10) as _con:
-                    _con.execute("PRAGMA query_only=ON")
-                    _row = _con.execute(
-                        "SELECT COUNT(*) FROM post_queue WHERE status='queued' AND queue_date=?",
-                        (_today_str,)
-                    ).fetchone()
-                    _today_cnt = _row[0] if _row else 0
-                log.log(f"queue_date={_today_str}: {_today_cnt} items queued")
-            except Exception as _qd_err:
-                log.log(f"[ERROR] queue_date detect: {_qd_err}")
-                result["success"] = 0
-                result["fail"] = 0
-                result["skip"] = 0
-                result["stop_reason"] = "db_connect_error"
-                result["error_detail"] = f"{type(_qd_err).__name__}: {_qd_err}"
-                raise RuntimeError(f"queue_date DB check failed: {_qd_err}") from _qd_err
+            log.log(f"queue_date (today, Asia/Tokyo): {_today_str}")
 
-            if _today_cnt == 0:
-                # 今日 queued 行なし → QueueExecutor を呼ばず即 return (虚偽 success 報告禁止)
-                log.log(f"[INFO] queue_date={_today_str} queued=0 → NO-OP")
-                result["success"] = 0
-                result["fail"] = 0
-                result["skip"] = 0
-                result["stop_reason"] = "no_queue_today"
-                # outer finally (heartbeat/bm.stop) は return 後も実行される
-                return result
-            else:
-                qe = QueueExecutor(queue_date=_today_str, limit=limit)
-                qe._external_bm = compat  # may be unused; queue_executor opens own bm
-                summary = qe.run()
+            # 今日日付を明示渡し → QueueExecutor が 0件なら posted=0/stop_reason="completed" を返す
+            # (DB事前チェックは不要: false-success防止はQueueExecutorのロジックに委ねる)
+            qe = QueueExecutor(queue_date=_today_str, limit=limit)
+            qe._external_bm = compat  # may be unused; queue_executor opens own bm
+            summary = qe.run()
 
-                result["success"] = summary.get("posted", 0)
-                result["fail"] = summary.get("failed", 0)
-                result["skip"] = summary.get("skipped", 0)
-                result["stop_reason"] = summary.get("stop_reason", "completed")
-                log.log(f"queue_executor result: {result}")
+            result["success"] = summary.get("posted", 0)
+            result["fail"] = summary.get("failed", 0)
+            result["skip"] = summary.get("skipped", 0)
+            result["stop_reason"] = summary.get("stop_reason", "completed")
+            log.log(f"queue_executor result: {result}")
 
         except Exception as e:
             import traceback
