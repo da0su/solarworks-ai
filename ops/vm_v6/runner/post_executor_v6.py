@@ -110,9 +110,13 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             # QueueExecutor は "reason" キーを使用 ("stop_reason" は旧互換フォールバック)
             # aborted=True + reason あり → reason をそのまま使用
             # aborted=False (正常完了) → "completed"
-            _aborted = summary.get("aborted", False)
+            _aborted = bool(summary.get("aborted", False))  # str/"false" 等に対して安全
             _reason = summary.get("reason") or summary.get("stop_reason")  # 旧互換フォールバック
-            result["stop_reason"] = (_reason if _reason else "aborted") if _aborted else "completed"
+            # _reason が None/''/空の場合は "aborted" をフォールバック (false "completed" 防止)
+            if _aborted:
+                result["stop_reason"] = _reason if (_reason and _reason != "completed") else "aborted"
+            else:
+                result["stop_reason"] = "completed"
             log.log(f"queue_executor result: {result}")
 
         except Exception as e:
