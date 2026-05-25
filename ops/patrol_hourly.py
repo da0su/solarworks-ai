@@ -63,7 +63,7 @@ _NO_WINDOW = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDO
 
 def run(*args, timeout=30):
     try:
-        r = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout, creationflags=_NO_WINDOW)
+        r = subprocess.run(list(args), capture_output=True, encoding="utf-8", errors="replace", timeout=timeout, creationflags=_NO_WINDOW)
         return r.returncode, (r.stdout or "") + (r.stderr or "")
     except Exception as e:
         return -1, str(e)
@@ -186,8 +186,25 @@ def check_follow() -> dict:
     if not info["vm_running"]:
         info["problem"] = True
         info["reasons"].append("vm_not_running")
+
+    # 2026-05-25 Plan v6 HOST follow 対応:
+    # follow_via_seeds.py (HOST) が稼働中なら VM log stale check をスキップ。
+    # follow_rate_state.json の mtime が 3h 以内 = HOST follow active と判断。
+    _host_rate_state = ROOT / "state" / "follow_rate_state.json"
+    _host_follow_active = False
+    if _host_rate_state.exists():
+        try:
+            _host_age_min = (datetime.now() - datetime.fromtimestamp(
+                _host_rate_state.stat().st_mtime)).total_seconds() / 60
+            _host_follow_active = _host_age_min < 180
+            info["host_follow_active"] = _host_follow_active
+            info["host_rate_state_age_min"] = round(_host_age_min, 1)
+        except Exception:
+            pass
+
     # VM専用: 3時間(180min)以内に更新があれば正常（VM実行間隔 ~1-3h）
-    if age_min > 180:
+    # HOST follow が active の場合は VM log stale は誤報 → skip
+    if not _host_follow_active and age_min > 180:
         info["problem"] = True
         info["reasons"].append(f"log_stale({age_min:.0f}min)")
 
@@ -636,7 +653,9 @@ def main():
     follow_info["delta_vs_last_patrol"] = delta
 
     # follow 追加判定: delta=0 AND age>120min → problem (VM専用・実行間隔 ~1-3h)
-    if (delta is not None and delta == 0
+    # 2026-05-25: HOST follow (follow_via_seeds.py) が active な場合はスキップ
+    if (not follow_info.get("host_follow_active", False)
+        and delta is not None and delta == 0
         and follow_info.get("log_age_min", 0) > 120
         and "log_stale" not in "|".join(follow_info["reasons"])):
         follow_info["problem"] = True
