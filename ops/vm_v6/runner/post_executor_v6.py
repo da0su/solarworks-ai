@@ -86,20 +86,24 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
 
             compat = CompatBM(bm)
             # 2026-05-24 fix: QueueExecutor は (queue_date, limit, ...) 仕様
-            # 2026-05-25 fix v3 (Codex REVIEW_NEEDED/REJECT 対応):
-            #   - today 完全一致 COUNT(*) で queued 件数を事前確認
-            #   - queued=0 なら QueueExecutor を呼ばず即 early-return (NO-OP)
-            #     → 虚偽 success 報告リスクを完全排除
-            #   - DB 接続は with context で確実 close
+            # 2026-05-25 fix v4 (Codex REJECT 対応):
+            #   - zoneinfo で Asia/Tokyo 固定日付 (OS TZ依存排除)
+            #   - SQLite read-only URI + PRAGMA query_only (不要ロック完全排除)
+            #   - queued=0 なら QueueExecutor を呼ばず即 return result (NO-OP)
+            #   - no-queue/DB エラー時も result 全フィールドを明示的にゼロ初期化
             import sqlite3 as _sqlite3
             from datetime import datetime as _dt
-            # システム localtime を使用 (VM=Windows JST 固定のため pytz 不要)
-            _today_str = _dt.now().strftime("%Y-%m-%d")
+            try:
+                from zoneinfo import ZoneInfo as _ZI
+                _today_str = _dt.now(_ZI("Asia/Tokyo")).date().isoformat()
+            except ImportError:  # Python 3.8 以下フォールバック
+                _today_str = _dt.now().strftime("%Y-%m-%d")
             _db = HOST_BOT_DIR / "data" / "room_bot.db"
             _today_cnt = 0
-            _db_err = None
             try:
-                with _sqlite3.connect(str(_db), timeout=5, isolation_level=None) as _con:
+                _db_uri = f"file:{_db.as_posix()}?mode=ro&cache=shared"
+                with _sqlite3.connect(_db_uri, uri=True, timeout=10) as _con:
+                    _con.execute("PRAGMA query_only=ON")
                     _row = _con.execute(
                         "SELECT COUNT(*) FROM post_queue WHERE status='queued' AND queue_date=?",
                         (_today_str,)
@@ -107,19 +111,22 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
                     _today_cnt = _row[0] if _row else 0
                 log.log(f"queue_date={_today_str}: {_today_cnt} items queued")
             except Exception as _qd_err:
-                _db_err = _qd_err
                 log.log(f"[ERROR] queue_date detect: {_qd_err}")
-
-            if _db_err is not None:
-                # DB 接続失敗 → 安全側に倒す (false-success 報告を防ぐ)
-                result["stop_reason"] = f"db_connect_error: {_db_err}"
-                raise RuntimeError(f"queue_date DB check failed: {_db_err}")
+                result["success"] = 0
+                result["fail"] = 0
+                result["skip"] = 0
+                result["stop_reason"] = "db_connect_error"
+                raise RuntimeError(f"queue_date DB check failed: {_qd_err}") from _qd_err
 
             if _today_cnt == 0:
-                # 今日 queued 行なし → QueueExecutor を呼ばず即終了 (NO-OP)
-                log.log(f"[INFO] queue_date={_today_str} queued=0 → NO-OP (early return)")
+                # 今日 queued 行なし → QueueExecutor を呼ばず即 return (虚偽 success 報告禁止)
+                log.log(f"[INFO] queue_date={_today_str} queued=0 → NO-OP")
+                result["success"] = 0
+                result["fail"] = 0
+                result["skip"] = 0
                 result["stop_reason"] = "no_queue_today"
-                # finally ブロックで heartbeat/stop が呼ばれる
+                # outer finally (heartbeat/bm.stop) は return 後も実行される
+                return result
             else:
                 qe = QueueExecutor(queue_date=_today_str, limit=limit)
                 qe._external_bm = compat  # may be unused; queue_executor opens own bm
