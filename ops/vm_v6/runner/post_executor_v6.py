@@ -96,24 +96,26 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             # システム localtime を使用 (VM=Windows JST 固定のため pytz 不要)
             _today_str = _dt.now().strftime("%Y-%m-%d")
             _db = HOST_BOT_DIR / "data" / "room_bot.db"
-            _qdate = None
+            # 今日の queue 件数を確認。完全一致のみ (parked=2099-12-31 等の未来日/過去バックログを除外)
+            # Codex REJECT 対応 (2026-05-25):
+            #   - queue空でも _today_str を必ず渡す → デフォルト動作へのフォールバック禁止
+            #   - QueueExecutor が 0 件なら NO-OP で終了する設計に委ねる
+            #   - with context で DB 接続を確実に close
+            _today_cnt = 0
             try:
-                _con = _sqlite3.connect(str(_db), timeout=5)
-                # 今日の queue を完全一致で取得 (parked=2099-12-31 等の未来日/過去バックログを除外)
-                _r = _con.execute(
-                    "SELECT queue_date, COUNT(*) as cnt FROM post_queue "
-                    "WHERE status='queued' AND queue_date=? LIMIT 1",
-                    (_today_str,)
-                ).fetchone()
-                _con.close()
-                if _r and _r[1] > 0:
-                    _qdate = _r[0]
-                    log.log(f"queue_date auto-detect: {_qdate} ({_r[1]} items queued)")
-                else:
-                    log.log(f"[WARN] queue_date={_today_str} に queued 行なし → QueueExecutor デフォルト動作")
+                with _sqlite3.connect(str(_db), timeout=5) as _con:
+                    _row = _con.execute(
+                        "SELECT COUNT(*) FROM post_queue WHERE status='queued' AND queue_date=?",
+                        (_today_str,)
+                    ).fetchone()
+                    _today_cnt = _row[0] if _row else 0
+                log.log(f"queue_date={_today_str}: {_today_cnt} items queued")
+                if _today_cnt == 0:
+                    log.log(f"[WARN] queue_date={_today_str} に queued 行なし → limit=0 で NO-OP")
             except Exception as _qd_err:
                 log.log(f"queue_date detect err: {_qd_err}")
-            qe = QueueExecutor(queue_date=_qdate, limit=limit) if _qdate else QueueExecutor(limit=limit)
+            # 今日日付を明示的に渡す (queue空でも過去日・未来日へのフォールバックを禁止)
+            qe = QueueExecutor(queue_date=_today_str, limit=limit)
             qe._external_bm = compat  # may be unused; queue_executor opens own bm
             summary = qe.run()
 
