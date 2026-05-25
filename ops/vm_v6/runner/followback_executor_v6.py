@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""VM v6 FOLLOWBACK executor: 既存 followback_executor を thin wrap."""
+"""VM v6 FOLLOWBACK executor: 既存 followback_executor を thin wrap.
+
+2026-05-26 改善4: /my/followers 自律スキャン
+  pending=0 の場合、bm.page で /my/followers を直接スキャンして
+  followback_queue に新規 pending を INSERT → pool 自己補充で source_empty 回避
+"""
 from __future__ import annotations
 
+import re as _re
 import sys
+from datetime import datetime as _dt
 from pathlib import Path
 
 from .shared_logic import HeartbeatPusher, SessionLogger
@@ -19,58 +26,183 @@ except (IndexError, FileNotFoundError, ValueError):
 if HOST_BOT_DIR.exists():
     sys.path.insert(0, str(HOST_BOT_DIR))
 
+# room_XXXXXXXX 形式のユーザー ID にマッチ (英数字・アンダーバー・ドット)
+_UID_RE = _re.compile(r'^room_[0-9a-f]{8,}$|^room_[a-z0-9_.]{4,40}$')
+
+
+def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> int:
+    """bm.page を使って /my/followers をスキャンし followback_queue に pending INSERT.
+
+    Returns: 追加した pending 件数
+    """
+    try:
+        page.goto("https://room.rakuten.co.jp/my/followers",
+                  wait_until="domcontentloaded", timeout=30000)
+        page.wait_for_timeout(4000)
+
+        if "grp01.id.rakuten.co.jp" in page.url or "login" in page.url:
+            log.log("[scan_followers] not logged in → skip")
+            return 0
+
+        # 既に処理済み (pending/completed) の user_id を取得
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT follower_user_id FROM followback_queue "
+            "WHERE status IN ('pending', 'completed')"
+        )
+        already_queued: set[str] = {r[0] for r in cur.fetchall() if r[0]}
+
+        # 自分がフォロー済みのユーザー (follow_log) を取得
+        try:
+            cur.execute(
+                "SELECT DISTINCT target_user_id FROM follow_log WHERE status='success'"
+            )
+            already_following: set[str] = {r[0] for r in cur.fetchall() if r[0]}
+        except Exception:
+            already_following = set()
+
+        skip_set = already_queued | already_following
+
+        collected: list[dict] = []
+        seen: set[str] = set()
+        last_h = 0
+        stuck = 0
+
+        for scroll_i in range(60):
+            anchors = page.query_selector_all('a[href*="/room_"]')
+            for a in anchors:
+                href = (a.get_attribute("href") or "").strip()
+                if "/room_" not in href:
+                    continue
+                seg = href.split("/room_", 1)[1].split("/")[0].split("?")[0]
+                uid = "room_" + seg
+                if not _UID_RE.match(uid) or uid in seen:
+                    continue
+                seen.add(uid)
+                if uid not in skip_set:
+                    uname = (a.inner_text() or "").strip()[:60] or uid
+                    collected.append({"user_id": uid, "username": uname})
+            if len(collected) >= scan_limit:
+                break
+            h = page.evaluate("document.body.scrollHeight")
+            if h == last_h:
+                stuck += 1
+                if stuck >= 4:
+                    break
+                try:
+                    page.keyboard.press("End")
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+            else:
+                stuck = 0
+            last_h = h
+            page.evaluate("window.scrollBy(0, 2000)")
+            page.evaluate("""
+                const containers = document.querySelectorAll(
+                    '[class*="scroll"],[class*="list"],[role="feed"]'
+                );
+                containers.forEach(c => {
+                    if (c.scrollHeight > c.clientHeight) c.scrollTop = c.scrollHeight;
+                });
+            """)
+            page.wait_for_timeout(1500)
+
+        if not collected:
+            log.log("[scan_followers] collected=0 (page may be empty or DOM changed)")
+            return 0
+
+        now_iso = _dt.now().isoformat()
+        inserted = 0
+        for c in collected:
+            try:
+                con.execute(
+                    "INSERT INTO followback_queue "
+                    "(follower_user_id, follower_username, detected_at, status) "
+                    "VALUES (?, ?, ?, 'pending')",
+                    (c["user_id"], c["username"], now_iso)
+                )
+                inserted += 1
+            except Exception:
+                pass
+        con.commit()
+        log.log(f"[scan_followers] seen={len(seen)} new_pending={inserted}")
+        return inserted
+
+    except Exception as e:
+        log.log(f"[scan_followers] error: {e}")
+        return 0
+
 
 def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogger = None) -> dict:
-    if hb is None: hb = HeartbeatPusher("followback")
-    if log is None: log = SessionLogger("followback")
+    if hb is None:
+        hb = HeartbeatPusher("followback")
+    if log is None:
+        log = SessionLogger("followback")
 
     log.log(f"=== FOLLOWBACK executor v6 start: limit={limit} ===")
     hb.write(phase="startup", force=True)
 
     # 2026-05-24: VM-native FB executor (HOST followback_rpa を回避)
-    # HOST followback_rpa は storage_state.json (古い) 依存 → KAPIBARAN session 切れで失敗
-    # → VM の chrome_profile_followback (KAPIBARAN session 有り) で直接 follow click
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
     hb.write(phase="startup", force=True)
     bm = BrowserManagerV6(action="followback")
 
     try:
-        # DB から pending candidates を取得
         import sqlite3
-        from datetime import datetime as _dt
         db_path = Path(r"\\vboxsvr\bot\data\room_bot_v5.db")
         if not db_path.exists():
             db_path = Path(r"\\vboxsvr\vm_data\room_bot_v5.db")
         con = sqlite3.connect(str(db_path), timeout=10)
         con.execute("PRAGMA busy_timeout = 5000")
-        rows = con.execute(
-            "SELECT id, follower_user_id, follower_username FROM followback_queue "
-            "WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
-        ).fetchall()
-        if not rows:
-            result["stop_reason"] = "source_empty"
-            log.log("[ABORT] no pending candidates")
-            return result
-        ids = [r[0] for r in rows]
-        log.log(f"got {len(rows)} pending candidates")
-        # mark in_progress
-        con.execute("UPDATE followback_queue SET status='in_progress' WHERE id IN ("
-                    + ",".join("?" * len(ids)) + ")", ids)
-        con.commit()
 
+        # ── ブラウザ起動 & ログイン確認 ──
         bm.start()
         hb.write(phase="login_check")
         if not bm.is_logged_in():
             log.log("[ABORT] not logged in")
-            # revert in_progress to pending
-            con.execute("UPDATE followback_queue SET status='pending' WHERE id IN ("
-                        + ",".join("?" * len(ids)) + ")", ids)
-            con.commit()
             con.close()
             result["stop_reason"] = "login_expired"
             return result
 
         page = bm.page
+
+        # ── pending candidates を取得 ──
+        rows = con.execute(
+            "SELECT id, follower_user_id, follower_username FROM followback_queue "
+            "WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
+        ).fetchall()
+
+        if not rows:
+            # pending=0 → /my/followers を直接スキャンして pool 自己補充
+            # (HOST の followback_source_feed に依存せず自律運転)
+            log.log("[pool_empty] pending=0 → /my/followers 自動スキャン開始")
+            hb.write(phase="pool_scan")
+            inserted = _scan_my_followers(page, con, log, scan_limit=400)
+            log.log(f"[pool_refresh] inserted={inserted} new pending candidates")
+            if inserted > 0:
+                rows = con.execute(
+                    "SELECT id, follower_user_id, follower_username FROM followback_queue "
+                    "WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
+                ).fetchall()
+
+        if not rows:
+            result["stop_reason"] = "source_empty"
+            log.log("[ABORT] no pending candidates (even after scan)")
+            con.close()
+            return result
+
+        ids = [r[0] for r in rows]
+        log.log(f"got {len(rows)} pending candidates")
+        # mark in_progress
+        con.execute(
+            "UPDATE followback_queue SET status='in_progress' WHERE id IN ("
+            + ",".join("?" * len(ids)) + ")", ids
+        )
+        con.commit()
+
+        # ── followback 実行 ──
+        hb.write(phase="followback_loop")
         success_ids = []
         fail_ids = {}
         for qid, user_id, username in rows:
@@ -81,7 +213,9 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 page.wait_for_timeout(2500)
                 # follow ボタン (React)
-                btn = page.locator('button[aria-label="フォローする"], button:has-text("フォローする")').first
+                btn = page.locator(
+                    'button[aria-label="フォローする"], button:has-text("フォローする")'
+                ).first
                 if btn.count() == 0:
                     # 既に follow 済か account 削除
                     fail_ids[qid] = "no_follow_button"
@@ -89,11 +223,15 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                 try:
                     btn.click(timeout=5000)
                 except Exception as e:
-                    fail_ids[qid] = f"click_err:{e}"
+                    fail_ids[qid] = f"click_err:{type(e).__name__}"
                     continue
                 page.wait_for_timeout(2000)
                 # verify
-                followed = page.locator('button[aria-label="フォロー中"], button:has-text("フォロー中")').count() > 0
+                followed = (
+                    page.locator(
+                        'button[aria-label="フォロー中"], button:has-text("フォロー中")'
+                    ).count() > 0
+                )
                 if followed:
                     success_ids.append(qid)
                     log.log(f"OK [{len(success_ids)}/{limit}] {user_id}")
@@ -102,15 +240,18 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
             except Exception as e:
                 fail_ids[qid] = f"exception:{type(e).__name__}"
 
-        # DB update
+        # ── DB update ──
         now_iso = _dt.now().isoformat()
         for sid in success_ids:
-            con.execute("UPDATE followback_queue SET status='completed', followed_at=? WHERE id=?",
-                        (now_iso, sid))
-        for fid, reason in fail_ids.items():
-            # failed_reason column may not exist - use simple status only
+            con.execute(
+                "UPDATE followback_queue SET status='completed', followed_at=? WHERE id=?",
+                (now_iso, sid)
+            )
+        for fid in fail_ids:
             try:
-                con.execute("UPDATE followback_queue SET status='failed' WHERE id=?", (fid,))
+                con.execute(
+                    "UPDATE followback_queue SET status='failed' WHERE id=?", (fid,)
+                )
             except Exception:
                 pass
         con.commit()
@@ -119,6 +260,7 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         result["fail"] = len(fail_ids)
         result["stop_reason"] = "completed"
         log.log(f"FB summary: success={len(success_ids)} fail={len(fail_ids)}")
+
     except Exception as e:
         import traceback
         tb = traceback.format_exc()

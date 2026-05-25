@@ -218,10 +218,20 @@ FOLLOWBACK_DAILY_TARGET = 30
 # いいね履歴ファイル
 LIKE_HISTORY_PATH = DATA_DIR / "like_history.json"
 
-# いいねするフィードURL（/items がメイン。いいねボタン実在確認済み 2026-04-02）
+# いいねするフィードURL（2026-05-26 拡張: カテゴリ/ランキング9件追加で目標277件に近づける）
+# 元の2フィードだけでは like_history 2453件との重複率が高く ~80件/日しか達成できなかった
 LIKE_FEED_URLS = [
-    "https://room.rakuten.co.jp/items",
-    "https://room.rakuten.co.jp/timeline/followings",
+    "https://room.rakuten.co.jp/items",                                                    # グローバル新着
+    "https://room.rakuten.co.jp/timeline/followings",                                      # フォロー中タイムライン
+    "https://room.rakuten.co.jp/discover/likeItemRank",                                    # いいねランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000551167181",                # sweets ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000100533426",                # kids ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000215783421",                # household ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000558944399",                # kitchen ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000216131238",                # bags ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000543898213",                # ladies_fashion ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000537215001",                # interior ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000551167177",                # food ランキング
 ]
 
 # 連続失敗で停止する閾値

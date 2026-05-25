@@ -454,14 +454,15 @@ def main():
     candidate_pool: list[str] = []
     random.shuffle(seeds)
     pool_target = max(target, 40)  # 軽量化 (skip 50% 想定で 目標 + 余裕分)
-    harvest_time_cap = 180  # 3 分に短縮 (旧 5分・1trigger 14min 中 follow phase 10min 確保)
+    # 2026-05-26 改善: 3分 → 6分 (seed枯渇対策・2倍のseedを走査して fresh pool を拡大)
+    harvest_time_cap = 360  # 6 分 (旧 3分・seed枯渇で fresh=0 が頻発していたため延長)
     harvest_start = time.time()
     # 2026-05-10 CEO 指示: harvest 結果を seed_investigation.json に incremental 反映
     seed_overlap_updates: dict[str, dict] = {}  # seed_user → {harvested, overlap}
     for seed in seeds:
         if time.time() > deadline: break
         if time.time() - harvest_start > harvest_time_cap:
-            logger.info(f"[harvest] 3分 cap で打ち切り (pool={len(candidate_pool)})")
+            logger.info(f"[harvest] 6分 cap で打ち切り (pool={len(candidate_pool)})")
             break
         # 2026-05-09 18:55: 2nd hop seeds を skip しないよう修正.
         names = harvest_seed_followers(bm, seed, max_per_seed=120)
@@ -496,7 +497,35 @@ def main():
     except Exception as e:
         logger.warning(f"seed_investigation update failed: {e}")
 
-    logger.info(f"=== candidate pool: {len(candidate_pool)} fresh ===")
+    logger.info(f"=== candidate pool (1st hop): {len(candidate_pool)} fresh ===")
+
+    # 2026-05-26 改善3: BFS 2nd hop — 1st hop で pool が不足している場合に追加 harvest
+    # fresh candidates をそのまま 2nd hop seed として使い、そのフォロワーを掘る
+    # → 既存 447 seeds が枯渇していても指数的に新規 pool を獲得可能
+    BFS_CAP_SEC = 120  # 2nd hop に最大 2分追加
+    if len(candidate_pool) < pool_target and len(candidate_pool) > 0:
+        hop2_seeds = list(candidate_pool[:20])  # fresh の先頭 20 名を 2nd hop seed に
+        bfs_start = time.time()
+        bfs_added = 0
+        for hop2_seed in hop2_seeds:
+            if time.time() - bfs_start > BFS_CAP_SEC:
+                logger.info(f"[BFS hop2] 2分 cap で打ち切り (added={bfs_added} pool={len(candidate_pool)})")
+                break
+            names2 = harvest_seed_followers(bm, hop2_seed, max_per_seed=100)
+            fresh2 = [n for n in names2 if n not in already and n not in candidate_pool]
+            added = fresh2[:30]  # 1 seed あたり最大 30 名
+            candidate_pool.extend(added)
+            bfs_added += len(added)
+            if added:
+                logger.info(f"[BFS hop2:{hop2_seed}] +{len(added)} fresh pool={len(candidate_pool)}")
+            if len(candidate_pool) >= pool_target:
+                break
+        if bfs_added > 0:
+            logger.info(f"[BFS hop2] total added={bfs_added} final_pool={len(candidate_pool)}")
+    elif len(candidate_pool) == 0:
+        logger.warning("[BFS hop2] skip: 1st hop pool=0 (all seeds exhausted)")
+
+    logger.info(f"=== candidate pool (final): {len(candidate_pool)} fresh ===")
 
     # Codex 5/16 9回目 review 反映 v3: exit_code 一貫管理 (Codex #3)
     from shared.follow_rate_gate import (
