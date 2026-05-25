@@ -95,6 +95,7 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
                 _con = _sqlite3.connect(str(_db), timeout=5)
                 _r = _con.execute(
                     "SELECT queue_date FROM post_queue WHERE status='queued' "
+                    "AND queue_date <= date('now', 'localtime') "
                     "ORDER BY queue_date DESC LIMIT 1"
                 ).fetchone()
                 _con.close()
