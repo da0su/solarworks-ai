@@ -241,7 +241,10 @@ def main():
         # comment_edit mode: job_success (Codex 42 #1) で判定
         if args.mode == "comment_edit":
             return 0 if result.get("job_success") else 4
-        return 0 if result.get("success", 0) > 0 or result.get("stop_reason") in ("target_reached", "all_seeds_done", "completed") else 4
+        # no_queue_today: 今日の投稿計画が未生成 or 既に全投稿済み → 正常終了 (exit 0)
+        # db_connect_error: DB障害 → 異常終了 (exit 4)
+        _ok_reasons = ("target_reached", "all_seeds_done", "completed", "no_queue_today")
+        return 0 if result.get("success", 0) > 0 or result.get("stop_reason") in _ok_reasons else 4
 
     except Exception as e:
         log.log(f"[FATAL] {e}")
