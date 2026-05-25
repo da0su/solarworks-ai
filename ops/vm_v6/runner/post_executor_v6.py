@@ -107,7 +107,12 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             result["success"] = summary.get("posted", 0)
             result["fail"] = summary.get("failed", 0)
             result["skip"] = summary.get("skipped", 0)
-            result["stop_reason"] = summary.get("stop_reason", "completed")
+            # QueueExecutor は "reason" キーを使用 ("stop_reason" ではない)
+            # aborted=True + reason あり → reason をそのまま使用
+            # aborted=False (正常完了) → "completed"
+            _aborted = summary.get("aborted", False)
+            _reason = summary.get("reason")
+            result["stop_reason"] = (_reason if _reason else "aborted") if _aborted else "completed"
             log.log(f"queue_executor result: {result}")
 
         except Exception as e:
