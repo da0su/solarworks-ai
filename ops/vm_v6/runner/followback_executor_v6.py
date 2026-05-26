@@ -163,18 +163,29 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
 
         now_iso = _dt.now().isoformat()
         inserted = 0
+        # Codex REJECT 反映 (2026-05-26): inserted は rowcount で正確に判定
+        # INSERT OR IGNORE は重複時にエラーを投げず rowcount=0 を返すため
+        # try/except 内の inserted += 1 では「重複skip も加算」してしまう (虚偽報告)
+        duplicate_skipped = 0
         for c in collected:
             try:
-                con.execute(
+                cur = con.execute(
                     "INSERT OR IGNORE INTO followback_queue "
                     "(follower_user_id, follower_username, detected_at, status) "
                     "VALUES (?, ?, ?, 'pending')",
                     (c["user_id"], c["username"], now_iso)
                 )
-                inserted += 1
-            except Exception as _ie:
-                log.log(f"[scan_followers] INSERT skip {c['user_id']}: {_ie}")
+                if cur.rowcount > 0:
+                    inserted += 1
+                else:
+                    duplicate_skipped += 1  # UNIQUE 制約で IGNORE された
+            except sqlite3.IntegrityError as _ie:
+                # UNIQUE 以外の制約違反 (CHECK/NOT NULL/FK) は明示的に区別
+                log.log(f"[scan_followers] INTEGRITY skip {c['user_id']}: {_ie}")
+            except Exception as _e:
+                log.log(f"[scan_followers] ERROR insert {c['user_id']}: {_e}")
         con.commit()
+        log.log(f"[scan_followers] insert_breakdown: new={inserted} dup={duplicate_skipped}")
         log.log(f"[scan_followers] seen={len(seen)} new_pending={inserted}")
         return inserted
 
