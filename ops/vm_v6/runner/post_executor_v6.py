@@ -91,11 +91,14 @@ def run_post(limit: int = 50, batch: int = 1, hb: HeartbeatPusher = None, log: S
             #   - 0件時は QueueExecutor がそのまま stop_reason="completed" を返す (既存 whitelist 互換)
             #   - DB アクセス不要: queue_date を決定するだけで QueueExecutor に委ねる
             from datetime import datetime as _dt
+            # 2026-05-26 fix: VM Python に tzdata パッケージ無しのケースで
+            # ZoneInfoNotFoundError も捕捉する (Windows VM = JST 固定なので OS time で OK)
             try:
                 from zoneinfo import ZoneInfo as _ZI
                 _today_str = _dt.now(_ZI("Asia/Tokyo")).date().isoformat()
-            except ImportError:  # Python 3.8 以下フォールバック (VM=Windows JST 固定)
+            except Exception as _tz_err:  # ImportError + ZoneInfoNotFoundError + その他
                 _today_str = _dt.now().strftime("%Y-%m-%d")
+                log.log(f"[zoneinfo_fallback] {type(_tz_err).__name__}: {_tz_err} → OS now()")
             log.log(f"queue_date (today, Asia/Tokyo): {_today_str}")
 
             # 今日日付を明示渡し → QueueExecutor が 0件なら posted=0/stop_reason="completed" を返す

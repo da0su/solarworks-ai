@@ -43,8 +43,8 @@ from typing import Optional
 try:
     from zoneinfo import ZoneInfo
     JST = ZoneInfo("Asia/Tokyo")
-except ImportError:
-    JST = timezone(timedelta(hours=9))  # fallback
+except Exception:  # 2026-05-26: ImportError + ZoneInfoNotFoundError (tzdata欠如) 両対応
+    JST = timezone(timedelta(hours=9))  # fallback (JST固定)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 STATE_PATH = REPO_ROOT / "state" / "follow_rate_state.json"
