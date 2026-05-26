@@ -346,6 +346,31 @@ def check_post() -> dict:
                 info["reasons"].append(f"pool_low({pool_count}<700)")
     except Exception as e:
         info["pool_count_error"] = str(e)
+
+    # 6. 2026-05-26: post_queue (queued) 件数監視
+    # daily_task_reset 06:00 で generate_today_post_plan() が動かなかった場合
+    # post_queue に当日 queued が無く、Batch1 9:00 で 0件達成になる
+    # → 7:00 以降に queued=0 を検出したら problem 上げて auto recovery
+    info["queued_count"] = None
+    c = _sqlite_readonly(DB_LEGACY)
+    if c is not None:
+        try:
+            r = c.execute(
+                "SELECT COUNT(*) FROM post_queue WHERE status='queued'"
+            ).fetchone()
+            info["queued_count"] = int(r[0]) if r else 0
+        except Exception:
+            pass
+        c.close()
+    # 判定: 07:00 以降 〜 09:00 (Batch1 前) で queued=0 → CRITICAL
+    if info["queued_count"] == 0 and 7 <= now.hour < 9:
+        info["problem"] = True
+        info["reasons"].append("post_queue_empty_before_batch1")
+        info["auto_recover"] = "regen_post_plan"
+    elif info["queued_count"] is not None and info["queued_count"] < 5 and now.hour >= 7:
+        info["problem"] = True
+        info["reasons"].append(f"post_queue_low({info['queued_count']}<5)")
+
     return info
 
 
@@ -791,6 +816,38 @@ def main():
         rc2, _ = run(sys.executable, str(ROOT / "ops" / "vm_follow_launcher.py"),
                      "--force", "--limit", "100", timeout=180)
         print(f"launcher rc={rc2}")
+
+    # 2026-05-26: POST queue 空 auto recovery (--recover フラグなしでも常時有効)
+    # daily_task_reset 06:00 が失敗していた場合の救済策
+    # 07:00-09:00 で post_queue queued=0 → regen_post_plan を呼ぶ
+    if post_info.get("auto_recover") == "regen_post_plan":
+        print("AUTO-RECOVER post: post_queue empty → regen plan")
+        run_py = ROOT / "rakuten-room" / "bot" / "run.py"
+        if run_py.exists():
+            try:
+                r = subprocess.run(
+                    [sys.executable, str(run_py), "plan"],
+                    cwd=str(run_py.parent),
+                    capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                    timeout=180, creationflags=_NO_WINDOW
+                )
+                rc = r.returncode
+                out = (r.stdout or "")[-200:]
+                print(f"plan rc={rc} tail={out}")
+            except Exception as _pe:
+                rc = -1
+                print(f"plan exception: {_pe}")
+            # Slack alert
+            try:
+                slack = ROOT / "ops" / "notifications" / "slack_reporter.py"
+                msg = (
+                    f"<!channel> 【patrol_hourly AUTO-RECOVER】POST queue 空検出 "
+                    f"→ regen rc={rc} (06:00 daily_reset が失敗していた可能性)"
+                )
+                run(sys.executable, str(slack), msg, timeout=30)
+            except Exception as _se:
+                print(f"slack alert error: {_se}")
 
 
 if __name__ == "__main__":
