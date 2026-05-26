@@ -193,7 +193,10 @@ def harvest_seed_followers(bm, seed: str, max_per_seed: int = 200) -> list[str]:
     page = bm.page
     try:
         url_items = f"https://room.rakuten.co.jp/{seed}/items"
-        page.goto(url_items, wait_until="domcontentloaded", timeout=20000)
+        # 2026-05-26: goto timeout 20s → 10s に短縮 (dead seed の検知早期化・throughput 改善)
+        # 旧: timeout 1件 = 20s 浪費 → 全 seed の 30% timeout で 6min 中 30% が壊死時間
+        # 新: 10s → 同じ 6min で 1.5倍の seed を試行可能
+        page.goto(url_items, wait_until="domcontentloaded", timeout=10000)
         page.wait_for_timeout(2500)
 
         # フォロワー button click (modal が開く)
@@ -266,7 +269,7 @@ def follow_one(bm, username: str) -> tuple[str, str]:
         # 2026-05-11 CEO「5/8 1069 件達成時の状態に戻せ」: 旧 25s+retry → 15s no-retry
         # 5/8 commit c477b733 と同じ挙動. 失敗は即諦めで cycle 高速化.
         try:
-            page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
+            page.goto(profile_url, wait_until="domcontentloaded", timeout=10000)
         except Exception as e:
             if "crashed" in str(e).lower():
                 try: page.close()
@@ -275,7 +278,7 @@ def follow_one(bm, username: str) -> tuple[str, str]:
                 bm._page = page
                 page.set_default_timeout(config.ELEMENT_TIMEOUT)
                 page.set_default_navigation_timeout(config.PAGE_LOAD_TIMEOUT)
-                page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
+                page.goto(profile_url, wait_until="domcontentloaded", timeout=10000)
             else:
                 return ("failed", f"goto:{str(e)[:60]}")
         time.sleep(random.uniform(0.5, 1.0))
@@ -296,7 +299,7 @@ def follow_one(bm, username: str) -> tuple[str, str]:
         if "login.account.rakuten.com/session/upgrade" in page.url:
             up = bm.handle_session_upgrade()
             if up.get("handled"):
-                page.goto(profile_url, wait_until="domcontentloaded", timeout=20000)
+                page.goto(profile_url, wait_until="domcontentloaded", timeout=10000)
                 time.sleep(random.uniform(0.5, 1.0))
                 follow_btn = page.locator('button[aria-label="フォローする"], button[aria-label="フォロー"]').first
                 if follow_btn.count() > 0 and follow_btn.is_visible(timeout=2000):

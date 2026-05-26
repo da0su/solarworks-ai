@@ -32,14 +32,29 @@ except (IndexError, FileNotFoundError, ValueError):
 if HOST_BOT_DIR.exists():
     sys.path.insert(0, str(HOST_BOT_DIR))
 
-# room_XXXXXXXX 形式のユーザー ID にマッチ (英数字・アンダーバー・ドット)
-_UID_RE = _re.compile(r'^room_[0-9a-f]{8,}$|^room_[a-z0-9_.]{4,40}$')
+# 2026-05-26 fix: 楽天 ROOM のユーザー URL は 2 形式
+#   1) /room_XXXXXXXX/items (system-generated)
+#   2) /USERNAME/items (custom; ex: /sirochang/items /icco.com/items /hide.dice/items)
+# 旧版は (1) しか拾わず seen=7 で停止 → 14 名の custom username を取り逃していた
+_ROOM_ID_RE = _re.compile(r'^room_[0-9a-f]{8,}$|^room_[a-z0-9_.]{4,40}$')
+_CUSTOM_USERNAME_RE = _re.compile(r'^[a-zA-Z0-9_.\-]{3,40}$')
+# 除外パス (followers/items 自身や my/* 等)
+_RESERVED_SEGMENTS = {
+    "my", "items", "discover", "timeline", "u", "user", "users",
+    "rebates", "search", "static", "ranking", "trends", "footer",
+    "header", "help", "login", "logout", "signin", "signup",
+    "tag", "category", "categories", "feed", "topic", "topics",
+    "official", "campaign", "campaigns", "about", "contact",
+    "terms", "privacy", "ad", "ads", "api", "https:", "http:",
+}
 
 
 def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> int:
     """bm.page を使って /my/followers をスキャンし followback_queue に pending INSERT.
 
     Returns: 追加した pending 件数
+
+    2026-05-26 改善: room_/custom の両 URL 形式を捕獲. 自分自身 (my own user_id) は除外.
     """
     try:
         page.goto("https://room.rakuten.co.jp/my/followers",
@@ -49,6 +64,20 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         if "grp01.id.rakuten.co.jp" in page.url or "login" in page.url:
             log.log("[scan_followers] not logged in → skip")
             return 0
+
+        # 自分の user_id (URL から取得して除外する)
+        my_user_id: str | None = None
+        try:
+            # ヘッダーの自分への link 等から抽出
+            self_link = page.locator('a[href*="/items"]').first
+            if self_link.count() > 0:
+                href = self_link.get_attribute("href") or ""
+                # /room_XXX/items or /USERNAME/items
+                seg = href.lstrip("/").split("/", 1)[0]
+                if seg and seg not in _RESERVED_SEGMENTS:
+                    my_user_id = seg
+        except Exception:
+            pass
 
         # 既に処理済み (pending/completed) の user_id を取得
         cur = con.cursor()
@@ -68,6 +97,9 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
             already_following = set()
 
         skip_set = already_queued | already_following
+        if my_user_id:
+            skip_set.add(my_user_id)
+            log.log(f"[scan_followers] my_user_id={my_user_id} (self-exclude)")
 
         collected: list[dict] = []
         seen: set[str] = set()
@@ -75,19 +107,28 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         stuck = 0
 
         for scroll_i in range(60):
-            anchors = page.query_selector_all('a[href*="/room_"]')
+            # 2026-05-26: 全 anchor を見て /SEG/items パターンを抽出
+            anchors = page.query_selector_all('a[href*="/items"]')
             for a in anchors:
                 href = (a.get_attribute("href") or "").strip()
-                if "/room_" not in href:
+                if not href.startswith("/") or "/items" not in href:
                     continue
-                seg = href.split("/room_", 1)[1].split("/")[0].split("?")[0]
-                uid = "room_" + seg
-                if not _UID_RE.match(uid) or uid in seen:
+                # /SEG/items または /SEG/items?xxx
+                parts = href.lstrip("/").split("/")
+                if not parts:
                     continue
-                seen.add(uid)
-                if uid not in skip_set:
-                    uname = (a.inner_text() or "").strip()[:60] or uid
-                    collected.append({"user_id": uid, "username": uname})
+                seg = parts[0].split("?")[0]
+                if not seg or seg in _RESERVED_SEGMENTS:
+                    continue
+                # match either /room_XXX/ or /USERNAME/
+                if not (_ROOM_ID_RE.match(seg) or _CUSTOM_USERNAME_RE.match(seg)):
+                    continue
+                if seg in seen:
+                    continue
+                seen.add(seg)
+                if seg not in skip_set:
+                    uname = (a.inner_text() or "").strip()[:60] or seg
+                    collected.append({"user_id": seg, "username": uname})
             if len(collected) >= scan_limit:
                 break
             h = page.evaluate("document.body.scrollHeight")
