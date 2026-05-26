@@ -76,9 +76,72 @@ def auto_recover(action: str, context: dict) -> dict:
             result["rc"] = r.returncode
 
         elif action == "vm_http_restart":
-            # VM 内 http_server を再起動 (VBoxManage guestcontrol)
-            # credentials がない場合は VM reset で代替
-            result["note"] = "manual_restart_required"
+            # 2026-05-24: guestproperty trigger 経由で watcher に comment_edit pulse
+            # → runner が _ensure_http_server_running で自動再起動 (stdlib 版)
+            try:
+                trigger_value = json.dumps({
+                    "mode": "comment_edit",
+                    "payload": {},
+                    "issued_at": datetime.now().isoformat(timespec="seconds"),
+                    "trigger_id": f"http_restart_{int(time.time())}",
+                })
+                r = subprocess.run([
+                    r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+                    "guestproperty", "set", "RoomBot", "/RakutenBot/Trigger", trigger_value
+                ], capture_output=True, text=True, timeout=10,
+                    creationflags=NO_WIN, encoding="utf-8", errors="replace")
+                result["guestproperty_rc"] = r.returncode
+                result["note"] = "watcher pulse sent → http_server will auto-restart via runner"
+            except Exception as e:
+                result["error"] = str(e)
+                result["note"] = "guestproperty trigger fail → manual restart needed"
+
+            # 2026-05-26: trigger 送信後 60s 待って HTTP 復活 verify
+            # 戻らない場合 → vm_full_restart に escalate (watcher 死亡時の救済策)
+            import urllib.request as _urlreq
+            time.sleep(60)
+            try:
+                req = _urlreq.Request(
+                    "http://localhost:18765/healthz",
+                    headers={"Authorization": "Bearer rakuten-room-v6-secret"}
+                )
+                with _urlreq.urlopen(req, timeout=5) as r:
+                    if r.status == 200:
+                        result["verify_60s"] = "ok"
+                    else:
+                        result["verify_60s"] = f"http_{r.status}"
+            except Exception as _ve:
+                result["verify_60s"] = f"fail: {type(_ve).__name__}"
+                # Escalate to full VM restart
+                result["escalation"] = "vm_full_restart_triggered"
+                try:
+                    subprocess.run([
+                        r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+                        "controlvm", "RoomBot", "poweroff"
+                    ], capture_output=True, timeout=30, creationflags=NO_WIN)
+                    time.sleep(5)
+                    r2 = subprocess.run([
+                        r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+                        "startvm", "RoomBot", "--type", "headless"
+                    ], capture_output=True, timeout=60, creationflags=NO_WIN,
+                        encoding="utf-8", errors="replace")
+                    result["full_restart_rc"] = r2.returncode
+                    # 60s 後に再度 trigger 送って HTTP server 起動
+                    time.sleep(90)  # boot wait
+                    trigger_value2 = json.dumps({
+                        "mode": "comment_edit",
+                        "payload": {},
+                        "issued_at": datetime.now().isoformat(timespec="seconds"),
+                        "trigger_id": f"http_restart_after_full_{int(time.time())}",
+                    })
+                    subprocess.run([
+                        r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+                        "guestproperty", "set", "RoomBot", "/RakutenBot/Trigger", trigger_value2
+                    ], capture_output=True, timeout=10, creationflags=NO_WIN,
+                        encoding="utf-8", errors="replace")
+                    result["post_restart_trigger_sent"] = True
+                except Exception as _ee:
+                    result["escalation_error"] = str(_ee)
 
         elif action == "session_abort":
             mode = context.get("mode")
