@@ -817,27 +817,39 @@ def main():
                      "--force", "--limit", "100", timeout=180)
         print(f"launcher rc={rc2}")
 
-    # 2026-05-26: POST queue 空 auto recovery (--recover フラグなしでも常時有効)
-    # daily_task_reset 06:00 が失敗していた場合の救済策
-    # 07:00-09:00 で post_queue queued=0 → regen_post_plan を呼ぶ
-    if post_info.get("auto_recover") == "regen_post_plan":
-        print("AUTO-RECOVER post: post_queue empty → regen plan")
-        run_py = ROOT / "rakuten-room" / "bot" / "run.py"
-        if run_py.exists():
-            try:
-                r = subprocess.run(
-                    [sys.executable, str(run_py), "plan"],
-                    cwd=str(run_py.parent),
-                    capture_output=True, text=True,
-                    encoding="utf-8", errors="replace",
-                    timeout=180, creationflags=_NO_WINDOW
-                )
-                rc = r.returncode
-                out = (r.stdout or "")[-200:]
-                print(f"plan rc={rc} tail={out}")
-            except Exception as _pe:
-                rc = -1
-                print(f"plan exception: {_pe}")
+    # 2026-05-26: POST queue 空 auto recovery
+    # Codex REJECT 反映:
+    #   - --recover フラグでゲート (権限委譲一貫性)
+    #   - 1日1回 lock で重複実行防止 (15分間隔で 7-9時 7回走るのを防ぐ)
+    if post_info.get("auto_recover") == "regen_post_plan" and args.recover:
+        today = datetime.now().strftime("%Y-%m-%d")
+        regen_flag = ROOT / "state" / f"post_regen_{today}.done"
+        if regen_flag.exists():
+            print(f"AUTO-RECOVER post: skip (already regen today: {regen_flag.name})")
+        else:
+            print("AUTO-RECOVER post: post_queue empty → regen plan (1x/day)")
+            run_py = ROOT / "rakuten-room" / "bot" / "run.py"
+            rc = -1
+            if run_py.exists():
+                try:
+                    r = subprocess.run(
+                        [sys.executable, str(run_py), "plan"],
+                        cwd=str(run_py.parent),
+                        capture_output=True, text=True,
+                        encoding="utf-8", errors="replace",
+                        timeout=180, creationflags=_NO_WINDOW
+                    )
+                    rc = r.returncode
+                    out = (r.stdout or "")[-200:]
+                    print(f"plan rc={rc} tail={out}")
+                except Exception as _pe:
+                    print(f"plan exception: {_pe}")
+                # 成功/失敗いずれも flag ファイル作成 (1日1回 lock)
+                try:
+                    regen_flag.parent.mkdir(parents=True, exist_ok=True)
+                    regen_flag.write_text(f"rc={rc} ts={datetime.now().isoformat()}\n")
+                except Exception:
+                    pass
             # Slack alert
             try:
                 slack = ROOT / "ops" / "notifications" / "slack_reporter.py"
