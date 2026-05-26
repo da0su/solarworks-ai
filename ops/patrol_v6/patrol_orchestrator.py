@@ -96,14 +96,18 @@ def auto_recover(action: str, context: dict) -> dict:
                 result["error"] = str(e)
                 result["note"] = "guestproperty trigger fail → manual restart needed"
 
-            # 2026-05-26: trigger 送信後 30s 待って HTTP 復活 verify
-            # 戻らない場合 → vm_full_restart に escalate (watcher 死亡時の救済策)
-            # 副作用対策:
-            #   1) lock file で多重起動防止 (patrol_v6 が overlap した場合の race condition)
-            #   2) 直近 1h 以内に full_restart 実施済なら skip (loop 防止)
-            #   3) sleep 60+90 → 30+60 に短縮 (patrol_v6 ブロック時間 2.5分→1.5分)
+            # Codex 4bfe61a REJECT 反映 (2026-05-26):
+            #   - guestproperty rc 0 でなければ即 escalation 候補 (trigger 不達)
+            #   - HTTP verify: 200 以外も escalation 対象 (旧: 例外時のみ)
+            #   - ACPI shutdown を 30s 試行 → 失敗時のみ強制 poweroff (データ破損リスク軽減)
+            #   - full_restart 後にも HTTP verify (60s 後・post_verify 成功/失敗を記録)
             import urllib.request as _urlreq
+
+            # guestproperty rc が 0 でない (trigger 失敗) → 即 escalation 候補に
+            trigger_failed = result.get("guestproperty_rc", 0) != 0
             time.sleep(30)
+
+            verify_ok = False
             try:
                 req = _urlreq.Request(
                     "http://localhost:18765/healthz",
@@ -112,11 +116,14 @@ def auto_recover(action: str, context: dict) -> dict:
                 with _urlreq.urlopen(req, timeout=5) as r:
                     if r.status == 200:
                         result["verify_30s"] = "ok"
+                        verify_ok = True
                     else:
                         result["verify_30s"] = f"http_{r.status}"
             except Exception as _ve:
                 result["verify_30s"] = f"fail: {type(_ve).__name__}"
 
+            # 200 以外 or trigger 失敗 → escalation
+            if not verify_ok or trigger_failed:
                 # ---- escalation 多重防止 + retry cooldown ----
                 lock_path = REPO_ROOT / "state" / "vm_full_restart.lock"
                 last_path = REPO_ROOT / "state" / "vm_full_restart_last.txt"
@@ -141,33 +148,73 @@ def auto_recover(action: str, context: dict) -> dict:
                 except Exception as _le:
                     result["lock_error"] = str(_le)
 
-                # Escalate to full VM restart
+                # Escalate to full VM restart (ACPI 優先 → 失敗時のみ強制 poweroff)
                 result["escalation"] = "vm_full_restart_triggered"
                 try:
-                    subprocess.run([
+                    # Step 1: ACPI shutdown を試す (graceful・ファイルシステム破損リスク軽減)
+                    r_acpi = subprocess.run([
                         r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
-                        "controlvm", "RoomBot", "poweroff"
-                    ], capture_output=True, timeout=30, creationflags=NO_WIN)
-                    time.sleep(5)
+                        "controlvm", "RoomBot", "acpipowerbutton"
+                    ], capture_output=True, timeout=15, creationflags=NO_WIN,
+                        encoding="utf-8", errors="replace")
+                    result["acpi_rc"] = r_acpi.returncode
+                    # 最大 30s 待って VMState=poweroff になるか確認
+                    acpi_stopped = False
+                    for _ in range(15):
+                        time.sleep(2)
+                        r_state = subprocess.run([
+                            r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+                            "showvminfo", "RoomBot", "--machinereadable"
+                        ], capture_output=True, timeout=8, creationflags=NO_WIN,
+                            encoding="utf-8", errors="replace")
+                        if "VMState=\"poweroff\"" in (r_state.stdout or ""):
+                            acpi_stopped = True
+                            break
+                    result["acpi_graceful"] = acpi_stopped
+
+                    # Step 2: ACPI で止まらない場合のみ強制 poweroff
+                    if not acpi_stopped:
+                        r_kill = subprocess.run([
+                            r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
+                            "controlvm", "RoomBot", "poweroff"
+                        ], capture_output=True, timeout=30, creationflags=NO_WIN,
+                            encoding="utf-8", errors="replace")
+                        result["force_poweroff_rc"] = r_kill.returncode
+                        time.sleep(5)
+
+                    # Step 3: 起動
                     r2 = subprocess.run([
                         r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
                         "startvm", "RoomBot", "--type", "headless"
                     ], capture_output=True, timeout=60, creationflags=NO_WIN,
                         encoding="utf-8", errors="replace")
                     result["full_restart_rc"] = r2.returncode
-                    time.sleep(60)  # boot wait (90s → 60s に短縮)
+
+                    # Step 4: boot 待機 + HTTP server trigger
+                    time.sleep(60)
                     trigger_value2 = json.dumps({
                         "mode": "comment_edit",
                         "payload": {},
                         "issued_at": datetime.now().isoformat(timespec="seconds"),
                         "trigger_id": f"http_restart_after_full_{int(time.time())}",
                     })
-                    subprocess.run([
+                    r3 = subprocess.run([
                         r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe",
                         "guestproperty", "set", "RoomBot", "/RakutenBot/Trigger", trigger_value2
                     ], capture_output=True, timeout=10, creationflags=NO_WIN,
                         encoding="utf-8", errors="replace")
-                    result["post_restart_trigger_sent"] = True
+                    result["post_trigger_rc"] = r3.returncode
+
+                    # Step 5: 90s 待って再 verify (success/failure を明示記録)
+                    time.sleep(90)
+                    try:
+                        with _urlreq.urlopen(req, timeout=5) as r_post:
+                            result["post_restart_verify"] = (
+                                "ok" if r_post.status == 200 else f"http_{r_post.status}"
+                            )
+                    except Exception as _pve:
+                        result["post_restart_verify"] = f"fail: {type(_pve).__name__}"
+
                     last_path.write_text(str(time.time()))  # cooldown timestamp 記録
                 except Exception as _ee:
                     result["escalation_error"] = str(_ee)
