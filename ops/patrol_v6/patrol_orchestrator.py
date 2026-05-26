@@ -96,10 +96,14 @@ def auto_recover(action: str, context: dict) -> dict:
                 result["error"] = str(e)
                 result["note"] = "guestproperty trigger fail → manual restart needed"
 
-            # 2026-05-26: trigger 送信後 60s 待って HTTP 復活 verify
+            # 2026-05-26: trigger 送信後 30s 待って HTTP 復活 verify
             # 戻らない場合 → vm_full_restart に escalate (watcher 死亡時の救済策)
+            # 副作用対策:
+            #   1) lock file で多重起動防止 (patrol_v6 が overlap した場合の race condition)
+            #   2) 直近 1h 以内に full_restart 実施済なら skip (loop 防止)
+            #   3) sleep 60+90 → 30+60 に短縮 (patrol_v6 ブロック時間 2.5分→1.5分)
             import urllib.request as _urlreq
-            time.sleep(60)
+            time.sleep(30)
             try:
                 req = _urlreq.Request(
                     "http://localhost:18765/healthz",
@@ -107,11 +111,36 @@ def auto_recover(action: str, context: dict) -> dict:
                 )
                 with _urlreq.urlopen(req, timeout=5) as r:
                     if r.status == 200:
-                        result["verify_60s"] = "ok"
+                        result["verify_30s"] = "ok"
                     else:
-                        result["verify_60s"] = f"http_{r.status}"
+                        result["verify_30s"] = f"http_{r.status}"
             except Exception as _ve:
-                result["verify_60s"] = f"fail: {type(_ve).__name__}"
+                result["verify_30s"] = f"fail: {type(_ve).__name__}"
+
+                # ---- escalation 多重防止 + retry cooldown ----
+                lock_path = REPO_ROOT / "state" / "vm_full_restart.lock"
+                last_path = REPO_ROOT / "state" / "vm_full_restart_last.txt"
+                # 1h 以内に再起動済なら skip (root cause 別途調査必要・連続再起動で被害拡大防止)
+                if last_path.exists():
+                    try:
+                        last_ts = float(last_path.read_text().strip())
+                        if time.time() - last_ts < 3600:
+                            result["escalation"] = "skipped_cooldown_1h"
+                            result["last_restart_age_sec"] = int(time.time() - last_ts)
+                            return result
+                    except Exception:
+                        pass
+                # lock file (atomic create) で多重実行防止
+                try:
+                    fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                    os.write(fd, str(time.time()).encode())
+                    os.close(fd)
+                except FileExistsError:
+                    result["escalation"] = "skipped_lock_held"
+                    return result
+                except Exception as _le:
+                    result["lock_error"] = str(_le)
+
                 # Escalate to full VM restart
                 result["escalation"] = "vm_full_restart_triggered"
                 try:
@@ -126,8 +155,7 @@ def auto_recover(action: str, context: dict) -> dict:
                     ], capture_output=True, timeout=60, creationflags=NO_WIN,
                         encoding="utf-8", errors="replace")
                     result["full_restart_rc"] = r2.returncode
-                    # 60s 後に再度 trigger 送って HTTP server 起動
-                    time.sleep(90)  # boot wait
+                    time.sleep(60)  # boot wait (90s → 60s に短縮)
                     trigger_value2 = json.dumps({
                         "mode": "comment_edit",
                         "payload": {},
@@ -140,8 +168,14 @@ def auto_recover(action: str, context: dict) -> dict:
                     ], capture_output=True, timeout=10, creationflags=NO_WIN,
                         encoding="utf-8", errors="replace")
                     result["post_restart_trigger_sent"] = True
+                    last_path.write_text(str(time.time()))  # cooldown timestamp 記録
                 except Exception as _ee:
                     result["escalation_error"] = str(_ee)
+                finally:
+                    try:
+                        lock_path.unlink()
+                    except Exception:
+                        pass
 
         elif action == "session_abort":
             mode = context.get("mode")
