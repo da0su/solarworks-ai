@@ -14,8 +14,14 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .shared_logic import HeartbeatPusher, RateLimitDetector, SessionLogger, BASE_DIR
+from .shared_logic import HeartbeatPusher, RateLimitDetector, SessionLogger, BASE_DIR, emergency_disk_cleanup_once
 from .browser_manager_v6 import BrowserManagerV6
+
+# 2026-05-26: VM disk full → Chrome EPIPE 防止. import 時に1回 cleanup.
+try:
+    emergency_disk_cleanup_once()
+except Exception as _e:
+    print(f"[disk_cleanup_follow] err: {_e}")
 
 
 # 既存 follow_host_runner.py のロジックを VM v6 に移植

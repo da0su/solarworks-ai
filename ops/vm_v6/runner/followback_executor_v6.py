@@ -13,8 +13,14 @@ import sys
 from datetime import datetime as _dt
 from pathlib import Path
 
-from .shared_logic import HeartbeatPusher, SessionLogger
+from .shared_logic import HeartbeatPusher, SessionLogger, emergency_disk_cleanup_once
 from .browser_manager_v6 import BrowserManagerV6
+
+# 2026-05-26: VM disk full → Chrome EPIPE 防止. import 時に1回 cleanup.
+try:
+    emergency_disk_cleanup_once()
+except Exception as _e:
+    print(f"[disk_cleanup_fb] err: {_e}")
 
 # 2026-05-24: VM では UNC path 経由 (parents[3] 無)
 try:

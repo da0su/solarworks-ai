@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,96 @@ else:
 DATA_DIR = BASE_DIR / "data" if is_vm_env() else (Path(__file__).resolve().parents[2] / "rakuten-room" / "bot" / "data")
 LOG_DIR = BASE_DIR / "logs" if is_vm_env() else (Path(__file__).resolve().parents[2] / "ops" / "vm_v6" / "logs")
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# Emergency Disk Cleanup (2026-05-26 added)
+# VM disk fills up → Chrome subprocess EPIPE → executor failure.
+# Each v6 executor calls this at startup to keep free space > 500MB.
+# ============================================================
+
+def emergency_disk_cleanup_once(force_below_mb: int = 500) -> int:
+    """VM disk が free_mb 以下なら緊急 cleanup. 24h で 1 回・500MB 未満時は強制.
+
+    Returns: freed bytes (skip 時 0)
+    """
+    if not is_vm_env():
+        return 0  # VM 以外では何もしない
+    flag = Path(r"C:\Users\cyber\AppData\Local\Temp\_emer_cleanup_done")
+    try:
+        free_mb = shutil.disk_usage("C:\\").free / 1024 / 1024
+    except Exception:
+        free_mb = 9999
+    try:
+        if flag.exists() and free_mb > force_below_mb:
+            return 0  # 500MB 以上 free あれば skip
+        if flag.exists() and (time.time() - flag.stat().st_mtime) < 3600:
+            if free_mb > 200:
+                return 0  # 1h 以内かつ 200MB 以上ならskip
+    except Exception:
+        return 0
+    user_root = Path(os.environ.get("USERPROFILE", r"C:\Users\cyber"))
+    targets = [
+        Path(os.environ.get("TEMP", r"C:\Windows\Temp")),
+        user_root / "AppData" / "Local" / "Temp",
+        user_root / "AppData" / "Local" / "pip" / "cache",
+        user_root / "AppData" / "Local" / "Microsoft" / "Windows" / "INetCache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_post" / "Default" / "Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_post" / "Default" / "Code Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_like" / "Default" / "Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_like" / "Default" / "Code Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_follow" / "Default" / "Cache",
+        user_root / "Desktop" / "rakuten_room_bot" / "data" / "chrome_profile_followback" / "Default" / "Cache",
+        user_root / "AppData" / "Local" / "Microsoft" / "Edge" / "User Data" / "Default" / "Cache",
+    ]
+    cleaned = 0
+    for d in targets:
+        if not d.exists():
+            continue
+        try:
+            for item in d.iterdir():
+                try:
+                    if item.is_dir():
+                        for f in item.rglob("*"):
+                            if f.is_file():
+                                try:
+                                    cleaned += f.stat().st_size
+                                except Exception:
+                                    pass
+                        shutil.rmtree(item, ignore_errors=True)
+                    elif item.is_file():
+                        try:
+                            cleaned += item.stat().st_size
+                        except Exception:
+                            pass
+                        try:
+                            item.unlink()
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    # shared folder ce_*.log の古いもの削除 (旧 comment_edit logs)
+    try:
+        share = Path(r"\\vboxsvr\vm_data")
+        if share.exists():
+            ce_logs = sorted(share.glob("ce_*.log"), key=lambda p: p.stat().st_mtime)
+            for old in ce_logs[:-3]:
+                try:
+                    cleaned += old.stat().st_size
+                    old.unlink()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    try:
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.touch()
+    except Exception:
+        pass
+    print(f"[disk_cleanup] freed ~{cleaned/1024/1024:.1f} MB (was free={free_mb:.0f}MB)")
+    return cleaned
 
 
 # ============================================================

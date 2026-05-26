@@ -6,8 +6,14 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .shared_logic import HeartbeatPusher, SessionLogger
+from .shared_logic import HeartbeatPusher, SessionLogger, emergency_disk_cleanup_once
 from .browser_manager_v6 import BrowserManagerV6
+
+# 2026-05-26: VM disk full → Chrome EPIPE 防止. import 時に1回 cleanup.
+try:
+    emergency_disk_cleanup_once()
+except Exception as _e:
+    print(f"[disk_cleanup_like] err: {_e}")
 
 # 2026-05-24: VM では runner が \\vboxsvr\vm_v6\runner にあり parents[3] が無い
 # rakuten_room_runner.py で sys.path に vm_bot を追加済なので、ここで追加不要
