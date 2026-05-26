@@ -149,6 +149,9 @@ def auto_recover(action: str, context: dict) -> dict:
                     result["lock_error"] = str(_le)
 
                 # Escalate to full VM restart (ACPI 優先 → 失敗時のみ強制 poweroff)
+                # Codex d0d6d94 REJECT 反映: cooldown timestamp は attempt 開始時に書く
+                #   → 失敗しても 1h は再 attempt せず root cause 調査時間を確保
+                last_path.write_text(str(time.time()))
                 result["escalation"] = "vm_full_restart_triggered"
                 try:
                     # Step 1: ACPI shutdown を試す (graceful・ファイルシステム破損リスク軽減)
@@ -214,8 +217,7 @@ def auto_recover(action: str, context: dict) -> dict:
                             )
                     except Exception as _pve:
                         result["post_restart_verify"] = f"fail: {type(_pve).__name__}"
-
-                    last_path.write_text(str(time.time()))  # cooldown timestamp 記録
+                    # 注: cooldown timestamp は attempt 開始時に既に記録済 (失敗時の抑止確保)
                 except Exception as _ee:
                     result["escalation_error"] = str(_ee)
                 finally:
