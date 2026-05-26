@@ -79,11 +79,13 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         except Exception:
             pass
 
-        # 既に処理済み (pending/completed) の user_id を取得
+        # 2026-05-26: 'failed' も含めて取得 (再 INSERT 防止)
+        # KAPIBARAN 既フォロワーは既に "フォロー中" 状態 → click 失敗 → status='failed'
+        # これを除外しないと 30分後 scan で同じユーザーを 14名 重複 INSERT してしまう
         cur = con.cursor()
         cur.execute(
             "SELECT DISTINCT follower_user_id FROM followback_queue "
-            "WHERE status IN ('pending', 'completed')"
+            "WHERE status IN ('pending', 'completed', 'failed', 'in_progress')"
         )
         already_queued: set[str] = {r[0] for r in cur.fetchall() if r[0]}
 
@@ -252,6 +254,7 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         # ── followback 実行 ──
         hb.write(phase="followback_loop")
         success_ids = []
+        already_following_ids = []  # 既フォロー済として completed 扱い (2026-05-26)
         fail_ids = {}
         for qid, user_id, username in rows:
             if not user_id:
@@ -260,24 +263,39 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                 url = f"https://room.rakuten.co.jp/{user_id}/items"
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 page.wait_for_timeout(2500)
-                # follow ボタン (React)
+                # 2026-05-26: 「フォロー中」を先に検出 → 既フォロー済なら completed (no-op)
+                # AngularJS 旧 ROOM では a[ng-if*="following"] / button 両方をカバー
+                following_already = (
+                    page.locator(
+                        'button[aria-label="フォロー中"], button:has-text("フォロー中"), '
+                        'a:has-text("フォロー中"), [class*="following"]'
+                    ).count() > 0
+                )
+                if following_already:
+                    already_following_ids.append(qid)
+                    log.log(f"ALREADY [{len(already_following_ids)}] {user_id} (フォロー中)")
+                    continue
+                # follow ボタン (React + AngularJS 両対応)
                 btn = page.locator(
-                    'button[aria-label="フォローする"], button:has-text("フォローする")'
+                    'button[aria-label="フォローする"], button:has-text("フォローする"), '
+                    'a:has-text("フォローする"), a.follow-button, button.follow-button'
                 ).first
                 if btn.count() == 0:
-                    # 既に follow 済か account 削除
                     fail_ids[qid] = "no_follow_button"
+                    log.log(f"FAIL {user_id}: no_follow_button")
                     continue
                 try:
                     btn.click(timeout=5000)
                 except Exception as e:
                     fail_ids[qid] = f"click_err:{type(e).__name__}"
+                    log.log(f"FAIL {user_id}: click_err {type(e).__name__}")
                     continue
                 page.wait_for_timeout(2000)
                 # verify
                 followed = (
                     page.locator(
-                        'button[aria-label="フォロー中"], button:has-text("フォロー中")'
+                        'button[aria-label="フォロー中"], button:has-text("フォロー中"), '
+                        'a:has-text("フォロー中"), [class*="following"]'
                     ).count() > 0
                 )
                 if followed:
@@ -285,8 +303,10 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                     log.log(f"OK [{len(success_ids)}/{limit}] {user_id}")
                 else:
                     fail_ids[qid] = "verify_failed"
+                    log.log(f"FAIL {user_id}: verify_failed")
             except Exception as e:
                 fail_ids[qid] = f"exception:{type(e).__name__}"
+                log.log(f"FAIL {user_id}: exception {type(e).__name__}: {str(e)[:80]}")
 
         # ── DB update ──
         now_iso = _dt.now().isoformat()
@@ -295,6 +315,15 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                 "UPDATE followback_queue SET status='completed', followed_at=? WHERE id=?",
                 (now_iso, sid)
             )
+        # 2026-05-26: 既フォロー済 (already_following) も completed 扱い → 再 INSERT 防止
+        for aid in already_following_ids:
+            try:
+                con.execute(
+                    "UPDATE followback_queue SET status='completed', followed_at=? WHERE id=?",
+                    (now_iso, aid)
+                )
+            except Exception:
+                pass
         for fid in fail_ids:
             try:
                 con.execute(
@@ -305,9 +334,13 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         con.commit()
         con.close()
         result["success"] = len(success_ids)
+        result["skip"] = len(already_following_ids)  # 既フォロー済を skip としてカウント
         result["fail"] = len(fail_ids)
         result["stop_reason"] = "completed"
-        log.log(f"FB summary: success={len(success_ids)} fail={len(fail_ids)}")
+        log.log(
+            f"FB summary: success={len(success_ids)} already={len(already_following_ids)} "
+            f"fail={len(fail_ids)} fail_reasons={list(set(fail_ids.values()))}"
+        )
 
     except Exception as e:
         import traceback
