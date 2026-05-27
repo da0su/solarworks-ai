@@ -194,9 +194,9 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
             if not user_id:
                 try:
                     user_id = btn.evaluate("""el => {
-                        let n = el;
-                        // 楽天 ROOM の user_id 仕様: room_[a-f0-9]{8,40} or [A-Za-z0-9_.-]{3,40}
-                        // pattern check で誤 ID を排除 (Codex REJECT 反映)
+                        // 楽天 ROOM の user_id: room_[a-f0-9]{8,40} or [A-Za-z0-9_.-]{3,40}
+                        // span.follow と <a href> は別 subtree のため
+                        // 親を辿りつつ各 ancestor の subtree 全 <a> を検査
                         const ROOM_ID = /^room_[a-f0-9]{8,40}$/i;
                         const CUSTOM  = /^[A-Za-z0-9_.\\-]{3,40}$/;
                         const reserved = new Set([
@@ -204,30 +204,49 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                             'register','login','categories','settings','campaigns',
                             'about','help','users','followers','following','collections',
                             'terms','privacy','feature','collectItemRank','likeItemRank',
-                            'tag','c','m'
+                            'tag','c','m','room'
                         ]);
                         const isValidUid = (s) => {
                             if (!s || reserved.has(s)) return false;
                             return ROOM_ID.test(s) || CUSTOM.test(s);
                         };
-                        while (n) {
+                        const extractFromHref = (href) => {
+                            if (!href) return '';
+                            let path = href;
+                            if (path.startsWith('http')) {
+                                const m0 = path.match(/^https?:\\/\\/room\\.rakuten\\.co\\.jp(\\/.*)$/);
+                                if (!m0) return '';
+                                path = m0[1];
+                            }
+                            if (!path.startsWith('/')) return '';
+                            // /SEG/items 形式 (followers ページのカード) を優先
+                            const m1 = path.match(/^\\/([^\\/?#]+)\\/(items|followers|following)/);
+                            if (m1 && isValidUid(m1[1])) return m1[1];
+                            // それ以外 /SEG 形式
+                            const m2 = path.match(/^\\/([^\\/?#]+)/);
+                            if (m2 && isValidUid(m2[1])) return m2[1];
+                            return '';
+                        };
+                        let n = el;
+                        let depth = 0;
+                        while (n && depth < 8) {
+                            // 自身の data-user-id チェック
                             if (n.getAttribute) {
                                 const d = n.getAttribute('data-user-id');
                                 if (isValidUid(d)) return d;
+                                const u = n.getAttribute('data-userid') || n.getAttribute('data-user');
+                                if (isValidUid(u)) return u;
                             }
-                            if (n.tagName === 'A' && n.getAttribute) {
-                                const href = n.getAttribute('href') || '';
-                                // 相対 / 絶対 URL 両対応で path segment 抽出
-                                let path = href;
-                                if (path.startsWith('http')) {
-                                    const m0 = path.match(/^https?:\\/\\/room\\.rakuten\\.co\\.jp(\\/.*)$/);
-                                    if (m0) path = m0[1]; else { n = n.parentElement; continue; }
+                            // 現 ancestor の subtree 全 <a> を検査
+                            if (n.querySelectorAll) {
+                                const links = n.querySelectorAll('a[href]');
+                                for (const a of links) {
+                                    const r = extractFromHref(a.getAttribute('href'));
+                                    if (r) return r;
                                 }
-                                if (!path.startsWith('/')) { n = n.parentElement; continue; }
-                                const m = path.match(/^\\/([^\\/?#]+)/);
-                                if (m && isValidUid(m[1])) return m[1];
                             }
                             n = n.parentElement;
+                            depth++;
                         }
                         return '';
                     }""") or ""
