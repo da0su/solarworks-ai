@@ -191,20 +191,32 @@ class LikeExecutor:
         logger.info(f"フィードページ表示: {page.url}")
         bm.take_screenshot("like_feed_start")
 
-        # AngularJSのレンダリング待機
-        self._wait_for_angular(page)
+        # AngularJSのレンダリング待機 (失敗してもフィード継続)
+        try:
+            self._wait_for_angular(page)
+        except Exception as _wae:
+            logger.warning(f"angular wait failed (continuing): {str(_wae)[:80]}")
 
         # スクロールしながらいいねボタンを探す
         max_scroll_attempts = 15 if extra_scroll else 8
         scroll_count = 0
 
+        # 2026-05-27 修正: page closed / context closed エラーで全 abort せず
+        # このフィードだけ skip して次フィードに進む (11 feed の連続巡回耐性向上)
         while self.liked_count < self.limit and scroll_count < max_scroll_attempts:
             # 連続失敗チェック
             if self.consecutive_failures >= config.LIKE_MAX_CONSECUTIVE_FAILURES:
                 return f"{config.LIKE_MAX_CONSECUTIVE_FAILURES}件連続失敗で自動停止"
 
             # いいねボタンを探す
-            like_result = self._find_and_click_likes(page)
+            try:
+                like_result = self._find_and_click_likes(page)
+            except Exception as _fce:
+                em = str(_fce)
+                if "closed" in em.lower() or "Target page" in em:
+                    logger.warning(f"page closed during find_likes (skip feed): {em[:80]}")
+                    return None  # このフィードだけ skip
+                raise
 
             if like_result == "no_buttons":
                 # ボタンが見つからない → スクロール
@@ -213,9 +225,16 @@ class LikeExecutor:
                 # エラー
                 pass
 
-            # ページをスクロール
+            # ページをスクロール (page closed エラー → feed skip)
             scroll_count += 1
-            page.evaluate("window.scrollBy(0, 600)")
+            try:
+                page.evaluate("window.scrollBy(0, 600)")
+            except Exception as _se:
+                em = str(_se)
+                if "closed" in em.lower() or "Target page" in em:
+                    logger.warning(f"page closed during scroll (skip feed): {em[:80]}")
+                    return None  # このフィードだけ skip・次へ
+                raise
             self._human_delay(1.5, 3.0)
 
             # たまに長めのスクロール待機
