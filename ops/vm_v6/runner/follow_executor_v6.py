@@ -188,7 +188,30 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
         # 1個目をクリック
         try:
             btn = btns[0]
+            # 2026-05-27 重大 user_id 抽出 fix: span 自体に data-user-id が無い場合
+            # 親要素を辿って取得 (data-user-id / href の /room_X/ / /USERNAME/)
             user_id = btn.get_attribute("data-user-id") or ""
+            if not user_id:
+                try:
+                    user_id = btn.evaluate("""el => {
+                        let n = el;
+                        const reserved = new Set(['items','my','discover','search','timeline','ranking','register','login','categories','settings','campaigns','about','help']);
+                        while (n) {
+                            if (n.getAttribute) {
+                                const d = n.getAttribute('data-user-id');
+                                if (d) return d;
+                            }
+                            if (n.tagName === 'A' && n.getAttribute) {
+                                const href = n.getAttribute('href') || '';
+                                const m = href.match(/^\\/([^\\/?#]+)/);
+                                if (m && !reserved.has(m[1])) return m[1];
+                            }
+                            n = n.parentElement;
+                        }
+                        return '';
+                    }""") or ""
+                except Exception:
+                    user_id = ""
             if user_id and user_id in history:
                 # スキップして次へ
                 continue
