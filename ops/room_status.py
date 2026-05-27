@@ -108,7 +108,22 @@ def build_status() -> dict:
         }
         # 機能別の代表 KPI を抽出
         if fn == "follow":
-            f_summary["today_success"] = (d.get("last_entry", {}) or {}).get("success")
+            # 2026-05-27 修正: follow_runtime_state.json の last_entry は patrol_v6
+            # の観測値で host-side の実フォローと乖離する (本日 follow_history.json
+            # は 156 件 real follow なのに last_entry.success=0 と矛盾)。
+            # → 真値は follow_history.json (count_real_follows_on) を読む。
+            try:
+                import sys as _sys
+                _sys.path.insert(0, str(REPO))
+                from shared.follow_history_reader import count_real_follows_on
+                from datetime import datetime as _dt2
+                _today_str = _dt2.now().strftime("%Y-%m-%d")
+                f_summary["today_success"] = count_real_follows_on(_today_str)
+                f_summary["today_success_source"] = "follow_history.json (truth)"
+            except Exception:
+                # フォールバック (旧 patrol 観測値)
+                f_summary["today_success"] = (d.get("last_entry", {}) or {}).get("success")
+                f_summary["today_success_source"] = "patrol_v6 observation (fallback)"
             f_summary["last_action_iso"] = (d.get("last_entry", {}) or {}).get("ts")
             f_summary["last_12h"] = d.get("last_12h")
             f_summary["vm_running"] = d.get("vm_running")
