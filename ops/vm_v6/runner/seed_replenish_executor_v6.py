@@ -218,7 +218,7 @@ def run_seed_replenish(limit: int = 1500, hb: HeartbeatPusher = None,
             if len(all_seeds) >= limit:
                 log.log(f"[target] {limit} reached")
                 break
-            hb.write(phase=f"harvest_{i}", current=i, total=len(walk_seeds))
+            hb.write(phase=f"harvest_{i}_of_{len(walk_seeds)}")
             names = _harvest_followers(page, seed, max_per_seed=100,
                                        log=log, metrics=metrics)
             fresh = [n for n in names if n and n not in skip_set]
@@ -298,8 +298,8 @@ def run_seed_replenish(limit: int = 1500, hb: HeartbeatPusher = None,
             bm.stop()
         except Exception:
             pass
-        hb.write(phase="shutdown", new_seeds=result["new_seeds"],
-                 final_total=result["final_total"], force=True)
+        hb.write(phase="shutdown", force=True)
+        log.log(f"shutdown: new_seeds={result['new_seeds']} final_total={result['final_total']}")
         log.log(f"=== SEED REPLENISH executor v6 end: {result} ===")
 
     return result
