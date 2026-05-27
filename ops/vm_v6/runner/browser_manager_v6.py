@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -147,22 +148,51 @@ class BrowserManagerV6:
             print(f"[bm_v6] taskkill chrome.exe error (ignored): {e}")
 
     def start(self) -> Page:
-        """Chrome 起動."""
-        self._kill_orphan_chrome()  # 2026-05-27: zombie chrome 一掃
+        """Chrome 起動. 2026-05-27: Playwright EPIPE 対策で 1 回 retry."""
+        self._kill_orphan_chrome()
         self._cleanup_locks()
         self.profile.mkdir(parents=True, exist_ok=True)
 
-        self._pw = sync_playwright().start()
-        self._ctx = self._pw.chromium.launch_persistent_context(
-            user_data_dir=str(self.profile),
-            executable_path=CHROME_EXEC,
-            headless=self.headless,
-            args=PLAYWRIGHT_ARGS,
-            viewport={"width": 1280, "height": 800},
-            locale="ja-JP",
-            timezone_id="Asia/Tokyo",
-            ignore_default_args=["--enable-automation"],
-        )
+        # 2026-05-27 FB 19:20 EPIPE 対策: Playwright init 失敗時 1 回 retry
+        # 観測: PipeTransport.send / new PlaywrightDispatcher で EPIPE
+        last_err = None
+        for attempt in range(2):
+            try:
+                self._pw = sync_playwright().start()
+                self._ctx = self._pw.chromium.launch_persistent_context(
+                    user_data_dir=str(self.profile),
+                    executable_path=CHROME_EXEC,
+                    headless=self.headless,
+                    args=PLAYWRIGHT_ARGS,
+                    viewport={"width": 1280, "height": 800},
+                    locale="ja-JP",
+                    timezone_id="Asia/Tokyo",
+                    ignore_default_args=["--enable-automation"],
+                )
+                break
+            except Exception as _pe:
+                last_err = _pe
+                em = str(_pe)
+                print(f"[bm_v6] playwright start fail (attempt {attempt+1}/2): {em[:200]}")
+                # cleanup partial state before retry
+                try:
+                    if self._pw is not None:
+                        self._pw.stop()
+                except Exception:
+                    pass
+                self._pw = None
+                self._ctx = None
+                if attempt == 0:
+                    # zombie cleanup + 2s wait before retry
+                    import time as _t2
+                    _t2.sleep(2)
+                    try:
+                        subprocess.run(["taskkill", "/F", "/IM", "node.exe"],
+                                       capture_output=True, text=True, timeout=10)
+                    except Exception:
+                        pass
+        if self._ctx is None:
+            raise RuntimeError(f"playwright start failed twice: {last_err}")
 
         # ダイアログ自動許可 (楽天の beforeunload 対策)
         self._ctx.on("page", lambda p: p.on("dialog", lambda d: d.accept()))
