@@ -25,8 +25,10 @@ TASKS = [
     # FOLLOWBACK
     "RoomBot_FOLLOWBACK_Hourly",
     "RoomBot_FB_SourceFeed_4h",
-    # FOLLOW (host runner) は 2026-04-30 CEO指示で永久停止 → リセット対象外
-    # "FollowHostRunner_15min",  # VM専用化のため除外
+    # FOLLOW (2026-05-27 cutover: orchestrator_run_vm.bat follow 経由で VM 完結化)
+    "RoomBotFollow_Hourly",
+    # 旧 HOST follow runner は 2026-04-30 CEO指示で永久停止 → リセット対象外
+    # "FollowHostRunner_15min",  # 旧 host 用 (VM 完結後不要)
 ]
 
 
