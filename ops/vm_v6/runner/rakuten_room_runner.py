@@ -123,7 +123,8 @@ def main():
     parser = argparse.ArgumentParser(description="楽天ROOM VM v6 unified runner")
     parser.add_argument("--mode", required=True,
                         choices=["post", "like", "follow", "followback",
-                                 "comment_edit", "bootstrap", "http_server"])
+                                 "comment_edit", "bootstrap", "http_server",
+                                 "seed_replenish"])
     parser.add_argument("--limit", type=int, default=100)
     parser.add_argument("--batch", type=int, default=1, help="POST batch index")
     parser.add_argument("--force", action="store_true", help="force (FOLLOW dead_zone bypass)")
@@ -136,7 +137,8 @@ def main():
         if override:
             real_mode = override.get("mode")
             if real_mode and real_mode != "comment_edit" and real_mode in (
-                "post", "like", "follow", "followback", "bootstrap", "http_server"
+                "post", "like", "follow", "followback", "bootstrap", "http_server",
+                "seed_replenish"
             ):
                 print(f"[dispatch] GuestProperty override: {args.mode} → {real_mode}")
                 args.mode = real_mode
@@ -231,6 +233,13 @@ def main():
             except ImportError:
                 from .comment_edit_executor_v6 import run_comment_edit
             result = run_comment_edit(hb=hb, log=log)
+        elif args.mode == "seed_replenish":
+            # 2026-05-27 CEO「HOST Chrome NG・VM 内で完結」対応
+            try:
+                from ops.vm_v6.runner.seed_replenish_executor_v6 import run_seed_replenish
+            except ImportError:
+                from .seed_replenish_executor_v6 import run_seed_replenish
+            result = run_seed_replenish(limit=args.limit, hb=hb, log=log)
         else:
             log.log(f"[ERROR] unknown mode: {args.mode}")
             return 1
