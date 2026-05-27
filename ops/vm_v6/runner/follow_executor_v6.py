@@ -194,9 +194,8 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
             if not user_id:
                 try:
                     user_id = btn.evaluate("""el => {
-                        // 楽天 ROOM の user_id: room_[a-f0-9]{8,40} or [A-Za-z0-9_.-]{3,40}
-                        // span.follow と <a href> は別 subtree のため
-                        // 親を辿りつつ各 ancestor の subtree 全 <a> を検査
+                        // Codex REJECT 反映: ancestor subtree 全走査は別カード誤採用
+                        // → user-card 単一を closest() で特定し、その中だけ検査
                         const ROOM_ID = /^room_[a-f0-9]{8,40}$/i;
                         const CUSTOM  = /^[A-Za-z0-9_.\\-]{3,40}$/;
                         const reserved = new Set([
@@ -206,47 +205,45 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                             'terms','privacy','feature','collectItemRank','likeItemRank',
                             'tag','c','m','room'
                         ]);
-                        const isValidUid = (s) => {
-                            if (!s || reserved.has(s)) return false;
-                            return ROOM_ID.test(s) || CUSTOM.test(s);
-                        };
-                        const extractFromHref = (href) => {
+                        const isValid = (s) => s && !reserved.has(s) && (ROOM_ID.test(s) || CUSTOM.test(s));
+                        const fromHref = (href) => {
                             if (!href) return '';
-                            let path = href;
-                            if (path.startsWith('http')) {
-                                const m0 = path.match(/^https?:\\/\\/room\\.rakuten\\.co\\.jp(\\/.*)$/);
+                            let p = href;
+                            if (p.startsWith('http')) {
+                                const m0 = p.match(/^https?:\\/\\/room\\.rakuten\\.co\\.jp(\\/.*)$/);
                                 if (!m0) return '';
-                                path = m0[1];
+                                p = m0[1];
                             }
-                            if (!path.startsWith('/')) return '';
-                            // /SEG/items 形式 (followers ページのカード) を優先
-                            const m1 = path.match(/^\\/([^\\/?#]+)\\/(items|followers|following)/);
-                            if (m1 && isValidUid(m1[1])) return m1[1];
-                            // それ以外 /SEG 形式
-                            const m2 = path.match(/^\\/([^\\/?#]+)/);
-                            if (m2 && isValidUid(m2[1])) return m2[1];
+                            if (!p.startsWith('/')) return '';
+                            const m1 = p.match(/^\\/([^\\/?#]+)\\/(items|followers|following)/);
+                            if (m1 && isValid(m1[1])) return m1[1];
                             return '';
                         };
-                        let n = el;
-                        let depth = 0;
-                        while (n && depth < 8) {
-                            // 自身の data-user-id チェック
-                            if (n.getAttribute) {
-                                const d = n.getAttribute('data-user-id');
-                                if (isValidUid(d)) return d;
-                                const u = n.getAttribute('data-userid') || n.getAttribute('data-user');
-                                if (isValidUid(u)) return u;
+                        // 1) 自身の data-* attribute (確実な情報源)
+                        if (el.getAttribute) {
+                            for (const a of ['data-user-id','data-userid','data-user']) {
+                                const d = el.getAttribute(a);
+                                if (isValid(d)) return d;
                             }
-                            // 現 ancestor の subtree 全 <a> を検査
-                            if (n.querySelectorAll) {
-                                const links = n.querySelectorAll('a[href]');
-                                for (const a of links) {
-                                    const r = extractFromHref(a.getAttribute('href'));
-                                    if (r) return r;
-                                }
+                        }
+                        // 2) closest(li, [class*=user-card], [class*=Card], [class*=item])
+                        //    で単一 user card を限定
+                        const card = el.closest(
+                            'li, [class*=user-card], [class*=userCard], [class*=Card], ' +
+                            '[class*=user-info], [class*=followItem], [class*=follow-item]'
+                        );
+                        if (card) {
+                            // card 内の data-* check
+                            for (const a of ['data-user-id','data-userid','data-user']) {
+                                const d = card.getAttribute(a);
+                                if (isValid(d)) return d;
                             }
-                            n = n.parentElement;
-                            depth++;
+                            // card 内の最初の有効 a[href] - profile link 形式優先
+                            const links = card.querySelectorAll('a[href]');
+                            for (const link of links) {
+                                const r = fromHref(link.getAttribute('href'));
+                                if (r) return r;
+                            }
                         }
                         return '';
                     }""") or ""
