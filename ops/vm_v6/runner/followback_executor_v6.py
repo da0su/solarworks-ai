@@ -321,11 +321,29 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
 
         # ── DB update ──
         now_iso = _dt.now().isoformat()
+        # 2026-05-27 CRITICAL fix: follow_log にも INSERT (pacer/SSOT 集計対象)
+        # 旧版は followback_queue のみ update → daily_pacer の
+        # "SELECT COUNT FROM follow_log WHERE action='followback'" が永久 0
         for sid in success_ids:
             con.execute(
                 "UPDATE followback_queue SET status='completed', followed_at=? WHERE id=?",
                 (now_iso, sid)
             )
+            # follow_log にも記録 (SSOT 用)
+            try:
+                # follower_user_id を取得
+                row = con.execute(
+                    "SELECT follower_user_id FROM followback_queue WHERE id=?", (sid,)
+                ).fetchone()
+                if row and row[0]:
+                    con.execute(
+                        "INSERT OR IGNORE INTO follow_log "
+                        "(target_user_id, source, action, status, followed_at) "
+                        "VALUES (?, 'vm_v6_followback', 'followback', 'success', ?)",
+                        (row[0], now_iso)
+                    )
+            except Exception as _le:
+                log.log(f"[follow_log INSERT fail sid={sid}]: {_le}")
         # 2026-05-26: 既フォロー済 (already_following) も completed 扱い → 再 INSERT 防止
         for aid in already_following_ids:
             try:
