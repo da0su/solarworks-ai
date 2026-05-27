@@ -41,6 +41,46 @@ MAX_RUNTIME_SEC = 1800  # 30分
 MAX_NO_NEW_SEC = 25  # 25秒新規 follow なければ次の seed へ
 
 
+def _append_follow_history(user_id: str, seed_user: str = "") -> None:
+    """follow_history.json に entry append (atomic-ish write).
+
+    2026-05-27 重大バグ修正: VM follow_executor が follow_history.json に
+    書き込まずに 100件 follow しても pacer/room_status が 0件 表示してた。
+    """
+    if not user_id:
+        return
+    entry = {
+        "user_id": user_id,
+        "user_name": user_id,
+        "followed_at": datetime.now().isoformat(),
+        "source": "vm_v6_seed_followers",
+        "seed": seed_user,
+    }
+    # 読み込み (壊れていれば空 list で開始)
+    history_list = []
+    if HISTORY_PATH.exists():
+        try:
+            data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                history_list = data
+        except Exception:
+            pass
+    history_list.append(entry)
+    # atomic write (.tmp → replace)
+    tmp = HISTORY_PATH.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(history_list, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        tmp.replace(HISTORY_PATH)
+    except Exception:
+        # share lock 中の write 失敗時は best effort で直接書く
+        try:
+            HISTORY_PATH.write_text(json.dumps(history_list, ensure_ascii=False, indent=2),
+                                    encoding="utf-8")
+        except Exception:
+            pass
+
+
 def get_seed_users(count: int = 12) -> list:
     """seed_users.json から count 件の seed をランダム選択."""
     if not SEED_USERS_PATH.exists():
@@ -116,6 +156,12 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
             result["success"] += 1
             if user_id:
                 history.add(user_id)
+            # 2026-05-27 重大バグ修正: follow_history.json に append
+            # 旧版は in-memory のみ → SSOT が永久 0 表示・虚偽報告
+            try:
+                _append_follow_history(user_id, seed_user)
+            except Exception as _ae:
+                log.log(f"[seed:{seed_user}] history append fail: {_ae}")
             last_new_at = time.time()
 
             # heartbeat update
