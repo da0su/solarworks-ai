@@ -233,38 +233,55 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     """2026-05-27: crash-resistant loop. server.serve_forever() で稀に
     例外が伝搬してプロセス死亡する事象が観測される (本日 4 時間周期)。
-    例外で死なせず restart で耐える。
+    例外で死なせず restart で耐える。Codex REJECT 反映:
+      - fail counter は **serve 60s 未満で死亡** のみ加算 (長時間稼働後の死亡はリセット)
+      - 全 exit path で server_close 実行 (resource leak / port stuck 防止)
+      - HEALTHY_THRESHOLD_SEC で「長時間 OK」判定
     """
     import time
     import traceback
+    HEALTHY_THRESHOLD_SEC = 60
+    MAX_CONSECUTIVE_FAILS = 10
     print(f"[http_server_stdlib] starting on port {PORT}", flush=True)
     consecutive_fails = 0
     while True:
+        server = None
+        start_ts = time.time()
         try:
             server = HTTPServer(("0.0.0.0", PORT), Handler)
             print(f"[http_server_stdlib] listening on http://0.0.0.0:{PORT}", flush=True)
-            consecutive_fails = 0
             server.serve_forever()
+            # 正常 shutdown 経路 (誰かが server.shutdown() を呼んだ) → リセット
+            consecutive_fails = 0
         except KeyboardInterrupt:
             print("[http_server_stdlib] KeyboardInterrupt → exit", flush=True)
             break
         except Exception as e:
-            consecutive_fails += 1
+            uptime = time.time() - start_ts
             tb = traceback.format_exc()
-            print(f"[http_server_stdlib] CRASH ({consecutive_fails}): {e}\n{tb[:600]}",
-                  flush=True)
-            try:
-                server.server_close()
-            except Exception:
-                pass
-            # exponential backoff (max 60s)
+            if uptime >= HEALTHY_THRESHOLD_SEC:
+                # 60s 以上動いてからの crash は連続 fail とみなさない
+                consecutive_fails = 1
+                print(f"[http_server_stdlib] CRASH after {uptime:.0f}s healthy "
+                      f"(reset counter): {e}\n{tb[:600]}", flush=True)
+            else:
+                consecutive_fails += 1
+                print(f"[http_server_stdlib] CRASH ({consecutive_fails}/{MAX_CONSECUTIVE_FAILS}) "
+                      f"after only {uptime:.0f}s: {e}\n{tb[:600]}", flush=True)
+            if consecutive_fails >= MAX_CONSECUTIVE_FAILS:
+                print(f"[http_server_stdlib] {MAX_CONSECUTIVE_FAILS} 連続 fail → exit",
+                      flush=True)
+                break
             sleep_sec = min(60, 2 ** min(consecutive_fails, 6))
             print(f"[http_server_stdlib] sleeping {sleep_sec}s before restart", flush=True)
             time.sleep(sleep_sec)
-            # 連続 10 回失敗で諦め (zombie 避け)
-            if consecutive_fails >= 10:
-                print("[http_server_stdlib] 10 consecutive crashes → exit", flush=True)
-                break
+        finally:
+            # 全 exit path で server_close (resource leak / port stuck 防止)
+            if server is not None:
+                try:
+                    server.server_close()
+                except Exception:
+                    pass
 
 
 if __name__ == "__main__":
