@@ -71,14 +71,25 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code: int, body: dict | str, content_type="application/json"):
+        """response 送信. client 切断 (ConnectionResetError / BrokenPipeError) は
+        握りつぶす. 2026-05-27 真因: client (HOST curl の 5s timeout) で
+        切断された後の write で例外発生し do_POST → handle_one_request →
+        process 死亡まで伝搬していた。"""
         if isinstance(body, dict):
             body = json.dumps(body, ensure_ascii=False)
         b = body.encode("utf-8") if isinstance(body, str) else body
-        self.send_response(code)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as _ce:
+            # client 切断 → ログのみで握りつぶす
+            print(f"[http_server_stdlib] client disconnected (ignored): {type(_ce).__name__}",
+                  flush=True)
+        except Exception as _e:
+            print(f"[http_server_stdlib] _send error (ignored): {_e}", flush=True)
 
     def _check_auth(self) -> bool:
         auth = self.headers.get("Authorization", "")
