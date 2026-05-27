@@ -183,14 +183,17 @@ class BrowserManagerV6:
                 self._pw = None
                 self._ctx = None
                 if attempt == 0:
-                    # zombie cleanup + 2s wait before retry
+                    # Codex REJECT 反映: node.exe 全 kill は影響範囲広すぎる → 削除.
+                    # retry 前に lock + chrome cleanup のみ再実行 + 短い wait.
                     import time as _t2
-                    _t2.sleep(2)
+                    _t2.sleep(3)
                     try:
-                        subprocess.run(["taskkill", "/F", "/IM", "node.exe"],
-                                       capture_output=True, text=True, timeout=10)
+                        self._cleanup_locks()
                     except Exception:
                         pass
+                    # 自分の Playwright サブプロセスだけ kill (node 全 kill 回避)
+                    # → どうしても残置 node プロセスがあれば次回 trigger で
+                    #   _kill_orphan_chrome の wmic 検査で判定 (peer なし時) 後 kill
         if self._ctx is None:
             raise RuntimeError(f"playwright start failed twice: {last_err}")
 
