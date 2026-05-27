@@ -121,7 +121,37 @@ def main():
         return 0
 
     if args.mode:
-        result = run(args.mode, limit=args.limit, batch=args.batch, force=args.force)
+        # 2026-05-27 SSOT pacing: target 超過防止
+        # 旧 orchestrator_v5 の effective_limit ロジックを vm_controller でも適用.
+        # POST batch3 で 20/19 overshoot した問題対応.
+        effective_limit = args.limit
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+            from shared.daily_pacer import get_pace_directive
+            fn_map = {"post": "POST", "like": "LIKE",
+                      "follow": "FOLLOW", "followback": "FB"}
+            fn_key = fn_map.get(args.mode)
+            if fn_key:
+                d = get_pace_directive(fn_key)
+                if d.get("action") == "stop":
+                    print(json.dumps({
+                        "status": "skipped",
+                        "reason": "daily_target_reached",
+                        "actual": d.get("actual"),
+                        "target": d.get("target"),
+                    }, ensure_ascii=False))
+                    return 0
+                remaining = d.get("remain_target", 0)
+                if remaining > 0 and remaining < args.limit:
+                    effective_limit = remaining
+                    print(json.dumps({
+                        "pacing": f"limit {args.limit} → {effective_limit} (remaining)",
+                        "actual": d.get("actual"),
+                        "target": d.get("target"),
+                    }, ensure_ascii=False))
+        except Exception as _pe:
+            print(f"[pacing] fallback (no SSOT cap): {_pe}", file=sys.stderr)
+        result = run(args.mode, limit=effective_limit, batch=args.batch, force=args.force)
         print(json.dumps(result, ensure_ascii=False))
         return 0 if "error" not in result else 4
 
