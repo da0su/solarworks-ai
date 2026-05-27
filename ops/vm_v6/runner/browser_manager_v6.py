@@ -107,16 +107,41 @@ class BrowserManagerV6:
         """2026-05-27: 前 session 残置の Chrome zombie を kill.
         本日 18:40 で LIKE が起動直後に全 feed Page closed エラー →
         前 session の chrome.exe が profile を握りっぱなしの可能性。
-        全 chrome.exe を kill して fresh start を確保。
+
+        Codex REVIEW_NEEDED 反映:
+        他の rakuten_room_runner.py が動作中なら skip (並列 chrome 競合回避).
+        例: FB 19:20 がまだ動いている時に FOLLOW 19:30 が start →
+            FB の chrome を taskkill しない。
         """
         import subprocess
+        # 他 runner プロセス検知
         try:
-            # /F = force, /IM chrome.exe = image name
+            r = subprocess.run(
+                ["wmic", "process", "where", "name='python.exe'", "get", "commandline"],
+                capture_output=True, text=True, timeout=10
+            )
+            out = (r.stdout or "")
+            my_pid = os.getpid()
+            other_runner_count = 0
+            for line in out.splitlines():
+                if "rakuten_room_runner" in line and "--mode" in line:
+                    other_runner_count += 1
+            # 自分自身を除く: rakuten_room_runner 起動の python は自分を含む
+            # → 2 以上なら他 runner が同時走行中
+            if other_runner_count >= 2:
+                print(f"[bm_v6] other runner detected (n={other_runner_count}) → "
+                      f"skip chrome kill to avoid killing peer")
+                return
+        except Exception as _ce:
+            # wmic 失敗時は安全側で skip (zombie 残置リスクより誤 kill 回避優先)
+            print(f"[bm_v6] runner detect fail (skip kill): {_ce}")
+            return
+
+        try:
             r = subprocess.run(
                 ["taskkill", "/F", "/IM", "chrome.exe"],
                 capture_output=True, text=True, timeout=10
             )
-            # rc=0 (killed) / rc=128 (not running) ともに OK
             print(f"[bm_v6] taskkill chrome.exe rc={r.returncode}")
         except Exception as e:
             print(f"[bm_v6] taskkill chrome.exe error (ignored): {e}")
