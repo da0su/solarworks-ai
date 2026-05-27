@@ -127,12 +127,14 @@ def auto_recover(action: str, context: dict) -> dict:
                 # ---- escalation 多重防止 + retry cooldown ----
                 lock_path = REPO_ROOT / "state" / "vm_full_restart.lock"
                 last_path = REPO_ROOT / "state" / "vm_full_restart_last.txt"
-                # 1h 以内に再起動済なら skip (root cause 別途調査必要・連続再起動で被害拡大防止)
+                # 30min 以内に再起動済なら skip
+                # (旧 1h → 30min: 本日 18:00 で 10分周期 HTTP 死亡が発覚・1h cooldown だと
+                # 中間で復旧 escalation が無効化されて FB/LIKE/FOLLOW が連続 fail する)
                 if last_path.exists():
                     try:
                         last_ts = float(last_path.read_text().strip())
-                        if time.time() - last_ts < 3600:
-                            result["escalation"] = "skipped_cooldown_1h"
+                        if time.time() - last_ts < 1800:
+                            result["escalation"] = "skipped_cooldown_30min"
                             result["last_restart_age_sec"] = int(time.time() - last_ts)
                             return result
                     except Exception:
