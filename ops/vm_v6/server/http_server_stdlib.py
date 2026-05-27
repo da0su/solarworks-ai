@@ -124,7 +124,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 r = subprocess.run(
                     [sys.executable, "-m", "runner.room_stats_fetcher"],
-                    capture_output=True, text=True, timeout=60,
+                    capture_output=True, text=True, timeout=90,
                     cwd=cwd, creationflags=NO_WIN,
                     encoding="utf-8", errors="replace",
                 )
@@ -231,10 +231,40 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    """2026-05-27: crash-resistant loop. server.serve_forever() で稀に
+    例外が伝搬してプロセス死亡する事象が観測される (本日 4 時間周期)。
+    例外で死なせず restart で耐える。
+    """
+    import time
+    import traceback
     print(f"[http_server_stdlib] starting on port {PORT}", flush=True)
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"[http_server_stdlib] listening on http://0.0.0.0:{PORT}", flush=True)
-    server.serve_forever()
+    consecutive_fails = 0
+    while True:
+        try:
+            server = HTTPServer(("0.0.0.0", PORT), Handler)
+            print(f"[http_server_stdlib] listening on http://0.0.0.0:{PORT}", flush=True)
+            consecutive_fails = 0
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("[http_server_stdlib] KeyboardInterrupt → exit", flush=True)
+            break
+        except Exception as e:
+            consecutive_fails += 1
+            tb = traceback.format_exc()
+            print(f"[http_server_stdlib] CRASH ({consecutive_fails}): {e}\n{tb[:600]}",
+                  flush=True)
+            try:
+                server.server_close()
+            except Exception:
+                pass
+            # exponential backoff (max 60s)
+            sleep_sec = min(60, 2 ** min(consecutive_fails, 6))
+            print(f"[http_server_stdlib] sleeping {sleep_sec}s before restart", flush=True)
+            time.sleep(sleep_sec)
+            # 連続 10 回失敗で諦め (zombie 避け)
+            if consecutive_fails >= 10:
+                print("[http_server_stdlib] 10 consecutive crashes → exit", flush=True)
+                break
 
 
 if __name__ == "__main__":
