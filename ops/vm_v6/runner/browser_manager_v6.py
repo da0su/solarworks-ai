@@ -103,8 +103,27 @@ class BrowserManagerV6:
                 except Exception:
                     pass
 
+    def _kill_orphan_chrome(self):
+        """2026-05-27: 前 session 残置の Chrome zombie を kill.
+        本日 18:40 で LIKE が起動直後に全 feed Page closed エラー →
+        前 session の chrome.exe が profile を握りっぱなしの可能性。
+        全 chrome.exe を kill して fresh start を確保。
+        """
+        import subprocess
+        try:
+            # /F = force, /IM chrome.exe = image name
+            r = subprocess.run(
+                ["taskkill", "/F", "/IM", "chrome.exe"],
+                capture_output=True, text=True, timeout=10
+            )
+            # rc=0 (killed) / rc=128 (not running) ともに OK
+            print(f"[bm_v6] taskkill chrome.exe rc={r.returncode}")
+        except Exception as e:
+            print(f"[bm_v6] taskkill chrome.exe error (ignored): {e}")
+
     def start(self) -> Page:
         """Chrome 起動."""
+        self._kill_orphan_chrome()  # 2026-05-27: zombie chrome 一掃
         self._cleanup_locks()
         self.profile.mkdir(parents=True, exist_ok=True)
 
