@@ -8,6 +8,7 @@ Playwright DOM ベースで follow を実行。
 from __future__ import annotations
 
 import json
+import os
 import random
 import sys
 import time
@@ -41,14 +42,49 @@ MAX_RUNTIME_SEC = 1800  # 30分
 MAX_NO_NEW_SEC = 25  # 25秒新規 follow なければ次の seed へ
 
 
-def _append_follow_history(user_id: str, seed_user: str = "") -> None:
-    """follow_history.json に entry append (atomic-ish write).
+_HISTORY_LOCK_PATH = HISTORY_PATH.with_suffix(".lock")
 
-    2026-05-27 重大バグ修正: VM follow_executor が follow_history.json に
-    書き込まずに 100件 follow しても pacer/room_status が 0件 表示してた。
+
+def _acquire_history_lock(max_wait_sec: float = 5.0) -> bool:
+    """簡易 file lock (.lock ファイル exists check). 並列書き込み防止."""
+    deadline = time.time() + max_wait_sec
+    while time.time() < deadline:
+        try:
+            # O_EXCL atomic create
+            fd = os.open(str(_HISTORY_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            # stale lock 検知 (>30s 古い lock は削除)
+            try:
+                if (time.time() - _HISTORY_LOCK_PATH.stat().st_mtime) > 30:
+                    _HISTORY_LOCK_PATH.unlink()
+                    continue
+            except Exception:
+                pass
+            time.sleep(0.1)
+    return False
+
+
+def _release_history_lock() -> None:
+    try:
+        _HISTORY_LOCK_PATH.unlink()
+    except Exception:
+        pass
+
+
+def _append_follow_history(user_id: str, seed_user: str = "",
+                           log: "SessionLogger | None" = None) -> bool:
+    """follow_history.json に entry append. 成功時 True. 失敗時 False (log 出力).
+
+    Codex REJECT 反映 (fc102e9):
+    - file lock (O_EXCL) で並列書き込み race 防止
+    - 全 exception を明示的に log 出力 (虚偽成功防止)
+    - 返り値で 呼び出し側が persist 失敗を把握可能
     """
     if not user_id:
-        return
+        return False
     entry = {
         "user_id": user_id,
         "user_name": user_id,
@@ -56,29 +92,42 @@ def _append_follow_history(user_id: str, seed_user: str = "") -> None:
         "source": "vm_v6_seed_followers",
         "seed": seed_user,
     }
-    # 読み込み (壊れていれば空 list で開始)
-    history_list = []
-    if HISTORY_PATH.exists():
-        try:
-            data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
-            if isinstance(data, list):
-                history_list = data
-        except Exception:
-            pass
-    history_list.append(entry)
-    # atomic write (.tmp → replace)
-    tmp = HISTORY_PATH.with_suffix(".tmp")
+    if not _acquire_history_lock():
+        if log:
+            log.log(f"[history_append] lock acquire fail for {user_id}")
+        return False
     try:
-        tmp.write_text(json.dumps(history_list, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
-        tmp.replace(HISTORY_PATH)
-    except Exception:
-        # share lock 中の write 失敗時は best effort で直接書く
+        history_list: list = []
+        if HISTORY_PATH.exists():
+            try:
+                data = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+                if isinstance(data, list):
+                    history_list = data
+                else:
+                    if log:
+                        log.log(f"[history_append] WARN: history not list ({type(data).__name__})")
+            except Exception as _re:
+                # 既存ファイル読込失敗 → 上書きで履歴欠落リスク → log で警告
+                if log:
+                    log.log(f"[history_append] read fail (potential history loss): {_re}")
+                return False  # 既存読めない時は append 諦め (上書きで欠落しない)
+        history_list.append(entry)
+        tmp = HISTORY_PATH.with_suffix(".tmp")
         try:
-            HISTORY_PATH.write_text(json.dumps(history_list, ensure_ascii=False, indent=2),
-                                    encoding="utf-8")
-        except Exception:
-            pass
+            tmp.write_text(json.dumps(history_list, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            tmp.replace(HISTORY_PATH)
+            return True
+        except Exception as _we:
+            if log:
+                log.log(f"[history_append] write fail for {user_id}: {_we}")
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+            return False
+    finally:
+        _release_history_lock()
 
 
 def get_seed_users(count: int = 12) -> list:
@@ -158,10 +207,16 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                 history.add(user_id)
             # 2026-05-27 重大バグ修正: follow_history.json に append
             # 旧版は in-memory のみ → SSOT が永久 0 表示・虚偽報告
+            persist_ok = False
             try:
-                _append_follow_history(user_id, seed_user)
+                persist_ok = _append_follow_history(user_id, seed_user, log=log)
             except Exception as _ae:
-                log.log(f"[seed:{seed_user}] history append fail: {_ae}")
+                log.log(f"[seed:{seed_user}] history append exception: {_ae}")
+            if not persist_ok:
+                # persist 失敗を success count に反映するか否か:
+                # → 反映しない (Rakuten 側は follow されている事実は変わらない)
+                # → ただし log に WARN 明示
+                log.log(f"[seed:{seed_user}] WARN: follow OK but history NOT persisted user={user_id}")
             last_new_at = time.time()
 
             # heartbeat update
