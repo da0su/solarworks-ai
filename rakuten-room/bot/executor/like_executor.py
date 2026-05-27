@@ -198,7 +198,9 @@ class LikeExecutor:
             logger.warning(f"angular wait failed (continuing): {str(_wae)[:80]}")
 
         # スクロールしながらいいねボタンを探す
-        max_scroll_attempts = 15 if extra_scroll else 8
+        # 2026-05-27: like_history 累積で fresh 不足のため default 8→15 に倍増
+        # (extra_scroll 時 15→20 で深堀り)
+        max_scroll_attempts = 20 if extra_scroll else 15
         scroll_count = 0
 
         # 2026-05-27 修正: page closed / context closed エラーで全 abort せず
