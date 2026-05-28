@@ -260,22 +260,30 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     wait_until="networkidle", timeout=30000
                 )
                 page.wait_for_timeout(5000)
-                try:
-                    page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
-                except Exception:
-                    pass
-                fb_js_users = page.evaluate(_JS_SCAN, _OWN_ID)
-                fb_hrefs = page.evaluate(_JS_NON_SELF_HREFS, _OWN_ID)
-                log.log(f"[scan_followers] fallback: js_users={len(fb_js_users)} hrefs={fb_hrefs[:10]}")
-                for item in fb_js_users:
-                    seg = (item.get("uid") or "").strip()
-                    uname = (item.get("name") or seg)[:60]
-                    if not seg or seg in seen:
-                        continue
-                    seen.add(seg)
-                    if seg not in skip_set:
-                        collected.append({"user_id": seg, "username": uname})
-                log.log(f"[scan_followers] fallback collected={len(collected)}")
+                # Guard: verify not redirected to login before scanning
+                _fb_url = page.url
+                if (("grp01.id.rakuten.co.jp" in _fb_url
+                        or "/nid/" in _fb_url
+                        or "login.account.rakuten.com" in _fb_url)
+                        and "session/upgrade" not in _fb_url):
+                    log.log(f"[scan_followers] fallback login redirect ({_fb_url[:80]}) → skip")
+                else:
+                    try:
+                        page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
+                    except Exception:
+                        pass
+                    fb_js_users = page.evaluate(_JS_SCAN, _OWN_ID)
+                    fb_hrefs = page.evaluate(_JS_NON_SELF_HREFS, _OWN_ID)
+                    log.log(f"[scan_followers] fallback: url={_fb_url[:60]} js_users={len(fb_js_users)} hrefs={fb_hrefs[:5]}")
+                    for item in fb_js_users:
+                        seg = (item.get("uid") or "").strip()
+                        uname = (item.get("name") or seg)[:60]
+                        if not seg or seg in seen:
+                            continue
+                        seen.add(seg)
+                        if seg not in skip_set:
+                            collected.append({"user_id": seg, "username": uname})
+                    log.log(f"[scan_followers] fallback collected={len(collected)}")
             except Exception as _fe:
                 log.log(f"[scan_followers] fallback error: {_fe}")
 
