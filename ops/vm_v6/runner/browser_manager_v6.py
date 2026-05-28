@@ -211,29 +211,53 @@ class BrowserManagerV6:
         return self._page
 
     def is_logged_in(self) -> bool:
-        """楽天 ROOM のログイン確認 (cookie ベース・navigation なし).
+        """楽天 ROOM のログイン確認 (cookie 先行 + goto() explicit timeout).
 
         2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に
         Playwright 内部 timeout が発火しない hang を確認.
-        → page.goto() を完全に排除し cookie のみで判定 (instant・hang 回避).
 
-        設計根拠:
-        - persistent context は明示的 logout + cookie 削除が無い限り session cookie を保持.
-        - server-side session expiry → 呼び出し元の最初の goto() で login redirect 発生.
-          各 executor が URL チェックで検出・abort する設計.
-        - セッション全体の hang は executor 側の session_watchdog (os._exit) で保護.
+        対処方針:
+          Step1: cookie なし → 即 False (navigation 不要).
+          Step2: cookie あり → goto() explicit timeout=10000 ms で redirect 確認.
+                  呼び出し元 (followback_executor_v6) 側で bm.start() 前に heartbeat
+                  ベースの wait (LIKE/FOLLOW stale 確認) を設けることで Chrome リソース
+                  競合を回避し、goto() が hang しない状態で呼ばれる設計.
         2026-05-07 修正:
           - cookie names を OSSO/Im/Re/Rg/Rz/s_user/ODID に拡張
           - login.account.rakuten.com / .id.rakuten.co.jp / .rakuten.co.jp 全 domain を確認
         """
         try:
+            # Step1: cookie 先行チェック (instant・navigation 不要)
             cookies_room = self._ctx.cookies("https://room.rakuten.co.jp")
             cookies_login = self._ctx.cookies("https://login.account.rakuten.com")
             cookies_id = self._ctx.cookies("https://id.rakuten.co.jp")
             cookies_rakuten = self._ctx.cookies("https://www.rakuten.co.jp")
             all_cookies = cookies_room + cookies_login + cookies_id + cookies_rakuten
             cookie_names = {c["name"] for c in all_cookies}
-            return any(n in cookie_names for n in SESSION_COOKIE_NAMES)
+            if not any(n in cookie_names for n in SESSION_COOKIE_NAMES):
+                return False  # cookie なし → 明確に未ログイン
+
+            # Step2: cookie あり → goto() で redirect 確認 (explicit timeout=10000)
+            # Note: 呼び出し元の heartbeat-wait で LIKE/FOLLOW 停止後に呼ばれる設計のため
+            # Chrome リソース競合による hang は通常発生しない.
+            try:
+                self._page.goto("https://room.rakuten.co.jp/",
+                                wait_until="domcontentloaded", timeout=10000)
+                self._page.wait_for_timeout(500)
+                url_after = self._page.url
+            except Exception as _ge:
+                logger.warning(f"[is_logged_in] goto() failed: {_ge!s:.60}")
+                return True  # cookie あり・goto error → True (次 goto で redirect 検出可能)
+
+            # Step3: URL redirect チェック
+            # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
+            if ("grp01.id.rakuten.co.jp" in url_after
+                    or "/nid/" in url_after
+                    or "login.account.rakuten.com/session" in url_after) \
+                    and "session/upgrade" not in url_after:
+                return False  # login redirect → 未ログイン
+            return True
+
         except Exception:
             return False
 

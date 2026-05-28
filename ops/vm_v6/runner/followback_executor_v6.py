@@ -207,23 +207,34 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
     log.log(f"=== FOLLOWBACK executor v6 start: limit={limit} ===")
     hb.write(phase="startup", force=True)
 
-    # 2026-05-28 fix: セッション全体の hang (is_logged_in/goto hang 含む) を
-    # 最大 7 分で強制終了する watchdog. os._exit(1) でプロセス強制終了 →
-    # 次 trigger (30 分後) で clean start. is_logged_in() の goto hang が
-    # Playwright timeout を無視して 2 分+ 続く問題への構造的対策.
-    import threading as _fb_thr
-    import os as _fb_os
-    _session_done = _fb_thr.Event()
-    def _session_watchdog():
-        if not _session_done.wait(420):  # 7 min
-            try:
-                log.log("[WATCHDOG] session timeout >7min → os._exit(1)")
-                hb.write(phase="watchdog_timeout", force=True)
-            except Exception:
-                pass
-            _fb_os._exit(1)
-    _wt = _fb_thr.Thread(target=_session_watchdog, daemon=True)
-    _wt.start()
+    # 2026-05-28 fix: LIKE(HH:10/40)/FOLLOW(HH:15/45) と同時起動すると Chrome 3 本同時
+    # 起動になり VM リソース競合で goto() が hang する. bm.start() 前に既存 runner の
+    # heartbeat が stale (>120s 更新なし) になるまで最大 10 分待つ.
+    # subprocess/WMIC 不使用 → 共有 heartbeat ファイルの mtime を参照するだけ.
+    import time as _fb_time
+    from pathlib import Path as _fb_P
+    _hb_share = _fb_P(r"\\vboxsvr\share")
+    _wait_start = _fb_time.time()
+    while _fb_time.time() - _wait_start < 600:  # max 10 min
+        _like_age = 9999.0
+        _follow_age = 9999.0
+        try:
+            _lf = _hb_share / "heartbeat_like.json"
+            if _lf.exists():
+                _like_age = _fb_time.time() - _lf.stat().st_mtime
+        except Exception:
+            pass
+        try:
+            _ff = _hb_share / "heartbeat_follow.json"
+            if _ff.exists():
+                _follow_age = _fb_time.time() - _ff.stat().st_mtime
+        except Exception:
+            pass
+        if _like_age > 120 and _follow_age > 120:
+            log.log(f"[fb_wait] like_age={_like_age:.0f}s follow_age={_follow_age:.0f}s → proceed")
+            break
+        log.log(f"[fb_wait] like_age={_like_age:.0f}s follow_age={_follow_age:.0f}s → wait 30s")
+        _fb_time.sleep(30)
 
     # 2026-05-24: VM-native FB executor (HOST followback_rpa を回避)
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
@@ -429,6 +440,5 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
             pass
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         log.log(f"=== FOLLOWBACK executor v6 end: {result} ===")
-        _session_done.set()  # session watchdog キャンセル (正常完了)
 
     return result
