@@ -211,36 +211,61 @@ class BrowserManagerV6:
         return self._page
 
     def is_logged_in(self) -> bool:
-        """楽天 ROOM のログイン確認 (cookie ベース優先・navigation フォールバック).
+        """楽天 ROOM のログイン確認 (cookie 先行 + navigation 検証・hang 耐性).
 
-        2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に hang する既知問題.
-          → Step1: cookie のみで判定 (navigation 不要・instant). cookie 存在 → True で即 return.
-          → Step2: cookie 不在時のみ navigation で redirect 確認 (timeout=10000 明示).
+        2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に
+        Playwright の内部 timeout が発火しない hang を確認.
+          → Step1: cookie なし → 明確に False (navigation 不要).
+          → Step2: cookie あり → concurrent.futures で goto() を Python レベル 10s timeout
+                   で wrap. goto() が hang しても future.result(timeout=10) で確実に抜ける.
+          → Step3: navigation 完了 → URL redirect チェック (元の挙動を保持).
+          → Step4: navigation hang/error → cookie あるので True (安全側).
         2026-05-07 修正:
           - cookie names を OSSO/Im/Re/Rg/Rz/s_user/ODID に拡張
           - login.account.rakuten.com / .id.rakuten.co.jp / .rakuten.co.jp 全 domain を確認
         """
+        import concurrent.futures
+
         try:
-            # Step1: cookie だけで判定 (navigation なし・高速・hang 回避)
+            # Step1: cookie チェック (navigation 不要・即時)
             cookies_room = self._ctx.cookies("https://room.rakuten.co.jp")
             cookies_login = self._ctx.cookies("https://login.account.rakuten.com")
             cookies_id = self._ctx.cookies("https://id.rakuten.co.jp")
             cookies_rakuten = self._ctx.cookies("https://www.rakuten.co.jp")
             all_cookies = cookies_room + cookies_login + cookies_id + cookies_rakuten
             cookie_names = {c["name"] for c in all_cookies}
-            if any(n in cookie_names for n in SESSION_COOKIE_NAMES):
-                return True  # session cookie 確認 → ログイン OK (navigation skip)
+            has_session = any(n in cookie_names for n in SESSION_COOKIE_NAMES)
+            if not has_session:
+                return False  # cookie なし → 明確に未ログイン
 
-            # Step2: cookie 不在 → navigation で login redirect 確認 (timeout 明示)
-            self._page.goto("https://room.rakuten.co.jp/", wait_until="domcontentloaded",
-                            timeout=10000)
-            self._page.wait_for_timeout(1000)
-            url = self._page.url
-            # ログインページに redirect されたら NG (login form 表示)
+            # Step2: cookie あり → navigation で redirect 確認 (Python-level 10s timeout)
+            page = self._page
+
+            def _do_goto():
+                page.goto("https://room.rakuten.co.jp/",
+                          wait_until="domcontentloaded", timeout=8000)
+                return page.url
+
+            url_after = None
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
+                    _fut = _exe.submit(_do_goto)
+                    url_after = _fut.result(timeout=10)  # Python-level 10s タイムアウト
+            except concurrent.futures.TimeoutError:
+                # goto() が 10s 以上 hang → cookie はあるので True (Step4)
+                logger.warning("[is_logged_in] goto() hang detected (>10s) → trust cookie")
+                return True
+            except Exception:
+                # goto() error → cookie はあるので True として継続
+                return True
+
+            # Step3: URL redirect チェック (元の挙動を保持)
             # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
-            if ("grp01.id.rakuten.co.jp" in url or "/nid/" in url) and "session/upgrade" not in url:
-                return False
-            return False  # cookie なし かつ redirect なし → セッション不明 → 安全側 False
+            if url_after and ("grp01.id.rakuten.co.jp" in url_after or "/nid/" in url_after) \
+                    and "session/upgrade" not in url_after:
+                return False  # login redirect → 未ログイン
+            return True
+
         except Exception:
             return False
 
