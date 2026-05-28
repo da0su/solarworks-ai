@@ -163,15 +163,26 @@ class LikeExecutor:
             # 2026-05-28: JS レベルでリダイレクト攻撃をブロック
             # likeItemRank に埋め込まれた window.location 乗っ取りを阻止する
             # add_init_script → 次回 goto 以降の全フレームに挿入 (route abort より先に動作)
+            # 2026-05-28 fix2: _isAllowed を hostname ベースに変更。
+            # 旧: includes('rakuten.co.jp') → login.account.rakuten.com (.com) をブロック。
+            # 新: new URL().hostname.endsWith('.rakuten.co.jp'|'.rakuten.com') で全楽天 hostname を許可。
             _REDIRECT_BLOCK_JS = """
 ;(() => {
   try {
-    var _ROOM_ALLOWED = ['rakuten.co.jp'];
+    if (window._ROOM_BOT_GUARD_INSTALLED) return;  // idempotent
+    window._ROOM_BOT_GUARD_INSTALLED = true;
     var _isAllowed = function(u) {
         if (!u) return true;
         var s = String(u);
         if (s.startsWith('/') || s.startsWith('#') || s.startsWith('about:') || s.startsWith('javascript:')) return true;
-        return _ROOM_ALLOWED.some(function(h) { return s.includes(h); });
+        try {
+            var h = new URL(s).hostname.toLowerCase();
+            return h.endsWith('.rakuten.co.jp') || h.endsWith('.rakuten.com')
+                   || h === 'rakuten.co.jp' || h === 'rakuten.com';
+        } catch(e) {
+            // fallback for relative/invalid URLs
+            return s.indexOf('rakuten.co.jp') !== -1 || s.indexOf('rakuten.com') !== -1;
+        }
     };
     // Override Location.prototype.href setter
     var _origDesc = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
@@ -307,14 +318,25 @@ class LikeExecutor:
             except Exception:
                 pass
 
-            # ログインリダイレクトチェック
-            if "grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url:
+            # ログインリダイレクトチェック (正当な楽天ログイン → abort_reason で終了)
+            _cu = page.url
+            if ("grp01.id.rakuten.co.jp" in _cu
+                    or "/nid/" in _cu
+                    or "login.account.rakuten.com" in _cu):
                 return "ログインページにリダイレクトされました"
 
             # 2026-05-28: injection攻撃でGoogleなど非Rakutenページにリダイレクトされる場合がある
             # route abort が間に合わなかった場合のフォールバック
-            if "room.rakuten.co.jp" not in page.url:
-                logger.warning(f"[injection_guard] 非Rakuten URLにリダイレクト: {page.url[:80]}, フィードをスキップ")
+            # 2026-05-28 fix2: 楽天 hostname ベース判定。login.account.rakuten.com は上で処理済み。
+            try:
+                from urllib.parse import urlparse as _up2
+                _h = (_up2(_cu).hostname or "").lower()
+                _is_rk = (_h.endswith(".rakuten.co.jp") or _h.endswith(".rakuten.com")
+                          or _h == "rakuten.co.jp" or _h == "rakuten.com" or not _h)
+            except Exception:
+                _is_rk = "rakuten" in _cu.lower()
+            if not _is_rk:
+                logger.warning(f"[injection_guard] 非Rakuten URLにリダイレクト: {_cu[:80]}, フィードをスキップ")
                 try:
                     page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
                 except Exception:
