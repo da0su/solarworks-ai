@@ -87,8 +87,8 @@ class LikeExecutor:
             try:
                 with open(config.LIKE_HISTORY_PATH, "r", encoding="utf-8") as f:
                     history = json.load(f)
-                # 直近7日分のURLだけ保持
-                cutoff = datetime.now().timestamp() - (7 * 86400)
+                # 直近2日分のURLだけ保持
+                cutoff = datetime.now().timestamp() - (2 * 86400)
                 for entry in history:
                     ts = entry.get("timestamp", 0)
                     if ts > cutoff:
@@ -96,7 +96,7 @@ class LikeExecutor:
                         if url:
                             # 2026-05-28 fix: URL 正規化 (item_id ベース dedup)
                             self.liked_urls.add(_normalize_item_url(url))
-                logger.info(f"いいね履歴: {len(self.liked_urls)}件（直近7日）")
+                logger.info(f"いいね履歴: {len(self.liked_urls)}件（直近2日）")
             except Exception as e:
                 logger.warning(f"いいね履歴読み込みエラー: {e}")
 
@@ -117,8 +117,8 @@ class LikeExecutor:
             "source": self.source,
         })
 
-        # 直近7日分だけ保持（ファイル肥大化防止）
-        cutoff = datetime.now().timestamp() - (7 * 86400)
+        # 直近2日分だけ保持（ファイル肥大化防止）
+        cutoff = datetime.now().timestamp() - (2 * 86400)
         history = [h for h in history if h.get("timestamp", 0) > cutoff]
 
         config.LIKE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -160,6 +160,53 @@ class LikeExecutor:
 
             logger.info(f"ログイン確認OK ({login_status['method']})")
 
+            # 2026-05-28: JS レベルでリダイレクト攻撃をブロック
+            # likeItemRank に埋め込まれた window.location 乗っ取りを阻止する
+            # add_init_script → 次回 goto 以降の全フレームに挿入 (route abort より先に動作)
+            _REDIRECT_BLOCK_JS = """
+;(() => {
+  try {
+    var _ROOM_ALLOWED = ['rakuten.co.jp'];
+    var _isAllowed = function(u) {
+        if (!u) return true;
+        var s = String(u);
+        if (s.startsWith('/') || s.startsWith('#') || s.startsWith('about:') || s.startsWith('javascript:')) return true;
+        return _ROOM_ALLOWED.some(function(h) { return s.includes(h); });
+    };
+    // Override Location.prototype.href setter
+    var _origDesc = Object.getOwnPropertyDescriptor(Location.prototype, 'href');
+    if (_origDesc && _origDesc.set) {
+        Object.defineProperty(Location.prototype, 'href', {
+            set: function(v) {
+                if (_isAllowed(v)) { _origDesc.set.call(this, v); }
+                else { console.log('[ROOM_BOT_BLOCK] href blocked: ' + String(v).substring(0,80)); }
+            },
+            get: _origDesc.get,
+            configurable: true
+        });
+    }
+    // Override location.assign
+    var _oa = Location.prototype.assign;
+    Location.prototype.assign = function(url) {
+        if (_isAllowed(url)) { return _oa.call(this, url); }
+        console.log('[ROOM_BOT_BLOCK] assign blocked: ' + String(url).substring(0,80));
+    };
+    // Override location.replace
+    var _or = Location.prototype.replace;
+    Location.prototype.replace = function(url) {
+        if (_isAllowed(url)) { return _or.call(this, url); }
+        console.log('[ROOM_BOT_BLOCK] replace blocked: ' + String(url).substring(0,80));
+    };
+    console.log('[ROOM_BOT_BLOCK] redirect guard active');
+  } catch(e) { console.log('[ROOM_BOT_BLOCK] setup error: ' + e); }
+})();
+"""
+            try:
+                bm.page.add_init_script(_REDIRECT_BLOCK_JS)
+                logger.info("[redirect_block] JS redirect guard installed via add_init_script")
+            except Exception as _rie:
+                logger.warning(f"[redirect_block] add_init_script failed (continuing): {_rie}")
+
             # フィードページを巡回していいね
             for feed_url in config.LIKE_FEED_URLS:
                 if self.liked_count >= self.limit:
@@ -195,82 +242,151 @@ class LikeExecutor:
         """
         page = bm.page
 
-        try:
-            page.goto(feed_url, wait_until="domcontentloaded")
-            self._human_delay(3.0, 5.0)
-        except Exception as e:
-            logger.error(f"フィード遷移エラー: {e}")
-            return None  # このフィードをスキップして次へ
+        # 2026-05-28: injection 攻撃対策 - 非 Rakuten ドキュメントナビゲーションをブロック
+        # likeItemRank フィードに埋め込まれた Google リダイレクト JS を阻止する
+        # 2026-05-28 fix2: hostname ベースチェックに変更。
+        # 旧: "rakuten.co.jp" not in url → login.account.rakuten.com (.com ドメイン) を誤 abort する
+        # 新: hostname が .rakuten.co.jp / .rakuten.com で終わる URL のみ許可
+        #     → login.account.rakuten.com / grp01.id.rakuten.co.jp 等 全楽天ドメインを正しく通す
+        from urllib.parse import urlparse as _up
 
-        # 404チェック
-        try:
-            el_404 = page.locator("text=404").first
-            if el_404.is_visible(timeout=1000):
-                logger.error(f"404ページ検出: {page.url}")
-                return None  # このフィードをスキップ
-        except Exception:
-            pass
-
-        # ログインリダイレクトチェック
-        if "grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url:
-            return "ログインページにリダイレクトされました"
-
-        logger.info(f"フィードページ表示: {page.url}")
-        bm.take_screenshot("like_feed_start")
-
-        # AngularJSのレンダリング待機 (失敗してもフィード継続)
-        try:
-            self._wait_for_angular(page)
-        except Exception as _wae:
-            logger.warning(f"angular wait failed (continuing): {str(_wae)[:80]}")
-
-        # スクロールしながらいいねボタンを探す
-        # 2026-05-27: like_history 累積で fresh 不足のため default 8→15 に倍増
-        # (extra_scroll 時 15→20 で深堀り)
-        max_scroll_attempts = 20 if extra_scroll else 15
-        scroll_count = 0
-
-        # 2026-05-27 修正: page closed / context closed エラーで全 abort せず
-        # このフィードだけ skip して次フィードに進む (11 feed の連続巡回耐性向上)
-        while self.liked_count < self.limit and scroll_count < max_scroll_attempts:
-            # 連続失敗チェック
-            if self.consecutive_failures >= config.LIKE_MAX_CONSECUTIVE_FAILURES:
-                return f"{config.LIKE_MAX_CONSECUTIVE_FAILURES}件連続失敗で自動停止"
-
-            # いいねボタンを探す
+        def _block_offsite_nav(route):
+            req = route.request
+            url = req.url
+            # document型 (ページ遷移) かつ非 Rakuten hostname → abort (XHR/fetch等は通す)
+            if req.resource_type == "document" and not url.startswith("about:"):
+                try:
+                    host = (_up(url).hostname or "").lower()
+                except Exception:
+                    host = ""
+                is_rakuten = (host.endswith(".rakuten.co.jp")
+                              or host.endswith(".rakuten.com")
+                              or host == "rakuten.co.jp"
+                              or host == "rakuten.com")
+                if not is_rakuten:
+                    logger.info(f"[nav_block] 非Rakuten遷移をブロック: {url[:80]}")
+                    try:
+                        route.abort()
+                    except Exception:
+                        pass
+                    return
             try:
-                like_result = self._find_and_click_likes(page)
-            except Exception as _fce:
-                em = str(_fce)
-                if "closed" in em.lower() or "Target page" in em:
-                    logger.warning(f"page closed during find_likes (skip feed): {em[:80]}")
-                    return None  # このフィードだけ skip
-                raise
-
-            if like_result == "no_buttons":
-                # ボタンが見つからない → スクロール
-                logger.debug("いいねボタンなし → スクロール")
-            elif like_result == "error":
-                # エラー
+                route.continue_()
+            except Exception:
                 pass
 
-            # ページをスクロール (page closed エラー → feed skip)
-            scroll_count += 1
+        try:
+            page.route("**", _block_offsite_nav)
+        except Exception as _re:
+            logger.debug(f"route setup error (continuing): {_re}")
+
+        # 2026-05-28 fix: route を goto 直後に解除しない。
+        # injection タイマー (setTimeout ~5s) は goto 完了後に発火するため、
+        # try/finally でフィード処理全体が終わるまで route を維持する。
+        # 2026-05-28 fix2: explicit timeout=25000 を page.goto() に付与。
+        # set_default_navigation_timeout(30000) が route との組み合わせで機能しない
+        # ケース (login redirect loop 時) があるため明示的に上限を設ける。
+        try:
             try:
-                page.evaluate("window.scrollBy(0, 600)")
-            except Exception as _se:
-                em = str(_se)
-                if "closed" in em.lower() or "Target page" in em:
-                    logger.warning(f"page closed during scroll (skip feed): {em[:80]}")
-                    return None  # このフィードだけ skip・次へ
-                raise
-            self._human_delay(1.5, 3.0)
+                page.goto(feed_url, wait_until="domcontentloaded", timeout=25000)
+                self._human_delay(3.0, 5.0)
+            except Exception as e:
+                em = str(e)
+                # abort によってナビゲーション例外が出る場合もあるが page は元のURLのまま
+                if "net::ERR_ABORTED" not in em and "navigation" not in em.lower():
+                    logger.error(f"フィード遷移エラー: {e}")
+                    return None  # このフィードをスキップして次へ
+                self._human_delay(1.0, 2.0)  # abort後は少し待つ
 
-            # たまに長めのスクロール待機
-            if scroll_count % 3 == 0:
-                self._human_delay(2.0, 5.0)
+            # 404チェック
+            try:
+                el_404 = page.locator("text=404").first
+                if el_404.is_visible(timeout=1000):
+                    logger.error(f"404ページ検出: {page.url}")
+                    return None  # このフィードをスキップ
+            except Exception:
+                pass
 
-        return None
+            # ログインリダイレクトチェック
+            if "grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url:
+                return "ログインページにリダイレクトされました"
+
+            # 2026-05-28: injection攻撃でGoogleなど非Rakutenページにリダイレクトされる場合がある
+            # route abort が間に合わなかった場合のフォールバック
+            if "room.rakuten.co.jp" not in page.url:
+                logger.warning(f"[injection_guard] 非Rakuten URLにリダイレクト: {page.url[:80]}, フィードをスキップ")
+                try:
+                    page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
+                except Exception:
+                    pass
+                return None  # このフィードをスキップして次へ
+
+            logger.info(f"フィードページ表示: {page.url}")
+            bm.take_screenshot("like_feed_start")
+
+            # AngularJSのレンダリング待機 (失敗してもフィード継続)
+            try:
+                self._wait_for_angular(page)
+            except Exception as _wae:
+                logger.warning(f"angular wait failed (continuing): {str(_wae)[:80]}")
+
+            # スクロールしながらいいねボタンを探す
+            # 2026-05-27: like_history 累積で fresh 不足のため default 8→15 に倍増
+            # (extra_scroll 時 15→20 で深堀り)
+            max_scroll_attempts = 20 if extra_scroll else 15
+            scroll_count = 0
+
+            # 2026-05-27 修正: page closed / context closed エラーで全 abort せず
+            # このフィードだけ skip して次フィードに進む (11 feed の連続巡回耐性向上)
+            while self.liked_count < self.limit and scroll_count < max_scroll_attempts:
+                # 連続失敗チェック
+                if self.consecutive_failures >= config.LIKE_MAX_CONSECUTIVE_FAILURES:
+                    return f"{config.LIKE_MAX_CONSECUTIVE_FAILURES}件連続失敗で自動停止"
+
+                # いいねボタンを探す
+                try:
+                    like_result = self._find_and_click_likes(page)
+                except Exception as _fce:
+                    em = str(_fce)
+                    if ("closed" in em.lower() or "Target page" in em
+                            or "Execution context" in em or "destroyed" in em
+                            or "navigation" in em.lower()):
+                        logger.warning(f"page closed/navigated during find_likes (skip feed): {em[:80]}")
+                        return None  # このフィードだけ skip
+                    raise
+
+                if like_result == "no_buttons":
+                    # ボタンが見つからない → スクロール
+                    logger.debug("いいねボタンなし → スクロール")
+                elif like_result == "error":
+                    # エラー
+                    pass
+
+                # ページをスクロール (page closed エラー → feed skip)
+                scroll_count += 1
+                try:
+                    page.evaluate("window.scrollBy(0, 600)")
+                except Exception as _se:
+                    em = str(_se)
+                    if ("closed" in em.lower() or "Target page" in em
+                            or "Execution context" in em or "destroyed" in em
+                            or "navigation" in em.lower()):
+                        logger.warning(f"page closed/navigated during scroll (skip feed): {em[:80]}")
+                        return None  # このフィードだけ skip・次へ
+                    raise
+                self._human_delay(1.5, 3.0)
+
+                # たまに長めのスクロール待機
+                if scroll_count % 3 == 0:
+                    self._human_delay(2.0, 5.0)
+
+            return None
+        finally:
+            # フィード処理完了後に route を必ず解除
+            try:
+                page.unroute("**", _block_offsite_nav)
+            except Exception:
+                pass
 
     def _wait_for_angular(self, page: Page, timeout: int = 5000) -> None:
         """AngularJSのレンダリング完了を待機"""
@@ -328,7 +444,7 @@ class LikeExecutor:
 
                 logger.info(f"いいねボタン候補: {count}件 ({selector})")
 
-                for i in range(min(count, 20)):  # 最大20件スキャン (2026-05-28 5→20: 50ボタンページで1しか取れなかった問題修正)
+                for i in range(min(count, 50)):  # 最大50件スキャン (2026-05-28 20→50: 40ボタンページで先頭20件が全dedup→1しか取れなかった問題修正)
                     if self.liked_count >= self.limit:
                         return "clicked"
 
