@@ -38,7 +38,8 @@ from logger.logger import setup_logger
 logger = setup_logger()
 
 
-_ITEM_ID_RE = re.compile(r'(?:^|/)items/(\d+)(?:/|$|\?|#|$)')
+# パスセグメント末尾を lookahead で確認 (/items/DIGITS のみ, /items/123abc 除外)
+_ITEM_ID_RE = re.compile(r'(?:^|/)items/(\d+)(?=[/?#]|$)')
 
 
 def _normalize_item_url(url: str) -> str:
