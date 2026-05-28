@@ -222,6 +222,31 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         con.execute("PRAGMA busy_timeout = 5000")
         log.log("[trace] step5: PRAGMA set, now create BrowserManagerV6")
 
+        # 2026-05-28 fix: LIKE/FOLLOW と同時起動 (n=3 Chrome) で bm.is_logged_in() が
+        # VM リソース競合により hang する問題. bm.start() 前に他 runner が ≤1 になるまで待つ.
+        import subprocess as _fb_sp
+        import time as _fb_time
+        _wait_start = _fb_time.time()
+        while _fb_time.time() - _wait_start < 600:  # max 10 min
+            try:
+                _wr = _fb_sp.run(
+                    ["wmic", "process", "where",
+                     "commandline like '%rakuten_room_runner%'",
+                     "get", "ProcessId"],
+                    capture_output=True, text=True, timeout=10
+                )
+                _pids = [_l.strip() for _l in _wr.stdout.splitlines()
+                         if _l.strip().isdigit()]
+                _n = len(_pids)
+                if _n <= 2:  # self + at most 1 other runner → proceed
+                    log.log(f"[fb_wait] runners={_n} → proceed (elapsed={int(_fb_time.time()-_wait_start)}s)")
+                    break
+                log.log(f"[fb_wait] runners={_n} (need ≤2) → wait 30s ...")
+            except Exception as _we:
+                log.log(f"[fb_wait] wmic error={_we} → proceed anyway")
+                break
+            _fb_time.sleep(30)
+
         bm = BrowserManagerV6(action="followback")
         log.log("[trace] step6: BrowserManagerV6 instance created, calling bm.start()...")
         # ── ブラウザ起動 & ログイン確認 ──

@@ -215,17 +215,15 @@ class BrowserManagerV6:
 
         2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に
         Playwright の内部 timeout が発火しない hang を確認.
-          → Step1: cookie なし → 明確に False (navigation 不要).
-          → Step2: cookie あり → concurrent.futures で goto() を Python レベル 10s timeout
-                   で wrap. goto() が hang しても future.result(timeout=10) で確実に抜ける.
+          → Step1: cookie なし → 明確に False (navigation 不要・即時).
+          → Step2: cookie あり → goto() を explicit timeout=10000 で呼ぶ.
+                   通常は正常完了。hang 時は exception → Step3 へ.
           → Step3: navigation 完了 → URL redirect チェック (元の挙動を保持).
-          → Step4: navigation hang/error → cookie あるので True (安全側).
+          → Step4: navigation hang/error → cookie 確認済なので True (安全側).
         2026-05-07 修正:
           - cookie names を OSSO/Im/Re/Rg/Rz/s_user/ODID に拡張
           - login.account.rakuten.com / .id.rakuten.co.jp / .rakuten.co.jp 全 domain を確認
         """
-        import concurrent.futures
-
         try:
             # Step1: cookie チェック (navigation 不要・即時)
             cookies_room = self._ctx.cookies("https://room.rakuten.co.jp")
@@ -238,30 +236,23 @@ class BrowserManagerV6:
             if not has_session:
                 return False  # cookie なし → 明確に未ログイン
 
-            # Step2: cookie あり → navigation で redirect 確認 (Python-level 10s timeout)
-            page = self._page
-
-            def _do_goto():
-                page.goto("https://room.rakuten.co.jp/",
-                          wait_until="domcontentloaded", timeout=8000)
-                return page.url
-
-            url_after = None
+            # Step2: cookie あり → navigation で redirect 確認 (explicit timeout=10000)
+            # Note: Playwright sync API はスレッドセーフでないため threading 使用不可.
+            # 代わりに explicit timeout=10000 + 呼び出し元 (followback_executor_v6) 側で
+            # 他 runner が少ない状態で呼ぶよう wait を設けることで hang を回避する.
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _exe:
-                    _fut = _exe.submit(_do_goto)
-                    url_after = _fut.result(timeout=10)  # Python-level 10s タイムアウト
-            except concurrent.futures.TimeoutError:
-                # goto() が 10s 以上 hang → cookie はあるので True (Step4)
-                logger.warning("[is_logged_in] goto() hang detected (>10s) → trust cookie")
-                return True
+                self._page.goto("https://room.rakuten.co.jp/",
+                                wait_until="domcontentloaded", timeout=10000)
+                self._page.wait_for_timeout(500)
+                url_after = self._page.url
             except Exception:
-                # goto() error → cookie はあるので True として継続
+                # timeout / browser error → cookie 確認済なので True (Step4)
+                logger.warning("[is_logged_in] goto() failed/timeout → trust cookie (has_session=True)")
                 return True
 
             # Step3: URL redirect チェック (元の挙動を保持)
             # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
-            if url_after and ("grp01.id.rakuten.co.jp" in url_after or "/nid/" in url_after) \
+            if ("grp01.id.rakuten.co.jp" in url_after or "/nid/" in url_after) \
                     and "session/upgrade" not in url_after:
                 return False  # login redirect → 未ログイン
             return True
