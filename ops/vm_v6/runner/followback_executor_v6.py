@@ -61,9 +61,10 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                   wait_until="domcontentloaded", timeout=30000)
         page.wait_for_timeout(4000)
 
-        if "grp01.id.rakuten.co.jp" in page.url or "login" in page.url:
-            log.log("[scan_followers] not logged in → skip")
-            return 0
+        if ("grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url) \
+                and "session/upgrade" not in page.url:
+            log.log("[scan_followers] login redirect detected → session expired")
+            return -1  # sentinel: login_expired (caller checks for -1)
 
         # 自分の user_id (URL から取得して除外する)
         my_user_id: str | None = None
@@ -222,31 +223,6 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         con.execute("PRAGMA busy_timeout = 5000")
         log.log("[trace] step5: PRAGMA set, now create BrowserManagerV6")
 
-        # 2026-05-28 fix: LIKE/FOLLOW と同時起動 (n=3 Chrome) で bm.is_logged_in() が
-        # VM リソース競合により hang する問題. bm.start() 前に他 runner が ≤1 になるまで待つ.
-        import subprocess as _fb_sp
-        import time as _fb_time
-        _wait_start = _fb_time.time()
-        while _fb_time.time() - _wait_start < 600:  # max 10 min
-            try:
-                _wr = _fb_sp.run(
-                    ["wmic", "process", "where",
-                     "commandline like '%rakuten_room_runner%'",
-                     "get", "ProcessId"],
-                    capture_output=True, text=True, timeout=10
-                )
-                _pids = [_l.strip() for _l in _wr.stdout.splitlines()
-                         if _l.strip().isdigit()]
-                _n = len(_pids)
-                if _n <= 2:  # self + at most 1 other runner → proceed
-                    log.log(f"[fb_wait] runners={_n} → proceed (elapsed={int(_fb_time.time()-_wait_start)}s)")
-                    break
-                log.log(f"[fb_wait] runners={_n} (need ≤2) → wait 30s ...")
-            except Exception as _we:
-                log.log(f"[fb_wait] wmic error={_we} → proceed anyway")
-                break
-            _fb_time.sleep(30)
-
         bm = BrowserManagerV6(action="followback")
         log.log("[trace] step6: BrowserManagerV6 instance created, calling bm.start()...")
         # ── ブラウザ起動 & ログイン確認 ──
@@ -280,6 +256,10 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
             hb.write(phase="pool_scan")
             inserted = _scan_my_followers(page, con, log, scan_limit=400)
             log.log(f"[pool_refresh] inserted={inserted} new pending candidates")
+            if inserted == -1:
+                # _scan_my_followers が login redirect を検出 → session expired
+                result["stop_reason"] = "login_expired"
+                return result
             if inserted > 0:
                 rows = con.execute(
                     "SELECT id, follower_user_id, follower_username FROM followback_queue "

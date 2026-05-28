@@ -211,52 +211,31 @@ class BrowserManagerV6:
         return self._page
 
     def is_logged_in(self) -> bool:
-        """楽天 ROOM のログイン確認 (cookie 先行 + navigation 検証・hang 耐性).
+        """楽天 ROOM のログイン確認 (cookie ベース・navigation なし).
 
         2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に
-        Playwright の内部 timeout が発火しない hang を確認.
-          → Step1: cookie なし → 明確に False (navigation 不要・即時).
-          → Step2: cookie あり → goto() を explicit timeout=10000 で呼ぶ.
-                   通常は正常完了。hang 時は exception → Step3 へ.
-          → Step3: navigation 完了 → URL redirect チェック (元の挙動を保持).
-          → Step4: navigation hang/error → cookie 確認済なので True (安全側).
+        Playwright 内部 timeout が発火しない hang を確認.
+        → page.goto() を完全に排除し cookie のみで判定 (instant・hang 回避).
+
+        設計根拠:
+        - persistent context は明示的 logout かつ cookie 削除が無い限り session cookie を保持.
+        - cookie が server-side で expire した場合は呼び出し元の最初の goto()
+          (例: FOLLOW → followers ページ, FB → /my/followers) で login redirect が
+          発生し、各 executor が URL チェックで検出・abort する設計にする.
+        - is_logged_in() で goto() を行う必要はない: 「ブラウザが起動し cookie がある」
+          = 「操作を試みる価値あり」と判断するだけで十分.
         2026-05-07 修正:
           - cookie names を OSSO/Im/Re/Rg/Rz/s_user/ODID に拡張
           - login.account.rakuten.com / .id.rakuten.co.jp / .rakuten.co.jp 全 domain を確認
         """
         try:
-            # Step1: cookie チェック (navigation 不要・即時)
             cookies_room = self._ctx.cookies("https://room.rakuten.co.jp")
             cookies_login = self._ctx.cookies("https://login.account.rakuten.com")
             cookies_id = self._ctx.cookies("https://id.rakuten.co.jp")
             cookies_rakuten = self._ctx.cookies("https://www.rakuten.co.jp")
             all_cookies = cookies_room + cookies_login + cookies_id + cookies_rakuten
             cookie_names = {c["name"] for c in all_cookies}
-            has_session = any(n in cookie_names for n in SESSION_COOKIE_NAMES)
-            if not has_session:
-                return False  # cookie なし → 明確に未ログイン
-
-            # Step2: cookie あり → navigation で redirect 確認 (explicit timeout=10000)
-            # Note: Playwright sync API はスレッドセーフでないため threading 使用不可.
-            # 代わりに explicit timeout=10000 + 呼び出し元 (followback_executor_v6) 側で
-            # 他 runner が少ない状態で呼ぶよう wait を設けることで hang を回避する.
-            try:
-                self._page.goto("https://room.rakuten.co.jp/",
-                                wait_until="domcontentloaded", timeout=10000)
-                self._page.wait_for_timeout(500)
-                url_after = self._page.url
-            except Exception:
-                # timeout / browser error → cookie 確認済なので True (Step4)
-                logger.warning("[is_logged_in] goto() failed/timeout → trust cookie (has_session=True)")
-                return True
-
-            # Step3: URL redirect チェック (元の挙動を保持)
-            # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
-            if ("grp01.id.rakuten.co.jp" in url_after or "/nid/" in url_after) \
-                    and "session/upgrade" not in url_after:
-                return False  # login redirect → 未ログイン
-            return True
-
+            return any(n in cookie_names for n in SESSION_COOKIE_NAMES)
         except Exception:
             return False
 
