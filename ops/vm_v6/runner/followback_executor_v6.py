@@ -260,13 +260,23 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     wait_until="networkidle", timeout=30000
                 )
                 page.wait_for_timeout(5000)
-                # Guard: verify not redirected to login before scanning
+                # Guard: broad login-redirect check (grp01/rlogin/nid/auth/oauth)
                 _fb_url = page.url
-                if (("grp01.id.rakuten.co.jp" in _fb_url
-                        or "/nid/" in _fb_url
-                        or "login.account.rakuten.com" in _fb_url)
-                        and "session/upgrade" not in _fb_url):
-                    log.log(f"[scan_followers] fallback login redirect ({_fb_url[:80]}) → skip")
+                _fb_login = (
+                    ("grp01.id.rakuten.co.jp" in _fb_url
+                     or "rlogin.rakuten.co.jp" in _fb_url
+                     or "/nid/" in _fb_url
+                     or "login.account.rakuten." in _fb_url
+                     or "/auth/" in _fb_url
+                     or "/oauth/" in _fb_url)
+                    and "session/upgrade" not in _fb_url
+                )
+                if _fb_login:
+                    log.log(f"[scan_followers] fallback login redirect → login_expired")
+                    return -1  # propagate as login_expired (same sentinel as main flow)
+                # Verify we landed on the expected followers page
+                if my_user_id not in _fb_url and "followers" not in _fb_url:
+                    log.log(f"[scan_followers] fallback unexpected URL → skip scan")
                 else:
                     try:
                         page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
@@ -274,7 +284,7 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                         pass
                     fb_js_users = page.evaluate(_JS_SCAN, _OWN_ID)
                     fb_hrefs = page.evaluate(_JS_NON_SELF_HREFS, _OWN_ID)
-                    log.log(f"[scan_followers] fallback: url={_fb_url[:60]} js_users={len(fb_js_users)} hrefs={fb_hrefs[:5]}")
+                    log.log(f"[scan_followers] fallback: js_users={len(fb_js_users)} hrefs_count={len(fb_hrefs)} sample={fb_hrefs[:5]}")
                     for item in fb_js_users:
                         seg = (item.get("uid") or "").strip()
                         uname = (item.get("name") or seg)[:60]
