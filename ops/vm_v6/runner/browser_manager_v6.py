@@ -211,94 +211,29 @@ class BrowserManagerV6:
         return self._page
 
     def is_logged_in(self) -> bool:
-        """楽天 ROOM のログイン確認 (cookie 先行 + goto() 12s PID-kill watchdog).
+        """楽天 ROOM のログイン確認 (cookie ベース・navigation なし).
 
         2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に
-        Playwright 内部 timeout が発火しない hang を確認 (trace log で step9 ≥2 分 hang 確定).
+        Playwright 内部 timeout が発火しない hang を確認.
+        → page.goto() を完全に排除し cookie のみで判定 (instant・hang 回避).
 
-        対処方針 (Codex option-b 相当):
-          Step1: cookie なし → 即 False (navigation 不要).
-          Step2: cookie あり → goto() を explicit timeout=10000 で呼ぶ.
-                  + daemon thread が 12s 後に Chrome PID を taskkill (subprocess のみ, Playwright API 非使用).
-                  Chrome kill → goto() が pipe error で raise → except で捕捉 → False return
-                  (conservative: 次 trigger で新規 Chrome から clean start する).
-          Step3: navigation 成功 → URL redirect チェック (元の挙動を保持).
-
+        設計根拠:
+        - persistent context は明示的 logout + cookie 削除が無い限り session cookie を保持.
+        - server-side session expiry → 呼び出し元の最初の goto() で login redirect 発生.
+          各 executor が URL チェックで検出・abort する設計.
+        - セッション全体の hang は executor 側の session_watchdog (os._exit) で保護.
         2026-05-07 修正:
           - cookie names を OSSO/Im/Re/Rg/Rz/s_user/ODID に拡張
           - login.account.rakuten.com / .id.rakuten.co.jp / .rakuten.co.jp 全 domain を確認
         """
-        import threading as _thr
-
         try:
-            # Step1: cookie 先行チェック (navigation 不要・instant)
             cookies_room = self._ctx.cookies("https://room.rakuten.co.jp")
             cookies_login = self._ctx.cookies("https://login.account.rakuten.com")
             cookies_id = self._ctx.cookies("https://id.rakuten.co.jp")
             cookies_rakuten = self._ctx.cookies("https://www.rakuten.co.jp")
             all_cookies = cookies_room + cookies_login + cookies_id + cookies_rakuten
             cookie_names = {c["name"] for c in all_cookies}
-            has_session = any(n in cookie_names for n in SESSION_COOKIE_NAMES)
-            if not has_session:
-                return False  # cookie なし → 明確に未ログイン
-
-            # Step2: cookie あり → goto() で redirect 確認 (PID-kill watchdog 付き)
-            # プロファイル名でこの Chrome instance の PID を取得
-            _chrome_pid = 0
-            try:
-                _rp = subprocess.run(
-                    ["wmic", "process", "where",
-                     f"name='chrome.exe' and commandline like '%{self.profile.name}%'",
-                     "get", "ProcessId"],
-                    capture_output=True, text=True, timeout=5
-                )
-                _pid_lines = [_l.strip() for _l in _rp.stdout.splitlines()
-                              if _l.strip().isdigit()]
-                if _pid_lines:
-                    _chrome_pid = int(_pid_lines[0])
-            except Exception:
-                pass  # PID 取得失敗 → watchdog は kill しない (goto timeout で抜ける)
-
-            _goto_done = _thr.Event()
-
-            def _pid_watchdog():
-                """goto() が 12s 以上 hang した場合に Chrome PID を kill."""
-                if not _goto_done.wait(12) and _chrome_pid:
-                    try:
-                        subprocess.run(["taskkill", "/F", "/PID", str(_chrome_pid)],
-                                       capture_output=True, timeout=5)
-                        logger.warning(
-                            f"[is_logged_in] watchdog: killed chrome pid={_chrome_pid}"
-                            f" (goto hang >12s)")
-                    except Exception:
-                        pass
-
-            _wt = _thr.Thread(target=_pid_watchdog, daemon=True)
-            _wt.start()
-
-            url_after = None
-            try:
-                self._page.goto("https://room.rakuten.co.jp/",
-                                wait_until="domcontentloaded", timeout=10000)
-                url_after = self._page.url
-            except Exception as _ge:
-                logger.warning(f"[is_logged_in] goto() failed: {_ge!s:.80}")
-            finally:
-                _goto_done.set()  # watchdog キャンセル (完了済 / 例外済)
-
-            if url_after is None:
-                # goto() hang/kill → 次 trigger で clean restart させる → False
-                return False
-
-            # Step3: URL redirect チェック (元の挙動を保持)
-            # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
-            if ("grp01.id.rakuten.co.jp" in url_after
-                    or "/nid/" in url_after
-                    or "login.account.rakuten.com/session" in url_after) \
-                    and "session/upgrade" not in url_after:
-                return False  # login redirect → 未ログイン
-            return True
-
+            return any(n in cookie_names for n in SESSION_COOKIE_NAMES)
         except Exception:
             return False
 

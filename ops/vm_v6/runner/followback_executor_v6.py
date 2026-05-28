@@ -207,6 +207,24 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
     log.log(f"=== FOLLOWBACK executor v6 start: limit={limit} ===")
     hb.write(phase="startup", force=True)
 
+    # 2026-05-28 fix: セッション全体の hang (is_logged_in/goto hang 含む) を
+    # 最大 7 分で強制終了する watchdog. os._exit(1) でプロセス強制終了 →
+    # 次 trigger (30 分後) で clean start. is_logged_in() の goto hang が
+    # Playwright timeout を無視して 2 分+ 続く問題への構造的対策.
+    import threading as _fb_thr
+    import os as _fb_os
+    _session_done = _fb_thr.Event()
+    def _session_watchdog():
+        if not _session_done.wait(420):  # 7 min
+            try:
+                log.log("[WATCHDOG] session timeout >7min → os._exit(1)")
+                hb.write(phase="watchdog_timeout", force=True)
+            except Exception:
+                pass
+            _fb_os._exit(1)
+    _wt = _fb_thr.Thread(target=_session_watchdog, daemon=True)
+    _wt.start()
+
     # 2026-05-24: VM-native FB executor (HOST followback_rpa を回避)
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
     hb.write(phase="startup", force=True)
@@ -411,5 +429,6 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
             pass
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         log.log(f"=== FOLLOWBACK executor v6 end: {result} ===")
+        _session_done.set()  # session watchdog キャンセル (正常完了)
 
     return result
