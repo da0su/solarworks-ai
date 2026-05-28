@@ -22,6 +22,7 @@ v6.1: 診断結果(2026-03-16)に基づくDOM対応
 
 import json
 import random
+import re
 import sys
 import time
 from datetime import datetime
@@ -35,6 +36,24 @@ from executor.browser_manager import BrowserManager
 from logger.logger import setup_logger
 
 logger = setup_logger()
+
+
+_ITEM_ID_RE = re.compile(r'/items/(\d+)')
+
+
+def _normalize_item_url(url: str) -> str:
+    """URL から item_id を抽出して正規化する.
+
+    2026-05-28 バグ修正: /room_XXXXX/items/1700379 と /room_YYYYY/items/1700379 は
+    同じアイテムだが URL 文字列が異なるため liked_urls の dedup が機能していなかった。
+    → numeric item_id を抽出して 'items/{id}' 形式に正規化。
+    """
+    if not url:
+        return url
+    m = _ITEM_ID_RE.search(url)
+    if m:
+        return f"items/{m.group(1)}"
+    return url
 
 
 class LikeExecutor:
@@ -68,7 +87,8 @@ class LikeExecutor:
                     if ts > cutoff:
                         url = entry.get("url", "")
                         if url:
-                            self.liked_urls.add(url)
+                            # 2026-05-28 fix: URL 正規化 (item_id ベース dedup)
+                            self.liked_urls.add(_normalize_item_url(url))
                 logger.info(f"いいね履歴: {len(self.liked_urls)}件（直近7日）")
             except Exception as e:
                 logger.warning(f"いいね履歴読み込みエラー: {e}")
@@ -315,9 +335,11 @@ class LikeExecutor:
 
                         # ボタンの親要素のURLを取得（重複チェック用）
                         item_url = self._get_item_url_near(page, btn)
-                        if item_url and item_url in self.liked_urls:
+                        # 2026-05-28 fix: item_url を正規化 (item_id ベース dedup)
+                        item_url_key = _normalize_item_url(item_url) if item_url else ""
+                        if item_url_key and item_url_key in self.liked_urls:
                             self.skipped_count += 1
-                            logger.debug(f"スキップ（いいね済み）: {item_url[:50]}")
+                            logger.debug(f"スキップ（いいね済み）: {item_url_key}")
                             continue
 
                         # クリック前のURL記録（404遷移検出用）
@@ -370,7 +392,8 @@ class LikeExecutor:
                         clicked_any = True
 
                         if item_url:
-                            self.liked_urls.add(item_url)
+                            # 2026-05-28 fix: 正規化キーで追加 (dedup 整合)
+                            self.liked_urls.add(item_url_key or _normalize_item_url(item_url))
                             self._save_history_entry(item_url)
 
                         logger.info(
