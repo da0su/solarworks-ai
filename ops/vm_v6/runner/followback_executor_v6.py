@@ -276,14 +276,13 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                 _fb_p = _urlparse(_fb_url)
                 _fb_host = (_fb_p.hostname or "").lower()
                 _fb_path = _fb_p.path.lower()
-                _fb_query = (_fb_p.query or "").lower()
                 # Login: known Rakuten login hostnames OR /nid/ in path;
-                # exclude session/upgrade in BOTH path and query
+                # session/upgrade excluded from path only (it's an in-session page,
+                # same logic as main flow at line ~65)
                 _fb_login = (
                     (_fb_host in _RAKUTEN_LOGIN_HOSTS
                      or "/nid/" in _fb_path)
                     and "session/upgrade" not in _fb_path
-                    and "session/upgrade" not in _fb_query
                 )
                 # Path adjacency check: any(.../{uid}/followers...) using all occurrences
                 _segs = [s for s in _fb_path.strip("/").split("/") if s]
