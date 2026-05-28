@@ -206,19 +206,27 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
     # 2026-05-24: VM-native FB executor (HOST followback_rpa を回避)
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
     hb.write(phase="startup", force=True)
-    bm = BrowserManagerV6(action="followback")
-    con = None  # 例外パスでも finally で close できるよう初期化
-
+    # 2026-05-28 debug: hang 真因究明のため各 step を log で trace
+    log.log("[trace] step1: import sqlite3 + db_path check")
+    con = None
+    bm = None  # finally の bm.stop() で NameError 防止
     try:
         import sqlite3
         db_path = Path(r"\\vboxsvr\bot\data\room_bot_v5.db")
+        log.log(f"[trace] step2: db_path.exists() = ?")
         if not db_path.exists():
             db_path = Path(r"\\vboxsvr\vm_data\room_bot_v5.db")
+        log.log(f"[trace] step3: db_path={db_path}")
         con = sqlite3.connect(str(db_path), timeout=10)
+        log.log("[trace] step4: sqlite3 connected")
         con.execute("PRAGMA busy_timeout = 5000")
+        log.log("[trace] step5: PRAGMA set, now create BrowserManagerV6")
 
+        bm = BrowserManagerV6(action="followback")
+        log.log("[trace] step6: BrowserManagerV6 instance created, calling bm.start()...")
         # ── ブラウザ起動 & ログイン確認 ──
         bm.start()
+        log.log("[trace] step7: bm.start() returned")
         hb.write(phase="login_check")
         if not bm.is_logged_in():
             log.log("[ABORT] not logged in")
@@ -383,7 +391,8 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         except Exception:
             pass
         try:
-            bm.stop()
+            if bm:
+                bm.stop()
         except Exception:
             pass
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
