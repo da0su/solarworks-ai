@@ -12,6 +12,7 @@ import re as _re
 import sys
 from datetime import datetime as _dt
 from pathlib import Path
+from urllib.parse import urlparse as _urlparse
 
 from .shared_logic import HeartbeatPusher, SessionLogger, emergency_disk_cleanup_once
 from .browser_manager_v6 import BrowserManagerV6
@@ -260,39 +261,33 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     wait_until="networkidle", timeout=30000
                 )
                 page.wait_for_timeout(5000)
-                # Guard: login-redirect check via urlparse netloc/path (not whole-URL substring)
+                # Guard: login-redirect check via urlparse (module-level import)
                 _fb_url = page.url
                 _fb_login = False
                 _fb_path_ok = False
+                _fb_p = _urlparse(_fb_url)
+                _fb_host = (_fb_p.hostname or "").lower()
+                _fb_path = _fb_p.path.lower()
+                # Login: known Rakuten login hostnames OR /nid/ in path; exclude session/upgrade
+                _LOGIN_HOSTS = {"grp01.id.rakuten.co.jp", "rlogin.rakuten.co.jp",
+                                "login.account.rakuten.co.jp", "login.account.rakuten.com"}
+                _fb_login = (
+                    (_fb_host in _LOGIN_HOSTS
+                     or "/nid/" in _fb_path)
+                    and "session/upgrade" not in _fb_path
+                )
+                # Path adjacency check: /{my_user_id}/followers (adjacent segments)
+                _segs = [s for s in _fb_path.strip("/").split("/") if s]
+                _uid_lc = my_user_id.lower()
                 try:
-                    from urllib.parse import urlparse as _urlparse
-                    _fb_p = _urlparse(_fb_url)
-                    _fb_host = _fb_p.hostname or ""
-                    _fb_path = _fb_p.path.lower()
-                    _fb_login = (
-                        (_fb_host in {"grp01.id.rakuten.co.jp", "rlogin.rakuten.co.jp"}
-                         or _fb_host.startswith("login.account.rakuten.")
-                         or "/nid/" in _fb_path)
-                        and "session/upgrade" not in _fb_path
-                    )
-                    _fb_path_ok = (
-                        my_user_id.lower() in _fb_path
-                        and "/followers" in _fb_path
-                    )
-                except Exception as _pe:
-                    log.log(f"[scan_followers] urlparse error: {_pe}")
-                    _lo = _fb_url.lower()
-                    _fb_login = (
-                        "grp01.id.rakuten.co.jp" in _lo
-                        or "rlogin.rakuten.co.jp" in _lo
-                        or "login.account.rakuten." in _lo
-                        or "/nid/" in _lo
-                    ) and "session/upgrade" not in _lo
-                    _fb_path_ok = my_user_id.lower() in _lo and "followers" in _lo
+                    _idx = _segs.index(_uid_lc)
+                    _fb_path_ok = len(_segs) > _idx + 1 and _segs[_idx + 1] == "followers"
+                except ValueError:
+                    _fb_path_ok = False
                 if _fb_login:
                     log.log("[scan_followers] fallback login redirect → login_expired")
                     return -1  # propagate as login_expired (same sentinel as main flow)
-                # Strict path check: /{my_user_id}/followers must appear in path
+                # Strict path check: /{my_user_id}/followers adjacent segments
                 # my_user_id is non-None (guaranteed by outer if-guard)
                 if not _fb_path_ok:
                     log.log(f"[scan_followers] fallback URL mismatch → skip (url={_fb_url[:80]})")
