@@ -168,20 +168,25 @@ class LikeExecutor:
             # 新: new URL().hostname.endsWith('.rakuten.co.jp'|'.rakuten.com') で全楽天 hostname を許可。
             _REDIRECT_BLOCK_JS = """
 ;(() => {
+  if (window._ROOM_BOT_GUARD_INSTALLED) return;  // idempotent: run once per page
+  var _ok = false;
   try {
-    if (window._ROOM_BOT_GUARD_INSTALLED) return;  // idempotent
-    window._ROOM_BOT_GUARD_INSTALLED = true;
     var _isAllowed = function(u) {
         if (!u) return true;
         var s = String(u);
-        if (s.startsWith('/') || s.startsWith('#') || s.startsWith('about:') || s.startsWith('javascript:')) return true;
+        // 相対 URL・フラグメント・安全スキームは許可
+        if (s.startsWith('/') || s.startsWith('#') || s.startsWith('about:')) return true;
+        // javascript: は常にブロック (XSS 対策)
+        if (s.startsWith('javascript:')) return false;
         try {
-            var h = new URL(s).hostname.toLowerCase();
+            var h = new URL(s, location.href).hostname.toLowerCase();
+            // hostname が空 = data:/blob:/file: 等 → ブロック
+            if (!h) return false;
             return h.endsWith('.rakuten.co.jp') || h.endsWith('.rakuten.com')
                    || h === 'rakuten.co.jp' || h === 'rakuten.com';
         } catch(e) {
-            // fallback for relative/invalid URLs
-            return s.indexOf('rakuten.co.jp') !== -1 || s.indexOf('rakuten.com') !== -1;
+            // URL パースエラー → 安全側でブロック
+            return false;
         }
     };
     // Override Location.prototype.href setter
@@ -208,8 +213,10 @@ class LikeExecutor:
         if (_isAllowed(url)) { return _or.call(this, url); }
         console.log('[ROOM_BOT_BLOCK] replace blocked: ' + String(url).substring(0,80));
     };
+    _ok = true;
     console.log('[ROOM_BOT_BLOCK] redirect guard active');
   } catch(e) { console.log('[ROOM_BOT_BLOCK] setup error: ' + e); }
+  finally { window._ROOM_BOT_GUARD_INSTALLED = _ok; }  // 全フック成功時のみ true
 })();
 """
             try:
@@ -331,10 +338,15 @@ class LikeExecutor:
             try:
                 from urllib.parse import urlparse as _up2
                 _h = (_up2(_cu).hostname or "").lower()
-                _is_rk = (_h.endswith(".rakuten.co.jp") or _h.endswith(".rakuten.com")
-                          or _h == "rakuten.co.jp" or _h == "rakuten.com" or not _h)
+                # 空 hostname (data:/blob:/file: 等) は injection 扱い
+                _is_rk = bool(_h) and (_h.endswith(".rakuten.co.jp") or _h.endswith(".rakuten.com")
+                                       or _h == "rakuten.co.jp" or _h == "rakuten.com")
+                # about:blank は空 hostname だが正常 → 空文字の場合は about: も許可
+                if not _h:
+                    _is_rk = _cu.startswith("about:") or not _cu
             except Exception:
-                _is_rk = "rakuten" in _cu.lower()
+                # パース失敗 → 安全側でブロック
+                _is_rk = False
             if not _is_rk:
                 logger.warning(f"[injection_guard] 非Rakuten URLにリダイレクト: {_cu[:80]}, フィードをスキップ")
                 try:
