@@ -58,12 +58,15 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
     """
     try:
         page.goto("https://room.rakuten.co.jp/my/followers",
-                  wait_until="domcontentloaded", timeout=30000)
-        page.wait_for_timeout(4000)
+                  wait_until="domcontentloaded", timeout=20000)
+        page.wait_for_timeout(3000)
 
-        if ("grp01.id.rakuten.co.jp" in page.url or "/nid/" in page.url) \
-                and "session/upgrade" not in page.url:
-            log.log("[scan_followers] login redirect detected → session expired")
+        _url = page.url
+        if ("grp01.id.rakuten.co.jp" in _url
+                or "/nid/" in _url
+                or "login.account.rakuten.com" in _url) \
+                and "session/upgrade" not in _url:
+            log.log(f"[scan_followers] login redirect detected ({_url[:80]}) → session expired")
             return -1  # sentinel: login_expired (caller checks for -1)
 
         # 自分の user_id (URL から取得して除外する)
