@@ -14,6 +14,14 @@ from datetime import datetime as _dt
 from pathlib import Path
 from urllib.parse import urlparse as _urlparse
 
+# Known Rakuten login hostnames (module-level constant for reuse)
+_RAKUTEN_LOGIN_HOSTS = frozenset({
+    "grp01.id.rakuten.co.jp",
+    "rlogin.rakuten.co.jp",
+    "login.account.rakuten.co.jp",
+    "login.account.rakuten.com",
+})
+
 from .shared_logic import HeartbeatPusher, SessionLogger, emergency_disk_cleanup_once
 from .browser_manager_v6 import BrowserManagerV6
 
@@ -268,22 +276,22 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                 _fb_p = _urlparse(_fb_url)
                 _fb_host = (_fb_p.hostname or "").lower()
                 _fb_path = _fb_p.path.lower()
-                # Login: known Rakuten login hostnames OR /nid/ in path; exclude session/upgrade
-                _LOGIN_HOSTS = {"grp01.id.rakuten.co.jp", "rlogin.rakuten.co.jp",
-                                "login.account.rakuten.co.jp", "login.account.rakuten.com"}
+                _fb_query = (_fb_p.query or "").lower()
+                # Login: known Rakuten login hostnames OR /nid/ in path;
+                # exclude session/upgrade in BOTH path and query
                 _fb_login = (
-                    (_fb_host in _LOGIN_HOSTS
+                    (_fb_host in _RAKUTEN_LOGIN_HOSTS
                      or "/nid/" in _fb_path)
                     and "session/upgrade" not in _fb_path
+                    and "session/upgrade" not in _fb_query
                 )
-                # Path adjacency check: /{my_user_id}/followers (adjacent segments)
+                # Path adjacency check: any(.../{uid}/followers...) using all occurrences
                 _segs = [s for s in _fb_path.strip("/").split("/") if s]
                 _uid_lc = my_user_id.lower()
-                try:
-                    _idx = _segs.index(_uid_lc)
-                    _fb_path_ok = len(_segs) > _idx + 1 and _segs[_idx + 1] == "followers"
-                except ValueError:
-                    _fb_path_ok = False
+                _fb_path_ok = any(
+                    _segs[i] == _uid_lc and i + 1 < len(_segs) and _segs[i + 1] == "followers"
+                    for i in range(len(_segs))
+                )
                 if _fb_login:
                     log.log("[scan_followers] fallback login redirect → login_expired")
                     return -1  # propagate as login_expired (same sentinel as main flow)
