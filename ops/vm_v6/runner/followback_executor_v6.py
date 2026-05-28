@@ -58,6 +58,25 @@ _RESERVED_SEGMENTS = {
 }
 
 
+def _is_login_redirect(url: str) -> bool:
+    """Return True if url is a Rakuten login redirect (session expired).
+
+    Shared by main flow and fallback URL check.
+    session/upgrade is excluded (it's an in-session page, not a full logout).
+    """
+    try:
+        _p = _urlparse(url)
+        _host = (_p.hostname or "").lower()
+        _path = _p.path.lower()
+    except Exception:
+        _host = ""
+        _path = url.lower()
+    return (
+        (_host in _RAKUTEN_LOGIN_HOSTS or "/nid/" in _path)
+        and "session/upgrade" not in _path
+    )
+
+
 def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> int:
     """bm.page を使って /my/followers をスキャンし followback_queue に pending INSERT.
 
@@ -71,10 +90,7 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         page.wait_for_timeout(5000)
 
         _url = page.url
-        if ("grp01.id.rakuten.co.jp" in _url
-                or "/nid/" in _url
-                or "login.account.rakuten.com" in _url) \
-                and "session/upgrade" not in _url:
+        if _is_login_redirect(_url):
             log.log(f"[scan_followers] login redirect detected ({_url[:80]}) → session expired")
             return -1  # sentinel: login_expired (caller checks for -1)
 
@@ -269,33 +285,23 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     wait_until="networkidle", timeout=30000
                 )
                 page.wait_for_timeout(5000)
-                # Guard: login-redirect check via urlparse (module-level import)
+                # Guard: shared helper (same logic as main-flow login check)
                 _fb_url = page.url
-                _fb_login = False
-                _fb_path_ok = False
-                _fb_p = _urlparse(_fb_url)
-                _fb_host = (_fb_p.hostname or "").lower()
-                _fb_path = _fb_p.path.lower()
-                # Login: known Rakuten login hostnames OR /nid/ in path;
-                # session/upgrade excluded from path only (it's an in-session page,
-                # same logic as main flow at line ~65)
-                _fb_login = (
-                    (_fb_host in _RAKUTEN_LOGIN_HOSTS
-                     or "/nid/" in _fb_path)
-                    and "session/upgrade" not in _fb_path
-                )
-                # Path adjacency check: any(.../{uid}/followers...) using all occurrences
+                if _is_login_redirect(_fb_url):
+                    log.log("[scan_followers] fallback login redirect → login_expired")
+                    return -1  # propagate as login_expired (same sentinel as main flow)
+                # Path adjacency check: /{my_user_id}/followers (adjacent segments)
+                # my_user_id is non-None (guaranteed by outer if-guard)
+                try:
+                    _fb_path = _urlparse(_fb_url).path.lower()
+                except Exception:
+                    _fb_path = _fb_url.lower()
                 _segs = [s for s in _fb_path.strip("/").split("/") if s]
                 _uid_lc = my_user_id.lower()
                 _fb_path_ok = any(
                     _segs[i] == _uid_lc and i + 1 < len(_segs) and _segs[i + 1] == "followers"
                     for i in range(len(_segs))
                 )
-                if _fb_login:
-                    log.log("[scan_followers] fallback login redirect → login_expired")
-                    return -1  # propagate as login_expired (same sentinel as main flow)
-                # Strict path check: /{my_user_id}/followers adjacent segments
-                # my_user_id is non-None (guaranteed by outer if-guard)
                 if not _fb_path_ok:
                     log.log(f"[scan_followers] fallback URL mismatch → skip (url={_fb_url[:80]})")
                 else:
