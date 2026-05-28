@@ -58,8 +58,8 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
     """
     try:
         page.goto("https://room.rakuten.co.jp/my/followers",
-                  wait_until="domcontentloaded", timeout=20000)
-        page.wait_for_timeout(3000)
+                  wait_until="networkidle", timeout=30000)
+        page.wait_for_timeout(5000)
 
         _url = page.url
         if ("grp01.id.rakuten.co.jp" in _url
@@ -106,63 +106,181 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         if my_user_id:
             skip_set.add(my_user_id)
             log.log(f"[scan_followers] my_user_id={my_user_id} (self-exclude)")
+        log.log(f"[scan_followers] skip_set={len(skip_set)} (queued={len(already_queued)} following={len(already_following)})")
 
         collected: list[dict] = []
         seen: set[str] = set()
         last_h = 0
         stuck = 0
 
-        for scroll_i in range(60):
-            # 2026-05-26: 全 anchor を見て /SEG/items パターンを抽出
-            anchors = page.query_selector_all('a[href*="/items"]')
-            for a in anchors:
-                href = (a.get_attribute("href") or "").strip()
-                if not href.startswith("/") or "/items" not in href:
-                    continue
-                # /SEG/items または /SEG/items?xxx
-                parts = href.lstrip("/").split("/")
-                if not parts:
-                    continue
-                seg = parts[0].split("?")[0]
-                if not seg or seg in _RESERVED_SEGMENTS:
-                    continue
-                # match either /room_XXX/ or /USERNAME/
-                if not (_ROOM_ID_RE.match(seg) or _CUSTOM_USERNAME_RE.match(seg)):
-                    continue
-                if seg in seen:
+        # Wait for follower list DOM content to appear before scanning
+        try:
+            page.wait_for_selector(
+                'a[href$="/items"], a[href^="/room_"], [class*="follower"], [class*="Follower"]',
+                timeout=8000
+            )
+        except Exception:
+            log.log("[scan_followers] wait_for_selector timeout (proceeding anyway)")
+
+        _OWN_ID = my_user_id or ""  # exclude own profile from JS scan
+        # 2026-05-28 fix: extend to capture custom usernames (non-room_ prefix)
+        # Rakuten ROOM follower cards link to /username/items OR /room_xxx/items.
+        # Old code only matched ROOM_ID_RE (/^room_/) → missed all custom-username followers.
+        # Fix: allowCustom=true when href matches /seg/items (profile link pattern).
+        _JS_SCAN = """
+            (own_id) => {
+                const ROOM_ID_RE = /^room_[a-z0-9_.]{4,40}$|^room_[0-9a-f]{8,}$/;
+                const CUSTOM_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.\-]{2,39}$/;
+                const RESERVED = new Set(['my','items','discover','timeline','u','user','users',
+                    'rebates','search','static','ranking','trends','footer','header','help',
+                    'login','logout','signin','signup','tag','category','categories','feed',
+                    'topic','topics','official','campaign','campaigns','about','contact',
+                    'terms','privacy','ad','ads','api','https:','http:','1700','nid',
+                    'auth','session','account','register','settings','notification','notifications',
+                    'followers','following','likes','liked','posts','favorites','ranking']);
+                const results = new Map();
+
+                function tryAdd(seg, name, allowCustom) {
+                    if (!seg || seg.length < 3) return;
+                    if (RESERVED.has(seg.toLowerCase())) return;
+                    if (seg === own_id) return;
+                    if (/^\\d+$/.test(seg)) return;
+                    if (ROOM_ID_RE.test(seg)) {
+                        if (!results.has(seg)) results.set(seg, (name || seg).substring(0, 60));
+                        return;
+                    }
+                    // Accept custom usernames only from /username/items profile links
+                    if (allowCustom && CUSTOM_RE.test(seg)) {
+                        if (!results.has(seg)) results.set(seg, (name || seg).substring(0, 60));
+                    }
+                }
+
+                // Method 1: extract user IDs from all href attributes
+                document.querySelectorAll('a[href]').forEach(a => {
+                    const href = a.getAttribute('href') || '';
+                    const clean = href.replace(/^https?:\\/\\/[^\\/]+/, '');
+                    const parts = (clean.startsWith('/') ? clean : '/' + clean).split('/').filter(Boolean);
+                    if (parts.length > 0) {
+                        const seg = parts[0].split('?')[0];
+                        const name = a.textContent ? a.textContent.trim() : '';
+                        // /seg/items is definitely a room profile link → allow custom username
+                        const isItemsLink = parts.length >= 2 && parts[1].split('?')[0] === 'items';
+                        tryAdd(seg, name, isItemsLink);
+                        // also regex match anywhere in href for room_ IDs
+                        const m = href.match(/(?:^|\\/)((room_[a-z0-9_.]{4,40}|room_[0-9a-f]{8,}))(?:\\/|\\?|$)/);
+                        if (m) tryAdd(m[1], name, false);
+                    }
+                });
+
+                // Method 2: data attributes
+                document.querySelectorAll('[data-userid],[data-user-id],[data-roomid],[data-room-id]').forEach(el => {
+                    const uid = (el.dataset.userid || el.dataset.userId || el.dataset.roomid || el.dataset.roomId || '').trim();
+                    if (uid) tryAdd(uid, el.textContent ? el.textContent.trim() : '', true);
+                });
+
+                // Method 3: scan user/follower class elements for room_ IDs
+                document.querySelectorAll('[class*="user"],[class*="User"],[class*="follower"],[class*="Follower"],[class*="room"],[class*="Room"]').forEach(el => {
+                    if (el.children.length > 5) return;
+                    const txt = el.textContent ? el.textContent.trim() : '';
+                    const m = txt.match(/^(room_[a-z0-9_.]{4,40}|room_[0-9a-f]{8,})$/);
+                    if (m) tryAdd(m[1], m[1], false);
+                });
+
+                return Array.from(results.entries()).map(([uid, name]) => ({uid, name}));
+            }
+        """
+        _JS_NON_SELF_HREFS = """
+            (own_id) => Array.from(new Set(
+                Array.from(document.querySelectorAll('a[href]'))
+                    .map(a => a.getAttribute('href'))
+                    .filter(h => h && !h.includes(own_id) && !h.startsWith('#'))
+                    .slice(0, 30)
+            ))
+        """
+        for scroll_i in range(30):
+            js_users = page.evaluate(_JS_SCAN, _OWN_ID)
+
+            # Debug on first scroll
+            if scroll_i == 0:
+                log.log(f"[scan_followers] scroll0: js_users={len(js_users)} skip_set={len(skip_set)}")
+                # Also log ALL unique href patterns for diagnosis
+                all_hrefs = page.evaluate(_JS_NON_SELF_HREFS, _OWN_ID)
+                log.log(f"[scan_followers] scroll0: non-self hrefs sample={all_hrefs[:10]}")
+
+            for item in js_users:
+                seg = (item.get("uid") or "").strip()
+                uname = (item.get("name") or seg)[:60]
+                if not seg or seg in seen:
                     continue
                 seen.add(seg)
                 if seg not in skip_set:
-                    uname = (a.inner_text() or "").strip()[:60] or seg
                     collected.append({"user_id": seg, "username": uname})
+
             if len(collected) >= scan_limit:
                 break
+
+            # Scroll to load more followers
             h = page.evaluate("document.body.scrollHeight")
-            if h == last_h:
-                stuck += 1
-                if stuck >= 4:
-                    break
-                try:
-                    page.keyboard.press("End")
-                    page.wait_for_timeout(1000)
-                except Exception:
-                    pass
-            else:
-                stuck = 0
-            last_h = h
-            page.evaluate("window.scrollBy(0, 2000)")
             page.evaluate("""
-                const containers = document.querySelectorAll(
-                    '[class*="scroll"],[class*="list"],[role="feed"]'
-                );
-                containers.forEach(c => {
-                    if (c.scrollHeight > c.clientHeight) c.scrollTop = c.scrollHeight;
+                window.scrollBy(0, 3000);
+                document.querySelectorAll('[class*="scroll"],[class*="Scroll"],[class*="list"],[class*="List"],[role="feed"],[class*="follow"],[class*="Follow"]').forEach(c => {
+                    if (c.scrollHeight > c.clientHeight) {
+                        c.scrollTop += 3000;
+                    }
                 });
             """)
-            page.wait_for_timeout(1500)
+            page.wait_for_timeout(2000)
+            h2 = page.evaluate("document.body.scrollHeight")
+            if h2 == h and scroll_i >= 3:
+                # body not growing, check containers
+                container_grew = page.evaluate("""
+                    (() => {
+                        let grew = false;
+                        document.querySelectorAll('[class*="follow"],[class*="Follow"],[role="feed"],[class*="list"]').forEach(c => {
+                            if (c.scrollTop < c.scrollHeight - c.clientHeight - 10) grew = true;
+                        });
+                        return grew;
+                    })()
+                """)
+                if not container_grew:
+                    stuck += 1
+                    if stuck >= 5:
+                        break
+                else:
+                    stuck = 0
+            else:
+                stuck = 0
+
+        if not collected and my_user_id:
+            # Fallback: try personalized URL /room_XXX/followers (may render differently)
+            log.log(f"[scan_followers] collected=0 on /my/followers → retry /{my_user_id}/followers")
+            try:
+                page.goto(
+                    f"https://room.rakuten.co.jp/{my_user_id}/followers",
+                    wait_until="networkidle", timeout=30000
+                )
+                page.wait_for_timeout(5000)
+                try:
+                    page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
+                except Exception:
+                    pass
+                fb_js_users = page.evaluate(_JS_SCAN, _OWN_ID)
+                fb_hrefs = page.evaluate(_JS_NON_SELF_HREFS, _OWN_ID)
+                log.log(f"[scan_followers] fallback: js_users={len(fb_js_users)} hrefs={fb_hrefs[:10]}")
+                for item in fb_js_users:
+                    seg = (item.get("uid") or "").strip()
+                    uname = (item.get("name") or seg)[:60]
+                    if not seg or seg in seen:
+                        continue
+                    seen.add(seg)
+                    if seg not in skip_set:
+                        collected.append({"user_id": seg, "username": uname})
+                log.log(f"[scan_followers] fallback collected={len(collected)}")
+            except Exception as _fe:
+                log.log(f"[scan_followers] fallback error: {_fe}")
 
         if not collected:
-            log.log("[scan_followers] collected=0 (page may be empty or DOM changed)")
+            log.log("[scan_followers] collected=0 (both URLs returned empty)")
             return 0
 
         now_iso = _dt.now().isoformat()
