@@ -211,30 +211,36 @@ class BrowserManagerV6:
         return self._page
 
     def is_logged_in(self) -> bool:
-        """楽天 ROOM のログイン確認 (cookie ベース・OAuth/SSO 対応).
+        """楽天 ROOM のログイン確認 (cookie ベース優先・navigation フォールバック).
 
+        2026-05-28 fix: page.goto() が VM 高負荷時 (Chrome 複数同時起動) に hang する既知問題.
+          → Step1: cookie のみで判定 (navigation 不要・instant). cookie 存在 → True で即 return.
+          → Step2: cookie 不在時のみ navigation で redirect 確認 (timeout=10000 明示).
         2026-05-07 修正:
           - cookie names を OSSO/Im/Re/Rg/Rz/s_user/ODID に拡張
           - login.account.rakuten.com / .id.rakuten.co.jp / .rakuten.co.jp 全 domain を確認
         """
         try:
-            self._page.goto("https://room.rakuten.co.jp/", wait_until="domcontentloaded")
-            self._page.wait_for_timeout(2000)
-
-            url = self._page.url
-            # ログインページに redirect されたら NG (login form 表示)
-            # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
-            if ("grp01.id.rakuten.co.jp" in url or "/nid/" in url) and "session/upgrade" not in url:
-                return False
-
-            # cookie 確認 (modern OAuth/SSO 対応)
+            # Step1: cookie だけで判定 (navigation なし・高速・hang 回避)
             cookies_room = self._ctx.cookies("https://room.rakuten.co.jp")
             cookies_login = self._ctx.cookies("https://login.account.rakuten.com")
             cookies_id = self._ctx.cookies("https://id.rakuten.co.jp")
             cookies_rakuten = self._ctx.cookies("https://www.rakuten.co.jp")
             all_cookies = cookies_room + cookies_login + cookies_id + cookies_rakuten
             cookie_names = {c["name"] for c in all_cookies}
-            return any(n in cookie_names for n in SESSION_COOKIE_NAMES)
+            if any(n in cookie_names for n in SESSION_COOKIE_NAMES):
+                return True  # session cookie 確認 → ログイン OK (navigation skip)
+
+            # Step2: cookie 不在 → navigation で login redirect 確認 (timeout 明示)
+            self._page.goto("https://room.rakuten.co.jp/", wait_until="domcontentloaded",
+                            timeout=10000)
+            self._page.wait_for_timeout(1000)
+            url = self._page.url
+            # ログインページに redirect されたら NG (login form 表示)
+            # 注意: session/upgrade は handle_session_upgrade() で別処理するのでここでは NG 扱いしない
+            if ("grp01.id.rakuten.co.jp" in url or "/nid/" in url) and "session/upgrade" not in url:
+                return False
+            return False  # cookie なし かつ redirect なし → セッション不明 → 安全側 False
         except Exception:
             return False
 
