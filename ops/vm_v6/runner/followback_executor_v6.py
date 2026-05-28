@@ -260,23 +260,21 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     wait_until="networkidle", timeout=30000
                 )
                 page.wait_for_timeout(5000)
-                # Guard: broad login-redirect check (grp01/rlogin/nid/auth/oauth)
+                # Guard: login-redirect check (Rakuten ROOM known login domains only)
                 _fb_url = page.url
                 _fb_login = (
                     ("grp01.id.rakuten.co.jp" in _fb_url
                      or "rlogin.rakuten.co.jp" in _fb_url
                      or "/nid/" in _fb_url
-                     or "login.account.rakuten." in _fb_url
-                     or "/auth/" in _fb_url
-                     or "/oauth/" in _fb_url)
+                     or "login.account.rakuten." in _fb_url)
                     and "session/upgrade" not in _fb_url
                 )
                 if _fb_login:
-                    log.log(f"[scan_followers] fallback login redirect → login_expired")
+                    log.log("[scan_followers] fallback login redirect → login_expired")
                     return -1  # propagate as login_expired (same sentinel as main flow)
-                # Verify we landed on the expected followers page
-                if my_user_id not in _fb_url and "followers" not in _fb_url:
-                    log.log(f"[scan_followers] fallback unexpected URL → skip scan")
+                # Verify both OWN_ID and "followers" appear in URL (OR = strict)
+                if _OWN_ID not in _fb_url or "followers" not in _fb_url:
+                    log.log(f"[scan_followers] fallback URL mismatch (url={_fb_url[:60]}) → skip")
                 else:
                     try:
                         page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
