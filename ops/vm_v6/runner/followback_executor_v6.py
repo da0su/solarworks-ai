@@ -227,20 +227,26 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         # ── ブラウザ起動 & ログイン確認 ──
         bm.start()
         log.log("[trace] step7: bm.start() returned")
+        log.log("[trace] step8: calling hb.write + is_logged_in...")
         hb.write(phase="login_check")
-        if not bm.is_logged_in():
+        log.log("[trace] step9: calling bm.is_logged_in()")
+        logged_in = bm.is_logged_in()
+        log.log(f"[trace] step10: is_logged_in={logged_in}")
+        if not logged_in:
             log.log("[ABORT] not logged in")
             con.close()
             result["stop_reason"] = "login_expired"
             return result
 
         page = bm.page
+        log.log("[trace] step11: page OK, querying pending rows")
 
         # ── pending candidates を取得 ──
         rows = con.execute(
             "SELECT id, follower_user_id, follower_username FROM followback_queue "
             "WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
         ).fetchall()
+        log.log(f"[trace] step12: pending_rows={len(rows)}")
 
         if not rows:
             # pending=0 → /my/followers を直接スキャンして pool 自己補充
