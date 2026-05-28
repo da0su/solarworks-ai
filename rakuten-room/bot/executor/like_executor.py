@@ -328,7 +328,7 @@ class LikeExecutor:
 
                 logger.info(f"いいねボタン候補: {count}件 ({selector})")
 
-                for i in range(min(count, 5)):  # 一度に最大5件
+                for i in range(min(count, 20)):  # 最大20件スキャン (2026-05-28 5→20: 50ボタンページで1しか取れなかった問題修正)
                     if self.liked_count >= self.limit:
                         return "clicked"
 

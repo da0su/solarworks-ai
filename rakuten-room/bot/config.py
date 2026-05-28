@@ -218,8 +218,8 @@ FOLLOWBACK_DAILY_TARGET = 30
 # いいね履歴ファイル
 LIKE_HISTORY_PATH = DATA_DIR / "like_history.json"
 
-# いいねするフィードURL（2026-05-26 拡張: カテゴリ/ランキング9件追加で目標277件に近づける）
-# 元の2フィードだけでは like_history 2453件との重複率が高く ~80件/日しか達成できなかった
+# いいねするフィードURL（2026-05-26 拡張: カテゴリ/ランキング追加で目標達成率向上）
+# 2026-05-28: 404確認済み3URLを削除 (ladies_fashion/interior/food は期限切れ collectID)
 LIKE_FEED_URLS = [
     "https://room.rakuten.co.jp/items",                                                    # グローバル新着
     "https://room.rakuten.co.jp/timeline/followings",                                      # フォロー中タイムライン
@@ -229,9 +229,6 @@ LIKE_FEED_URLS = [
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000215783421",                # household ランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000558944399",                # kitchen ランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000216131238",                # bags ランキング
-    "https://room.rakuten.co.jp/discover/collectItemRank/2800000543898213",                # ladies_fashion ランキング
-    "https://room.rakuten.co.jp/discover/collectItemRank/2800000537215001",                # interior ランキング
-    "https://room.rakuten.co.jp/discover/collectItemRank/2800000551167177",                # food ランキング
 ]
 
 # 連続失敗で停止する閾値
