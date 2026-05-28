@@ -260,21 +260,29 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     wait_until="networkidle", timeout=30000
                 )
                 page.wait_for_timeout(5000)
-                # Guard: login-redirect check (Rakuten ROOM known login domains only)
+                # Guard: login-redirect check via urlparse netloc (avoids substring false positives)
                 _fb_url = page.url
-                _fb_login = (
-                    ("grp01.id.rakuten.co.jp" in _fb_url
-                     or "rlogin.rakuten.co.jp" in _fb_url
-                     or "/nid/" in _fb_url
-                     or "login.account.rakuten." in _fb_url)
-                    and "session/upgrade" not in _fb_url
-                )
+                try:
+                    from urllib.parse import urlparse as _urlparse
+                    _fb_p = _urlparse(_fb_url)
+                    _fb_netloc = _fb_p.netloc.lower()
+                    _fb_path_lc = _fb_p.path.lower()
+                    _fb_login = (
+                        ("grp01.id.rakuten.co.jp" in _fb_netloc
+                         or "rlogin.rakuten.co.jp" in _fb_netloc
+                         or "login.account.rakuten." in _fb_netloc
+                         or "/nid/" in _fb_path_lc)
+                        and "session/upgrade" not in _fb_path_lc
+                    )
+                except Exception:
+                    _fb_login = "rakuten.co.jp" not in _fb_url
                 if _fb_login:
                     log.log("[scan_followers] fallback login redirect → login_expired")
                     return -1  # propagate as login_expired (same sentinel as main flow)
-                # Verify both OWN_ID and "followers" appear in URL (OR = strict)
-                if _OWN_ID not in _fb_url or "followers" not in _fb_url:
-                    log.log(f"[scan_followers] fallback URL mismatch (url={_fb_url[:60]}) → skip")
+                # Strict: both my_user_id and "followers" must appear in URL
+                # my_user_id is guaranteed non-None here (checked by outer if)
+                if my_user_id not in _fb_url or "followers" not in _fb_url:
+                    log.log(f"[scan_followers] fallback URL mismatch → skip (netloc={_fb_netloc[:40]})")
                 else:
                     try:
                         page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
