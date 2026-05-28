@@ -43,6 +43,13 @@ def _cleanup_finished_modes():
         proc = RUNNING_MODES[m].get("_proc")
         if proc is not None:
             if proc.poll() is not None:  # process has terminated
+                # 2026-05-28: close logf reference cleanly when subprocess exits
+                logf_ref = RUNNING_MODES[m].get("_logf")
+                if logf_ref is not None:
+                    try:
+                        logf_ref.close()
+                    except Exception:
+                        pass
                 del RUNNING_MODES[m]
         else:
             # _proc なし (古いエントリ or PID のみ) → PID 存在確認
@@ -188,9 +195,13 @@ class Handler(BaseHTTPRequestHandler):
                 proc = subprocess.Popen(args, stdout=logf, stderr=subprocess.STDOUT,
                                         cwd=cwd,
                                         creationflags=NO_WIN | DETACHED, close_fds=True)
+                # 2026-05-28 fix: keep logf reference alive in RUNNING_MODES to prevent
+                # Python GC from closing the file handle while subprocess is writing to it.
+                # GC closure breaks child stdout → print() raises → process dies silently.
                 RUNNING_MODES[mode] = {"pid": proc.pid, "_proc": proc,
                                        "started_at": datetime.now().isoformat(),
-                                       "log": str(log_path)}
+                                       "log": str(log_path),
+                                       "_logf": logf}
                 self._send(200, {"status": "launched", "mode": mode, "pid": proc.pid,
                                  "log": str(log_path)})
             except Exception as e:

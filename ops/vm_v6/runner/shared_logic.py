@@ -329,7 +329,11 @@ class SessionLogger:
                 f.write(line)
         except Exception:
             pass
-        print(line, end="", flush=True)
+        try:
+            print(line, end="", flush=True)
+        except Exception:
+            # stdout may be broken (parent GC closed logf handle) — keep process alive
+            pass
 
 
 # ============================================================
