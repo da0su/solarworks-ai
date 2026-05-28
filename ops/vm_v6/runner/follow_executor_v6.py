@@ -164,7 +164,59 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
         log.log(f"[seed:{seed_user}] navigate fail: {e}")
         return result
 
+    # 2026-05-28 バグ修正: btns[0] only → for loop で全ボタン走査
+    # 旧版: `if user_id in history: continue` がwhileトップに戻り同じbtns[0]を永久ループ
+    # → 10分間サイレント hang の真因。for ループで全ボタンを試してから scroll。
+    _JS_USER_ID = """el => {
+        const ROOM_ID = /^room_[a-f0-9]{8,40}$/i;
+        const CUSTOM  = /^[A-Za-z0-9_.\\.\\-]{3,40}$/;
+        const reserved = new Set([
+            'items','my','discover','search','timeline','ranking',
+            'register','login','categories','settings','campaigns',
+            'about','help','users','followers','following','collections',
+            'terms','privacy','feature','collectItemRank','likeItemRank',
+            'tag','c','m','room'
+        ]);
+        const isValid = (s) => s && !reserved.has(s) && (ROOM_ID.test(s) || CUSTOM.test(s));
+        const fromHref = (href) => {
+            if (!href) return '';
+            let p = href;
+            if (p.startsWith('http')) {
+                const m0 = p.match(/^https?:\\/\\/room\\.rakuten\\.co\\.jp(\\/.*)$/);
+                if (!m0) return '';
+                p = m0[1];
+            }
+            if (!p.startsWith('/')) return '';
+            const m1 = p.match(/^\\/([^\\/?#]+)\\/(items|followers|following)/);
+            if (m1 && isValid(m1[1])) return m1[1];
+            return '';
+        };
+        if (el.getAttribute) {
+            for (const a of ['data-user-id','data-userid','data-user']) {
+                const d = el.getAttribute(a);
+                if (isValid(d)) return d;
+            }
+        }
+        const card = el.closest(
+            'li, [class*=user-card], [class*=userCard], [class*=Card], ' +
+            '[class*=user-info], [class*=followItem], [class*=follow-item]'
+        );
+        if (card) {
+            for (const a of ['data-user-id','data-userid','data-user']) {
+                const d = card.getAttribute(a);
+                if (isValid(d)) return d;
+            }
+            const links = card.querySelectorAll('a[href]');
+            for (const link of links) {
+                const r = fromHref(link.getAttribute('href'));
+                if (r) return r;
+            }
+        }
+        return '';
+    }"""
+
     last_new_at = time.time()
+    consecutive_all_history = 0  # 全ボタン history 済みが続いた回数
     while current + result["success"] < target_count:
         if rate_detector.is_rate_limited(page):
             log.log(f"[seed:{seed_user}] RATE_LIMIT detected")
@@ -185,110 +237,57 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                 break
             continue
 
-        # 1個目をクリック
-        try:
-            btn = btns[0]
-            # 2026-05-27 重大 user_id 抽出 fix: span 自体に data-user-id が無い場合
-            # 親要素を辿って取得 (data-user-id / href の /room_X/ / /USERNAME/)
-            user_id = btn.get_attribute("data-user-id") or ""
-            if not user_id:
-                try:
-                    user_id = btn.evaluate("""el => {
-                        // Codex REJECT 反映: ancestor subtree 全走査は別カード誤採用
-                        // → user-card 単一を closest() で特定し、その中だけ検査
-                        const ROOM_ID = /^room_[a-f0-9]{8,40}$/i;
-                        const CUSTOM  = /^[A-Za-z0-9_.\\-]{3,40}$/;
-                        const reserved = new Set([
-                            'items','my','discover','search','timeline','ranking',
-                            'register','login','categories','settings','campaigns',
-                            'about','help','users','followers','following','collections',
-                            'terms','privacy','feature','collectItemRank','likeItemRank',
-                            'tag','c','m','room'
-                        ]);
-                        const isValid = (s) => s && !reserved.has(s) && (ROOM_ID.test(s) || CUSTOM.test(s));
-                        const fromHref = (href) => {
-                            if (!href) return '';
-                            let p = href;
-                            if (p.startsWith('http')) {
-                                const m0 = p.match(/^https?:\\/\\/room\\.rakuten\\.co\\.jp(\\/.*)$/);
-                                if (!m0) return '';
-                                p = m0[1];
-                            }
-                            if (!p.startsWith('/')) return '';
-                            const m1 = p.match(/^\\/([^\\/?#]+)\\/(items|followers|following)/);
-                            if (m1 && isValid(m1[1])) return m1[1];
-                            return '';
-                        };
-                        // 1) 自身の data-* attribute (確実な情報源)
-                        if (el.getAttribute) {
-                            for (const a of ['data-user-id','data-userid','data-user']) {
-                                const d = el.getAttribute(a);
-                                if (isValid(d)) return d;
-                            }
-                        }
-                        // 2) closest(li, [class*=user-card], [class*=Card], [class*=item])
-                        //    で単一 user card を限定
-                        const card = el.closest(
-                            'li, [class*=user-card], [class*=userCard], [class*=Card], ' +
-                            '[class*=user-info], [class*=followItem], [class*=follow-item]'
-                        );
-                        if (card) {
-                            // card 内の data-* check
-                            for (const a of ['data-user-id','data-userid','data-user']) {
-                                const d = card.getAttribute(a);
-                                if (isValid(d)) return d;
-                            }
-                            // card 内の最初の有効 a[href] - profile link 形式優先
-                            const links = card.querySelectorAll('a[href]');
-                            for (const link of links) {
-                                const r = fromHref(link.getAttribute('href'));
-                                if (r) return r;
-                            }
-                        }
-                        return '';
-                    }""") or ""
-                except Exception:
-                    user_id = ""
-            if user_id and user_id in history:
-                # スキップして次へ
-                continue
-            btn.click(timeout=3000)
-            page.wait_for_timeout(random.uniform(1.0, 3.0))
-
-            # 検証 (DOM ベース)
-            page.wait_for_timeout(500)
-            # クリック後に rate_limit が出るか確認
-            if rate_detector.is_rate_limited(page):
-                result["rate_limited"] = True
-                return result
-
-            result["success"] += 1
-            if user_id:
-                history.add(user_id)
-            # 2026-05-27 重大バグ修正: follow_history.json に append
-            # 旧版は in-memory のみ → SSOT が永久 0 表示・虚偽報告
-            persist_ok = False
+        # 全ボタンを for ループで走査 (旧版: btns[0] のみ → 同ボタン永久ループ)
+        clicked_one = False
+        for btn in btns:
+            if current + result["success"] >= target_count:
+                break
             try:
-                persist_ok = _append_follow_history(user_id, seed_user, log=log)
-            except Exception as _ae:
-                log.log(f"[seed:{seed_user}] history append exception: {_ae}")
-            if not persist_ok:
-                # persist 失敗を success count に反映するか否か:
-                # → 反映しない (Rakuten 側は follow されている事実は変わらない)
-                # → ただし log に WARN 明示
-                log.log(f"[seed:{seed_user}] WARN: follow OK but history NOT persisted user={user_id}")
-            last_new_at = time.time()
+                user_id = btn.get_attribute("data-user-id") or ""
+                if not user_id:
+                    try:
+                        user_id = btn.evaluate(_JS_USER_ID) or ""
+                    except Exception:
+                        user_id = ""
+                if user_id and user_id in history:
+                    continue  # この continue は for ループ内 → 次ボタンへ (safe)
+                btn.click(timeout=3000)
+                page.wait_for_timeout(random.uniform(1.0, 3.0))
+                page.wait_for_timeout(500)
+                if rate_detector.is_rate_limited(page):
+                    result["rate_limited"] = True
+                    return result
+                result["success"] += 1
+                if user_id:
+                    history.add(user_id)
+                persist_ok = False
+                try:
+                    persist_ok = _append_follow_history(user_id, seed_user, log=log)
+                except Exception as _ae:
+                    log.log(f"[seed:{seed_user}] history append exception: {_ae}")
+                if not persist_ok:
+                    log.log(f"[seed:{seed_user}] WARN: follow OK but history NOT persisted user={user_id}")
+                last_new_at = time.time()
+                consecutive_all_history = 0
+                hb.write(phase="navigate", current_target=seed_user,
+                         success=current + result["success"], fail=result["fail"])
+                log.log(f"[seed:{seed_user}] follow OK total={current + result['success']}")
+                clicked_one = True
+                break  # 1クリック後に btns を再取得
+            except Exception as e:
+                result["fail"] += 1
+                log.log(f"[seed:{seed_user}] click fail: {e}")
+                if result["fail"] >= 5:
+                    log.log(f"[seed:{seed_user}] 5 consecutive fail, next seed")
+                    return result
 
-            # heartbeat update
-            hb.write(phase="navigate", current_target=seed_user,
-                     success=current + result["success"], fail=result["fail"])
-
-            log.log(f"[seed:{seed_user}] follow OK total={current + result['success']}")
-        except Exception as e:
-            result["fail"] += 1
-            log.log(f"[seed:{seed_user}] click fail: {e}")
-            if result["fail"] >= 5:
-                log.log(f"[seed:{seed_user}] 5 consecutive fail, next seed")
+        if not clicked_one:
+            # 全ボタンが history 済み or エラー → スクロールで新ボタン探す
+            consecutive_all_history += 1
+            page.evaluate("window.scrollBy(0, 800)")
+            page.wait_for_timeout(800)
+            if time.time() - last_new_at > MAX_NO_NEW_SEC:
+                log.log(f"[seed:{seed_user}] no new (all_hist={consecutive_all_history}) {MAX_NO_NEW_SEC}s, next seed")
                 break
 
     return result
