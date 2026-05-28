@@ -38,21 +38,27 @@ from logger.logger import setup_logger
 logger = setup_logger()
 
 
-_ITEM_ID_RE = re.compile(r'/items/(\d+)')
+_ITEM_ID_RE = re.compile(r'(?:^|/)items/(\d+)(?:/|$|\?|#|$)')
 
 
 def _normalize_item_url(url: str) -> str:
-    """URL から item_id を抽出して正規化する.
+    """URL から numeric item_id を抽出して '/items/{id}' に正規化する.
 
     2026-05-28 バグ修正: /room_XXXXX/items/1700379 と /room_YYYYY/items/1700379 は
     同じアイテムだが URL 文字列が異なるため liked_urls の dedup が機能していなかった。
-    → numeric item_id を抽出して 'items/{id}' 形式に正規化。
+    → numeric item_id を抽出して '/items/{id}' 形式に正規化 (先頭 '/' 付き)。
+
+    例:
+        /room_abc/items/1700379 → /items/1700379
+        https://room.rakuten.co.jp/items/1700379 → /items/1700379
+        /items/1700379 → /items/1700379
+        '' → ''
     """
     if not url:
         return url
     m = _ITEM_ID_RE.search(url)
     if m:
-        return f"items/{m.group(1)}"
+        return f"/items/{m.group(1)}"
     return url
 
 
