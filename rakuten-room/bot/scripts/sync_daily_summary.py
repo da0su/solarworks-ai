@@ -44,7 +44,8 @@ def main():
     print(f"[OK] daily_summary {today}: posted={posted} failed={failed} skipped={skipped} planned={planned}")
 
     # Spreadsheet 同期
-    r = subprocess.run([sys.executable, str(DAILY_LOG_WRITER)], capture_output=True, text=True, timeout=60)
+    # 2026-05-29 fix: encoding='utf-8' を明示してcp932 UnicodeDecodeError を防ぐ
+    r = subprocess.run([sys.executable, str(DAILY_LOG_WRITER)], capture_output=True, text=True, encoding='utf-8', timeout=60)
     if r.returncode == 0:
         print("[OK] daily_log_writer succeeded")
         out = r.stdout or ""
