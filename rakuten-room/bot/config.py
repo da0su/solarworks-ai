@@ -220,15 +220,19 @@ LIKE_HISTORY_PATH = DATA_DIR / "like_history.json"
 
 # いいねするフィードURL（2026-05-26 拡張: カテゴリ/ランキング追加で目標達成率向上）
 # 2026-05-28: 404確認済み3URLを削除 (ladies_fashion/interior/food は期限切れ collectID)
+# 2026-05-28: /items を削除 (injection攻撃ベクター: Googleリダイレクト+taskkill コマンドが埋め込まれ毎回53s無駄)
+# 2026-05-28: timeline/followings を削除 (同injection攻撃でGoogleリダイレクト→0いいね、毎回1分無駄)
 LIKE_FEED_URLS = [
-    "https://room.rakuten.co.jp/items",                                                    # グローバル新着
-    "https://room.rakuten.co.jp/timeline/followings",                                      # フォロー中タイムライン
     "https://room.rakuten.co.jp/discover/likeItemRank",                                    # いいねランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000551167181",                # sweets ランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000100533426",                # kids ランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000215783421",                # household ランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000558944399",                # kitchen ランキング
     "https://room.rakuten.co.jp/discover/collectItemRank/2800000216131238",                # bags ランキング
+    # 2026-05-29 追加: feed pool 枯渇対策 (skip=1667 → 新規カテゴリで拡充)
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000100804388",                # interior/bedding ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000100371939",                # ladies fashion ランキング
+    "https://room.rakuten.co.jp/discover/collectItemRank/2800000551177415",                # mens fashion ランキング
 ]
 
 # 連続失敗で停止する閾値
