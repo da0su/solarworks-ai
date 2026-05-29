@@ -61,7 +61,9 @@ def run_like(limit: int = 100, hb: HeartbeatPusher = None, log: SessionLogger = 
                             "url": self._page.url, "title": "", "screenshot": ""}
                 def take_screenshot(self, label):
                     try:
-                        return self._page.screenshot()
+                        # 2026-05-29: 明示的 timeout (default 30s → 10s)。
+                        # extra_scroll hang 防止。
+                        return self._page.screenshot(timeout=10000)
                     except Exception:
                         return None
                 def stop(self): pass

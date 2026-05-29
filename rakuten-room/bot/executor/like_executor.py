@@ -141,6 +141,10 @@ class LikeExecutor:
         if not external_bm:
             bm = BrowserManager(action="like")
         abort_reason = None
+        # 2026-05-29: セッション全体のタイムアウト。extra_scroll hang 防止。
+        # 9 feed × ~2min/feed = ~18min が正常上限。20min で安全停止。
+        _session_start = time.time()
+        MAX_SESSION_SEC = 20 * 60  # 20 分
 
         try:
             if not external_bm:
@@ -231,16 +235,26 @@ class LikeExecutor:
                     break
                 if abort_reason:
                     break
+                # セッション全体タイムアウトチェック (2026-05-29)
+                elapsed = time.time() - _session_start
+                if elapsed >= MAX_SESSION_SEC:
+                    abort_reason = f"セッションタイムアウト ({elapsed/60:.1f}min >= {MAX_SESSION_SEC/60:.0f}min)"
+                    logger.warning(f"[timeout] {abort_reason}")
+                    break
 
                 logger.info(f"--- フィード巡回: {feed_url} ---")
                 abort_reason = self._like_feed(bm, feed_url)
 
             if not abort_reason and self.liked_count < self.limit:
-                logger.info("全フィード巡回完了。追加のスクロールを試行...")
-                # 最初のフィードに戻って追加スクロール
-                abort_reason = self._like_feed(
-                    bm, config.LIKE_FEED_URLS[0], extra_scroll=True
-                )
+                elapsed = time.time() - _session_start
+                if elapsed < MAX_SESSION_SEC:
+                    logger.info("全フィード巡回完了。追加のスクロールを試行...")
+                    # 最初のフィードに戻って追加スクロール
+                    abort_reason = self._like_feed(
+                        bm, config.LIKE_FEED_URLS[0], extra_scroll=True
+                    )
+                else:
+                    logger.warning(f"[timeout] セッション上限超過でextra_scrollスキップ ({elapsed/60:.1f}min)")
 
         except Exception as e:
             abort_reason = f"予期しないエラー: {e}"
@@ -369,6 +383,11 @@ class LikeExecutor:
             # (extra_scroll 時 15→20 で深堀り)
             max_scroll_attempts = 20 if extra_scroll else 15
             scroll_count = 0
+            # 2026-05-29: 連続スキップ (all-dedup) 検出用カウンタ。
+            # 全ボタンが dedup の場合、スクロールしても新ボタンは出ないため
+            # 3回連続 all-skip なら早期終了してフィード消費タイムを削減する。
+            _consecutive_all_skip = 0
+            _prev_liked = self.liked_count
 
             # 2026-05-27 修正: page closed / context closed エラーで全 abort せず
             # このフィードだけ skip して次フィードに進む (11 feed の連続巡回耐性向上)
@@ -388,6 +407,17 @@ class LikeExecutor:
                         logger.warning(f"page closed/navigated during find_likes (skip feed): {em[:80]}")
                         return None  # このフィードだけ skip
                     raise
+
+                # 2026-05-29: 全ボタン dedup の場合の早期終了検知
+                # このスクロールで liked_count が増えなかった場合をカウント
+                if self.liked_count == _prev_liked:
+                    _consecutive_all_skip += 1
+                    if _consecutive_all_skip >= 3:
+                        logger.info(f"[early_exit] 3回連続 liked=0 → フィード終了 (scroll={scroll_count})")
+                        return None  # このフィードは exhausted
+                else:
+                    _consecutive_all_skip = 0
+                _prev_liked = self.liked_count
 
                 if like_result == "no_buttons":
                     # ボタンが見つからない → スクロール
@@ -516,13 +546,13 @@ class LikeExecutor:
                             up = self.bm.handle_session_upgrade()
                             if up.get("handled"):
                                 logger.info("session/upgrade 通過成功 → 元URLに戻る")
-                                page.go_back()
+                                page.go_back(timeout=10000)
                                 self._human_delay(1.5, 2.5)
                                 # 通過後は LIKE 成功カウントせず次の loop で再 click 試行
                                 continue
                             else:
                                 logger.error(f"session/upgrade 通過失敗: {up.get('reason')}")
-                                page.go_back()
+                                page.go_back(timeout=10000)
                                 self._human_delay(1.0, 2.0)
                                 self.failed_count += 1
                                 self.consecutive_failures += 1
@@ -531,7 +561,7 @@ class LikeExecutor:
                         # 404 / 予期しない遷移検出
                         if url_after != url_before and "room.rakuten.co.jp" not in url_after:
                             logger.warning(f"クリック後に予期しない遷移: {url_before} → {url_after}")
-                            page.go_back()
+                            page.go_back(timeout=10000)
                             self._human_delay(1.0, 2.0)
                             self.failed_count += 1
                             self.consecutive_failures += 1
@@ -568,6 +598,11 @@ class LikeExecutor:
 
                 if clicked_any:
                     return "clicked"
+                # 2026-05-29 perf fix: このセレクタで count > 0 なら残り selector は
+                # 同じボタンを重複スキャンするだけなので break (4x → 1x 削減)。
+                # セレクタは同一 DOM 要素への別 CSS path であり、
+                # 1つが count>0 なら他も同じ要素を返す。
+                break
 
             except Exception as e:
                 logger.debug(f"セレクタ {selector} 検索エラー: {e}")
