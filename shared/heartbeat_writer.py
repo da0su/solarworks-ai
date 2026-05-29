@@ -40,11 +40,14 @@ default 30秒。executor は force=True でスロットル無視可能（startup
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -127,7 +130,11 @@ class HeartbeatWriter:
             tmp = self.local_path.with_suffix(".tmp")
             tmp.write_text(json_str, encoding="utf-8")
             tmp.replace(self.local_path)
-        except Exception:
+        except Exception as _e:
+            # P0-4: local write 失敗は致命的 (watchdog が heartbeat age で stuck 検出できなくなる)
+            logger.critical(
+                f"[heartbeat] LOCAL WRITE FAILED action={self.action} phase={phase}: {_e}"
+            )
             return False
 
         # VM share への書込 (follow 専用・失敗しても致命的ではない)
