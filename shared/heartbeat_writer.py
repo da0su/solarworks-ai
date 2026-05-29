@@ -130,10 +130,11 @@ class HeartbeatWriter:
             tmp = self.local_path.with_suffix(".tmp")
             tmp.write_text(json_str, encoding="utf-8")
             tmp.replace(self.local_path)
-        except Exception as _e:
+        except Exception:
             # P0-4: local write 失敗は致命的 (watchdog が heartbeat age で stuck 検出できなくなる)
             logger.critical(
-                f"[heartbeat] LOCAL WRITE FAILED action={self.action} phase={phase}: {_e}"
+                "[heartbeat] LOCAL WRITE FAILED action=%s phase=%s",
+                self.action, phase, exc_info=True
             )
             return False
 
