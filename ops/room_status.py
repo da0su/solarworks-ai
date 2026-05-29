@@ -60,7 +60,9 @@ FRESH_THRESHOLD_SEC = {
     "follow_runtime_state": 20 * 60,    # 15分 patrol + 余裕
     "patrol_v6_state": 20 * 60,
     "daily_targets_ssot": 6 * 3600 + 600,  # 6h cache + 余裕
-    "follow_rate_state": 20 * 60,
+    # 2026-05-29: HOST follow が VM移行で停止以降 follow_rate_state は更新なし
+    # → stale チェック対象から実質除外 (7日 threshold)
+    "follow_rate_state": 7 * 24 * 3600,
 }
 
 
