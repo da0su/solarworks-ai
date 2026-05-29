@@ -123,8 +123,17 @@ def _persona_check(title: str, comment: str = "",
         # gender-neutral 表記 (女性 OK の signal)
         # Codex 30回目 #6 fix: 「兼」単体は誤マッチ多発 (兼任/兼任務/兼任機能 等) → 削除.
         # 複合語 (兼用 / 男女兼用) は残す.
-        neutral_markers = ["レディース", "ladies", "women", "ユニセックス",
-                            "兼用", "男女兼用", "ウィメンズ", "女性用"]
+        # Codex 31回目 #1 fix: 表記ゆれ拡充 (レデイース/レディス/WOMEN'S/女性向け 等)
+        # _normalize_for_persona が NFKC+lower するため、全角/半角/大文字は自動吸収済み
+        neutral_markers = [
+            "レディース", "レデイース", "レデイス", "レディス",  # 表記ゆれ
+            "ladies", "women", "women's", "womens",            # 英語表記
+            "ユニセックス", "unisex",
+            "兼用", "男女兼用", "男女",                         # 兼用表記
+            "ウィメンズ", "ウイメンズ", "ウィメンス",            # ウィメンズ揺れ
+            "女性用", "女性向け", "女性",                        # 女性向け
+            "レディス",                                         # 略記
+        ]
         has_masculine_marker = any(_normalize_for_persona(m) in text for m in masculine_markers)
         has_neutral_marker = any(_normalize_for_persona(m) in text for m in neutral_markers)
         # 2026-05-29 CEO指示: 男服排除強化
