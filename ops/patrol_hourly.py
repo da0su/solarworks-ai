@@ -38,6 +38,8 @@ VBOXMANAGE = r"C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
 VM_NAME = "RoomBot"
 LOG_FOLLOW = ROOT / "rakuten-room" / "bot" / "executor" / "follow_rpa_log.json"
 LOG_FOLLOW_HOST = ROOT / "rakuten-room" / "bot" / "executor" / "follow_host_log.json"
+# 2026-05-29: Plan v6 VM 完結化後の FOLLOW ログ真値
+LOG_FOLLOW_HISTORY = ROOT / "rakuten-room" / "bot" / "data" / "follow_history.json"
 SS_DIR = ROOT / "ops" / "patrol_screenshots"
 PATROL_STATE = ROOT / "ops" / "_patrol_state.json"
 PATROL_LOG = ROOT / "ops" / "patrol_log.txt"
@@ -127,8 +129,14 @@ def check_follow() -> dict:
         pass
     info["log_entries"] = len(data)
 
-    # mtime = VM log のみ
+    # mtime: 旧 follow_rpa_log.json と新 follow_history.json の fresher な方を使う
+    # 2026-05-29: Plan v6 VM完結化後は follow_history.json が真値
     mtime = datetime.fromtimestamp(LOG_FOLLOW.stat().st_mtime)
+    if LOG_FOLLOW_HISTORY.exists():
+        mtime_hist = datetime.fromtimestamp(LOG_FOLLOW_HISTORY.stat().st_mtime)
+        if mtime_hist > mtime:
+            mtime = mtime_hist
+            info["log_source"] = "follow_history.json"
     age_min = (datetime.now() - mtime).total_seconds() / 60
     info["log_age_min"] = round(age_min, 1)
 
@@ -182,6 +190,36 @@ def check_follow() -> dict:
                     info["reasons"].append(f"slo_critical:{','.join(critical_groups)}")
     except Exception as _e:
         info["taxonomy_error"] = str(_e)
+
+    # 2026-05-29: follow_history.json (Plan v6 VM完結化の真値) から last_12h を補完
+    # follow_rpa_log.json は 5/23以降更新なし (legacy)→runs=0になるため follow_history で上書き
+    if info.get("log_source") == "follow_history.json" and LOG_FOLLOW_HISTORY.exists():
+        try:
+            hist_data = json.loads(LOG_FOLLOW_HISTORY.read_text(encoding="utf-8"))
+            cutoff12 = datetime.now() - timedelta(hours=12)
+            hist_recent = [
+                e for e in hist_data
+                if e.get("followed_at", "") > cutoff12.isoformat()
+            ]
+            hist_today = [
+                e for e in hist_data
+                if e.get("followed_at", "")[:10] == datetime.now().date().isoformat()
+            ]
+            info["last_12h"] = {
+                "runs": len(hist_recent),       # 個別フォロー件数 (v6では1entry=1follow)
+                "success_total": len(hist_recent),
+                "stop_reasons": {"completed": len(hist_recent)},
+            }
+            if hist_data:
+                last_h = max(hist_data, key=lambda e: e.get("followed_at", ""))
+                info["last_entry"] = {
+                    "ts": last_h.get("followed_at", "?"),
+                    "success": 1,
+                    "stop_reason": "vm_v6",
+                }
+            info["today_from_history"] = len(hist_today)
+        except Exception as _he:
+            info["history_error"] = str(_he)[:80]
 
     if not info["vm_running"]:
         info["problem"] = True
