@@ -125,13 +125,17 @@ def _persona_check(title: str, comment: str = "",
         # 複合語 (兼用 / 男女兼用) は残す.
         # Codex 31回目 #1 fix: 表記ゆれ拡充 (レデイース/レディス/WOMEN'S/女性向け 等)
         # _normalize_for_persona が NFKC+lower するため、全角/半角/大文字は自動吸収済み
+        # Codex 31回目 #1 fix: 表記ゆれ拡充 + 過剰マッチ防止
+        # _normalize_for_persona が NFKC+lower するため全角/半角/大文字は自動吸収済み
+        # 注: "男女" 単体は過剰マッチ (「男女問わずNG」等) → 削除済
+        #     "女性" 単体も "男女性別不問" 等でのマッチリスク → 複合語のみ採用
         neutral_markers = [
             "レディース", "レデイース", "レデイス", "レディス",  # 表記ゆれ
             "ladies", "women", "women's", "womens",            # 英語表記
             "ユニセックス", "unisex",
-            "兼用", "男女兼用", "男女",                         # 兼用表記
+            "兼用", "男女兼用",                                 # 兼用複合語のみ (「男女」単体は除外)
             "ウィメンズ", "ウイメンズ", "ウィメンス",            # ウィメンズ揺れ
-            "女性用", "女性向け", "女性",                        # 女性向け
+            "女性用", "女性向け",                               # 複合語のみ (「女性」単体は除外)
             "レディス",                                         # 略記
         ]
         has_masculine_marker = any(_normalize_for_persona(m) in text for m in masculine_markers)
