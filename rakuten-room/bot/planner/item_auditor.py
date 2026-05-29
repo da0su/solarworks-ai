@@ -127,10 +127,19 @@ def _persona_check(title: str, comment: str = "",
                             "兼用", "男女兼用", "ウィメンズ", "女性用"]
         has_masculine_marker = any(_normalize_for_persona(m) in text for m in masculine_markers)
         has_neutral_marker = any(_normalize_for_persona(m) in text for m in neutral_markers)
+        # 2026-05-29 CEO指示: 男服排除強化
+        # 旧: masculine_marker + masculine_context_item + no_neutral → fail
+        #      (文脈アイテムが必要だったため「スニーカー メンズ」等が通過していた)
+        # 新: masculine_marker のみで no_neutral → fail
+        #      (「メンズ」があっても「レディース/ユニセックス/兼用」が同時にあればOK)
+        # 例: "スニーカー メンズ" → ✗FAIL / "スニーカー メンズ レディース" → ✓PASS
         if has_masculine_marker and not has_neutral_marker:
-            for ctx in masculine_context:
-                if _normalize_for_persona(ctx) in text:
-                    return ("fail", f"masculine context: '{ctx}' + male marker (no neutral)")
+            # masculine_context はもはや必須でないが、理由メッセージに利用
+            ctx_found = next((ctx for ctx in masculine_context
+                              if _normalize_for_persona(ctx) in text), None)
+            reason = (f"masculine context: '{ctx_found}' + male marker (no neutral)"
+                      if ctx_found else "male-only marker, no female/neutral marker found")
+            return ("fail", reason)
     # Boost check (override 経由でも 普通 check でも)
     for kw in boost_kw:
         if kw and _normalize_for_persona(kw) in text:
@@ -182,6 +191,15 @@ def audit_single(item: dict, check_url: bool = True) -> dict:
         result["checks"]["fields"] = "fail"
         return result
     result["checks"]["fields"] = "pass"
+
+    # --- Check 1.5: 販売可否 (2026-05-28 CEO指示) ---
+    # availability=0 → 在庫なし / 販売開始前 → 投稿しない
+    if item.get("availability", 1) == 0:
+        result["audit_result"] = "fail"
+        result["fail_reason"] = "availability=0 (在庫なし/販売開始前)"
+        result["checks"]["availability"] = "fail"
+        return result
+    result["checks"]["availability"] = "pass"
 
     # --- Check 2: URL形式チェック ---
     url_valid = any(re.match(p, url) for p in VALID_URL_PATTERNS)
