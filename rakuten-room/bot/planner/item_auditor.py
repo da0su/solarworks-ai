@@ -69,10 +69,11 @@ INVALID_URL_PATTERNS = [
 
 # Codex 32回目 fix: 男女兼用/共用/共通 の区切り文字・接尾語バリアント対応
 # 「男女 兼用」「男女・兼用」「男女兼用可」等を正規表現で拾う
-# _normalize_for_persona 後の NFKC+lower テキストに適用する
+# NOTE: _normalize_for_persona 後の NFKC+lower テキストに適用するため
+#   - 全角→半角済み・大文字→小文字済み → IGNORECASE 不要 (冗長を避けるため省略)
+#   - 区切り: \s*(?:[・/\-\.]\s*)? でスペース+記号+スペースのゆれを吸収
 _GENDER_NEUTRAL_COMPOUND_RE = re.compile(
-    r"男女[\s\-・/\.]{0,2}(兼用|共用|共通)(可|可能|ok|o\.k\.?|〇|◎)?",
-    re.IGNORECASE,
+    r"男女\s*(?:[・/\-\.]\s*)?(兼用|共用|共通)\s*(?:可|可能|ok|o\.k\.?|〇|◎)?"
 )
 
 

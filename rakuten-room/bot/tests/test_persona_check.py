@@ -10,7 +10,7 @@ from pathlib import Path
 BOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BOT_DIR))
 
-from planner.item_auditor import _persona_check, _normalize_for_persona
+from planner.item_auditor import _persona_check, _normalize_for_persona, _GENDER_NEUTRAL_COMPOUND_RE
 
 
 def test_normalize_full_width_to_half():
@@ -104,6 +104,20 @@ def test_combined_text_evaluation():
 
 # --- Codex 32回目: 「兼用」単独削除 + 男女複合語 regex バリアント 回帰テスト ---
 
+def test_neutral_markers_no_standalone_兼用():
+    """neutral_markers に「兼用」「共用」「共通」単独語が含まれないことを明示保証."""
+    from planner.item_auditor import _persona_check
+    # 直接 neutral_markers リストを検査する
+    import inspect, ast, textwrap
+    import planner.item_auditor as _m
+    # 最も確実な方法: _GENDER_NEUTRAL_COMPOUND_RE 経由でなく、文字列マッチのみで拾われる単独語がないことを確認
+    # 「メンズ 兼用」を試す → 男女なし + 兼用単独 → fail になるはずなら単独語は除去済み
+    status, reason = _persona_check("メンズ スニーカー 兼用 サイズ")
+    assert status == "fail", (
+        f"「兼用」単独が neutral marker になっている可能性: got {status}: {reason}"
+    )
+
+
 def test_ih_兼用_should_fail():
     """IH/直火兼用 はジェンダー文脈なし → メンズ付きなら fail."""
     status, reason = _persona_check("メンズ フライパン IH 直火兼用")
@@ -135,6 +149,50 @@ def test_男女共用_should_pass():
     assert status in ("pass", "boost"), f"expected pass, got {status}: {reason}"
 
 
+def test_男女_dot_兼用_should_pass():
+    """「男女/兼用」「男女・兼用」区切り記号バリアント → pass."""
+    for title in ["メンズ スポーツ 男女/兼用 サイズ", "メンズ スポーツ 男女・兼用"]:
+        status, reason = _persona_check(title)
+        assert status in ("pass", "boost"), f"title={title!r}: expected pass, got {status}: {reason}"
+
+
+def test_男女兼用_全角OK_should_pass():
+    """「男女兼用ＯＫ」全角 OK → NFKC で ok に正規化 → pass."""
+    status, reason = _persona_check("メンズ 帽子 男女兼用ＯＫ")
+    assert status in ("pass", "boost"), f"expected pass, got {status}: {reason}"
+
+
+def test_regex_直接_バリアント確認():
+    """_GENDER_NEUTRAL_COMPOUND_RE が各バリアントにマッチすることを直接確認."""
+    hits = [
+        "男女兼用",
+        "男女 兼用",
+        "男女・兼用",
+        "男女/兼用",
+        "男女兼用可",
+        "男女兼用ok",
+        "男女兼用〇",
+        "男女共用",
+        "男女共通",
+        "男女 共用",
+    ]
+    for text in hits:
+        n = _normalize_for_persona(text)
+        assert _GENDER_NEUTRAL_COMPOUND_RE.search(n), f"regex should match: {text!r} (normalized: {n!r})"
+
+    no_hits = [
+        "ih 兼用",
+        "直火兼用",
+        "屋内外兼用",
+        "男女問わず不可",  # 男女単独
+        "兼用",
+        "共用",
+    ]
+    for text in no_hits:
+        n = _normalize_for_persona(text)
+        assert not _GENDER_NEUTRAL_COMPOUND_RE.search(n), f"regex should NOT match: {text!r} (normalized: {n!r})"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [
@@ -151,11 +209,15 @@ if __name__ == "__main__":
         test_masculine_context_no_marker_pass,
         test_combined_text_evaluation,
         # Codex 32回目 追加
+        test_neutral_markers_no_standalone_兼用,
         test_ih_兼用_should_fail,
         test_屋内外兼用_should_fail,
         test_男女_space_兼用_should_pass,
         test_男女兼用可_should_pass,
         test_男女共用_should_pass,
+        test_男女_dot_兼用_should_pass,
+        test_男女兼用_全角OK_should_pass,
+        test_regex_直接_バリアント確認,
     ]
     passed = 0
     failed = 0
