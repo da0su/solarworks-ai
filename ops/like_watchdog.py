@@ -36,7 +36,8 @@ WATCHDOG_LOG   = ROOT / "ops" / "like_watchdog.log"
 VM_BASE  = "http://localhost:18765"
 VM_TOKEN = "rakuten-room-v6-secret"
 
-STALE_THRESHOLD_MIN = 15    # 15分以上 phase != "shutdown" → stuck 判定
+STALE_THRESHOLD_MIN = 25    # 25分以上 phase != "shutdown" → stuck 判定
+# 2026-05-29: feed 9本に拡充後は正常セッションでも最大~20分かかる → 25分に引き上げ
 VERIFY_WAIT_SEC     = 180   # 復旧後 3分待機して再確認
 
 
@@ -158,6 +159,10 @@ def main() -> None:
     wlog(f"[STUCK] LIKE セッション stuck 検出: phase={phase}, age={age_min:.1f}min")
 
     # 復旧試行: VM HTTP で新セッション起動
+    # 冪等性注記: VM /run が実行する BrowserManagerV6._cleanup_locks() が
+    # 孤立 Chrome (stuck session) を kill してから新セッションを起動するため
+    # 多重実行のリスクは低い。stuck Chrome が kill されると stuck session の
+    # Playwright 接続が切れ、当該プロセスも異常終了する (19:40 実証済み)。
     wlog("[RECOVER] VM HTTP /run で LIKE セッション再起動...")
     success = trigger_like_session(limit=100)
 
