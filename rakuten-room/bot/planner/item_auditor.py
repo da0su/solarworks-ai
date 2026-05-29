@@ -67,6 +67,15 @@ INVALID_URL_PATTERNS = [
 
 # --- ペルソナ check (CEO 2026-05-16 指示: 31歳・0歳新米ママ) ---
 
+# Codex 32回目 fix: 男女兼用/共用/共通 の区切り文字・接尾語バリアント対応
+# 「男女 兼用」「男女・兼用」「男女兼用可」等を正規表現で拾う
+# _normalize_for_persona 後の NFKC+lower テキストに適用する
+_GENDER_NEUTRAL_COMPOUND_RE = re.compile(
+    r"男女[\s\-・/\.]{0,2}(兼用|共用|共通)(可|可能|ok|o\.k\.?|〇|◎)?",
+    re.IGNORECASE,
+)
+
+
 def _normalize_for_persona(s: str) -> str:
     """ペルソナ check 用 normalize (Codex 11回目 #3 反映: NFKC + lower).
 
@@ -141,7 +150,10 @@ def _persona_check(title: str, comment: str = "",
             "レディス",                                         # 略記
         ]
         has_masculine_marker = any(_normalize_for_persona(m) in text for m in masculine_markers)
-        has_neutral_marker = any(_normalize_for_persona(m) in text for m in neutral_markers)
+        has_neutral_marker = (
+            any(_normalize_for_persona(m) in text for m in neutral_markers)
+            or bool(_GENDER_NEUTRAL_COMPOUND_RE.search(text))  # 区切り文字・接尾語バリアント
+        )
         # 2026-05-29 CEO指示: 男服排除強化
         # 旧: masculine_marker + masculine_context_item + no_neutral → fail
         #      (文脈アイテムが必要だったため「スニーカー メンズ」等が通過していた)

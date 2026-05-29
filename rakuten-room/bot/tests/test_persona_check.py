@@ -102,6 +102,39 @@ def test_combined_text_evaluation():
     assert status == "fail", reason
 
 
+# --- Codex 32回目: 「兼用」単独削除 + 男女複合語 regex バリアント 回帰テスト ---
+
+def test_ih_兼用_should_fail():
+    """IH/直火兼用 はジェンダー文脈なし → メンズ付きなら fail."""
+    status, reason = _persona_check("メンズ フライパン IH 直火兼用")
+    # IH/直火兼用 は非ジェンダー文脈 → neutral marker にならない → fail
+    assert status == "fail", f"expected fail, got {status}: {reason}"
+
+
+def test_屋内外兼用_should_fail():
+    """屋内外兼用 はジェンダー文脈なし → メンズ付きなら fail."""
+    status, reason = _persona_check("メンズ スニーカー 屋内外兼用")
+    assert status == "fail", f"expected fail, got {status}: {reason}"
+
+
+def test_男女_space_兼用_should_pass():
+    """「男女 兼用」(スペース区切り) → regex で中立マーカとして認識 → pass."""
+    status, reason = _persona_check("スニーカー メンズ 男女 兼用 サイズ多彩")
+    assert status in ("pass", "boost"), f"expected pass, got {status}: {reason}"
+
+
+def test_男女兼用可_should_pass():
+    """「男女兼用可」(接尾語あり) → pass."""
+    status, reason = _persona_check("スポーツウォッチ メンズ 男女兼用可")
+    assert status in ("pass", "boost"), f"expected pass, got {status}: {reason}"
+
+
+def test_男女共用_should_pass():
+    """「男女共用」 → pass."""
+    status, reason = _persona_check("メンズ レインコート 男女共用 防水")
+    assert status in ("pass", "boost"), f"expected pass, got {status}: {reason}"
+
+
 if __name__ == "__main__":
     import traceback
     tests = [
@@ -117,6 +150,12 @@ if __name__ == "__main__":
         test_persona_ng_with_full_width,
         test_masculine_context_no_marker_pass,
         test_combined_text_evaluation,
+        # Codex 32回目 追加
+        test_ih_兼用_should_fail,
+        test_屋内外兼用_should_fail,
+        test_男女_space_兼用_should_pass,
+        test_男女兼用可_should_pass,
+        test_男女共用_should_pass,
     ]
     passed = 0
     failed = 0
