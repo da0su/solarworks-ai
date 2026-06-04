@@ -41,8 +41,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+# ROOM API の created_at は JST naive ("YYYY-MM-DD HH:MM:SS"). TZ 安全のため明示。
+JST = timezone(timedelta(hours=9))
 
 REPO = Path(__file__).resolve().parent.parent
 STATE = REPO / "state"
@@ -84,6 +87,70 @@ def _read_json(path: Path) -> dict | None:
         return None
 
 
+# 自アカウント (空くんママ / room_e05d4d1c1e) の user_id
+OWN_USER_ID = "1000006606047125"
+# POST 停止とみなす経過時間 (時間). 投稿は日次バッチなので 30h 無投稿=明確に停止
+POST_STALL_HOURS = 30
+
+
+def _fetch_post_truth() -> dict | None:
+    """POST の真値を公開 ROOM API から取得 (凍結 post_history.json を見ない).
+    2026-06-04 CEO 指示: room_status.py が post_history.json (5/30 凍結) を参照して
+    毎回 POST を誤って「停止」判定する誤報を解消する。真値は自アカウントの実投稿フィード。
+    戻り {today_posted, last_posted_at, last_posted_age_hours, source} / 失敗時 None。"""
+    import urllib.request
+    url = f"https://room.rakuten.co.jp/api/{OWN_USER_ID}/collects?limit=50"
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8", "replace")).get("data", [])
+    except Exception:
+        return None
+    if not data:
+        return None
+
+    def _parse(s):
+        """TZ 安全パース: ISO8601(オフセット/Z付) も "YYYY-MM-DD HH:MM:SS" も受ける。
+        naive は JST とみなす (ROOM API は JST naive)。"""
+        if not s:
+            return None
+        s = str(s).strip()
+        dt = None
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            try:
+                dt = datetime.strptime(s[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=JST)
+        return dt
+
+    times = [t for t in (_parse(p.get("created_at")) for p in data) if t]
+    if not times:
+        return None
+    now_jst = datetime.now(JST)
+    last = max(times)
+    today_jst = now_jst.date()
+    today_posted = sum(1 for t in times if t.astimezone(JST).date() == today_jst)
+    age_h = max(0.0, (now_jst - last).total_seconds() / 3600)  # clock skew で負にしない
+    return {
+        "today_posted": today_posted,
+        "last_posted_at": last.astimezone(JST).strftime("%Y-%m-%d %H:%M:%S"),
+        "last_posted_age_hours": round(age_h, 1),
+        "last_posted_age_days": round(age_h / 24, 2),  # 互換: 旧 days フィールド維持
+        "source": "public_api (truth, limit=50)",
+    }
+
+
+# 2026-06-04: HOST follow が VM 移行で廃止され follow_rate_state は永久に更新されない。
+# 死んだファイルの古さで STALE 誤報を出さないよう、STALE 判定の対象から除外する
+# (表示はするが OK/STALE は左右しない)。
+RETIRED_SOURCES = {"follow_rate_state"}
+
+
 def build_status() -> dict:
     sources: dict = {}
     any_stale = False
@@ -94,7 +161,8 @@ def build_status() -> dict:
             info["fresh"] = info["age_sec"] <= threshold
         else:
             info["fresh"] = False
-        if not info["fresh"]:
+        info["retired"] = key in RETIRED_SOURCES
+        if not info["fresh"] and key not in RETIRED_SOURCES:
             any_stale = True
         sources[key] = info
 
@@ -132,15 +200,47 @@ def build_status() -> dict:
             f_summary["login_status"] = d.get("login_status")
             f_summary["heartbeat_age_sec"] = d.get("heartbeat_age_sec")
         elif fn == "post":
-            f_summary["today_posted"] = d.get("today_posted")
-            f_summary["last_posted_at"] = d.get("last_posted_at")
-            f_summary["last_posted_age_days"] = d.get("last_posted_age_days")
+            # 2026-06-04 修正: patrol が凍結 post_history.json (5/30 停止) を見て
+            # 毎回 POST を「停止」と誤判定する誤報を解消. 真値=公開 API の実投稿フィード。
+            post_truth = _fetch_post_truth()
+            if post_truth:
+                f_summary["today_posted"] = post_truth["today_posted"]
+                f_summary["last_posted_at"] = post_truth["last_posted_at"]
+                f_summary["last_posted_age_hours"] = post_truth["last_posted_age_hours"]
+                f_summary["last_posted_age_days"] = post_truth["last_posted_age_days"]
+                f_summary["post_source"] = post_truth["source"]
+                # 真値で problem/reasons を再計算 (30h 無投稿=停止)
+                stalled = post_truth["last_posted_age_hours"] > POST_STALL_HOURS
+                f_summary["problem"] = stalled
+                f_summary["reasons"] = (
+                    [f"no_post_for_{post_truth['last_posted_age_hours']:.0f}h (truth)"]
+                    if stalled else [])
+            else:
+                # 公開 API 不達時: 凍結 patrol 値で「停止」と断定するとフラッピング/誤報の元。
+                # → unknown 扱い (problem は立てない・any_problem に算入しない)。source 明示。
+                f_summary["today_posted"] = None
+                f_summary["last_posted_at"] = d.get("last_posted_at")
+                f_summary["post_source"] = "unknown (public API unreachable)"
+                f_summary["problem"] = False
+                f_summary["reasons"] = ["public_api_unreachable (判定不能・要確認)"]
         elif fn == "like":
             f_summary["today_liked"] = d.get("today_liked")
             f_summary["last_liked_at"] = d.get("last_liked_at")
         elif fn == "followback":
             f_summary["today_followback"] = d.get("today_followback")
             f_summary["last_followback_at"] = d.get("last_followback_at")
+            # 2026-06-04 修正: 本日 FB 目標が 0 の日は「停止」と誤判定しない。
+            # 目標 0 (CEO がスプシで設定) なら FB 0 件は正しい挙動。
+            try:
+                _tg = _read_json(SSOT_FILES["daily_targets_ssot"]) or {}
+                _fb_target = (_tg.get("targets") or {}).get("followback")
+                f_summary["today_target"] = _fb_target
+                if _fb_target == 0:
+                    f_summary["problem"] = False
+                    f_summary["reasons"] = []
+                    f_summary["note"] = "本日FB目標=0のため稼働停止が正常 (誤報抑制)"
+            except Exception:
+                pass
         if f_summary.get("problem"):
             any_problem = True
         functions[fn] = f_summary
@@ -176,7 +276,10 @@ def _human(status: dict) -> str:
     lines.append("")
     lines.append("--- SSOT ファイル鮮度 ---")
     for k, v in status["sources"].items():
-        flag = "✅" if v["fresh"] else "⚠️ STALE"
+        if v.get("retired"):
+            flag = "➖ 廃止(判定対象外)"
+        else:
+            flag = "✅" if v["fresh"] else "⚠️ STALE"
         age = v.get("age_sec")
         age_h = f"{age/60:.1f}min" if age is not None else "N/A"
         lines.append(f"  {flag} {k}: age={age_h} mtime={v.get('mtime_iso')} exists={v['exists']}")
