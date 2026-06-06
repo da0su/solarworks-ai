@@ -161,6 +161,20 @@ def build_status() -> dict:
             info["fresh"] = info["age_sec"] <= threshold
         else:
             info["fresh"] = False
+        # 2026-06-06 修正: daily_targets_ssot は「1日1回更新」の値なので mtime 6h 閾値だと
+        # 毎日昼に必ず STALE 誤報になる。中身の date が当日なら fresh とみなす(日付ベース判定)。
+        if key == "daily_targets_ssot" and not info["fresh"] and info["exists"]:
+            try:
+                _dt = _read_json(path) or {}
+                _tg = _dt.get("targets")
+                # 壊れ/部分JSONを fresh と誤判定しない: 4機能の目標が揃い非Noneであること
+                _valid = isinstance(_tg, dict) and all(
+                    _tg.get(k) is not None for k in ("post", "follow", "like", "followback"))
+                if _dt.get("date") == datetime.now().strftime("%Y-%m-%d") and _valid:
+                    info["fresh"] = True
+                    info["fresh_reason"] = "date==today かつ targets 4機能とも有効 (1日1回更新の値)"
+            except Exception:
+                pass  # 読めない/壊れている場合は fresh にしない (STALEのまま=安全側)
         info["retired"] = key in RETIRED_SOURCES
         if not info["fresh"] and key not in RETIRED_SOURCES:
             any_stale = True
