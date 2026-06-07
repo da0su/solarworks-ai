@@ -130,22 +130,80 @@ def _append_follow_history(user_id: str, seed_user: str = "",
         _release_history_lock()
 
 
+# ママ・ターゲティング (2026-06-07 CEo承認): 「濃い新米ママ」を集めるため、
+# seed を mom-dense カテゴリ偏重で選ぶ。獲得フォロワーの質=シード account のフォロワーの質。
+# 旧版は全カテゴリ(mens_fashion含む)を一緒くた flatten → 非ママ混入が breadth の質を毀損していた。
+MOM_PRIMARY_CATS = ["kids"]                       # 育児=新米ママ直撃 (最優先)
+MOM_ADJACENT_CATS = ["ladies_fashion", "sweets", "household",
+                     "kitchen", "interior", "bags", "food"]  # ママが買う隣接ジャンル
+MOM_EXCLUDE_CATS = ["mens_fashion"]               # 非ママ=集客から除外 (明確に非対象のみ)
+MOM_VOLUME_FALLBACK_CATS = ["all"]                # 大型 BFS プール: 量の補完にのみ使用
+MOM_PRIMARY_RATIO = 0.7                            # kids から 7 割, 隣接から 3 割 (量が足りる時)
+
+# 設計 (2026-06-07 Codex REJECT 反映): mom-"排他"でなく mom-"加重"。
+# 質(ママ濃密)を優先しつつ、kids+隣接が不足したら "all"(大型プール)で量を必ず補完し、
+# 1日のフォロー量(breadth)を絶対に枯らさない。mens_fashion のみ除外。
+
+
 def get_seed_users(count: int = 12) -> list:
-    """seed_users.json から count 件の seed をランダム選択."""
+    """seed_users.json から count 件を *mom 加重 + 量フォールバック* で選択 (ママ・ターゲティング).
+
+    優先: kids(7割) > ママ隣接(3割) > [不足時] all(大型プール) > [なお不足] 全体(mens除外)。
+    → ママ濃密に寄せつつ、フォロー量は決して枯らさない。
+    """
     if not SEED_USERS_PATH.exists():
         return []
     try:
         data = json.loads(SEED_USERS_PATH.read_text(encoding="utf-8"))
-        # ジャンル別ユーザーリストから flatten
-        all_users = []
-        if isinstance(data, dict):
-            for genre, users in data.items():
-                if isinstance(users, list):
-                    all_users.extend(users)
-        elif isinstance(data, list):
-            all_users = data
-        random.shuffle(all_users)
-        return all_users[:count]
+        # 後方互換: list 形式ならそのまま (旧データ)
+        if isinstance(data, list):
+            users = list(dict.fromkeys(data))
+            random.shuffle(users)
+            return users[:count]
+        if not isinstance(data, dict):
+            return []
+
+        def clean(cats):
+            out = []
+            for g in cats:
+                v = data.get(g)
+                if isinstance(v, list):
+                    out.extend(v)
+            return list(dict.fromkeys(out))
+
+        primary = clean(MOM_PRIMARY_CATS)                       # kids
+        adjacent_cats = [g for g in data
+                         if g not in MOM_PRIMARY_CATS
+                         and g not in MOM_EXCLUDE_CATS
+                         and g not in MOM_VOLUME_FALLBACK_CATS]
+        adjacent = [u for u in clean(adjacent_cats) if u not in set(primary)]
+        seen = set(primary) | set(adjacent)
+        volume = [u for u in clean(MOM_VOLUME_FALLBACK_CATS) if u not in seen]  # all (量補完)
+
+        random.shuffle(primary); random.shuffle(adjacent); random.shuffle(volume)
+
+        n_primary = int(round(count * MOM_PRIMARY_RATIO))
+        picked = primary[:n_primary]
+        picked += adjacent[:count - len(picked)]                 # 隣接
+        if len(picked) < count:                                  # primary 残りで補完
+            picked += primary[n_primary:n_primary + (count - len(picked))]
+        if len(picked) < count:                                  # 量フォールバック: all
+            picked += volume[:count - len(picked)]
+        if len(picked) < count:                                  # 最終: 残り全部(mens除外済)
+            rest = [u for u in (adjacent + volume) if u not in set(picked)]
+            picked += rest[:count - len(picked)]
+        picked = list(dict.fromkeys(picked))
+        # Codex指摘#3対策: 量フォールバックがママ不足を誤魔化していないか可観測に。
+        pset = set(picked)
+        comp = {"kids": len(pset & set(primary)),
+                "adjacent": len(pset & set(adjacent)),
+                "volume_all": len(pset & set(volume))}
+        try:
+            print(f"[seed_compose] {comp} total={len(picked)}", flush=True)
+        except Exception:
+            pass
+        random.shuffle(picked)
+        return picked[:count]
     except Exception:
         return []
 
