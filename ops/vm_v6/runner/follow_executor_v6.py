@@ -208,6 +208,75 @@ def get_seed_users(count: int = 12) -> list:
         return []
 
 
+# 2026-06-07 #1接続: 高意欲ママを直接フォロー (intent_targetsを優先消費). 完全自律GTM。
+INTENT_TARGETS_PATH = HOST_BOT_DIR / "data" / "intent_targets.json"
+
+
+def load_intent_targets() -> list:
+    """data/intent_targets.json の高意欲ママ username 一覧 (score降順) を返す."""
+    try:
+        if not INTENT_TARGETS_PATH.exists():
+            return []
+        d = json.loads(INTENT_TARGETS_PATH.read_text(encoding="utf-8"))
+        return [t.get("username") for t in (d.get("targets") or []) if t.get("username")]
+    except Exception:
+        return []
+
+
+def follow_user_direct(page, username: str, history: set, log: SessionLogger,
+                       rate_detector: RateLimitDetector) -> dict:
+    """高意欲ターゲット1名を直接フォロー (Codex REJECT指摘反映で堅牢化)."""
+    result = {"success": 0, "fail": 0, "rate_limited": False, "skipped": False, "skip": 0}
+    if username in history:
+        result["skipped"] = True; result["skip"] = 1
+        return result
+    try:
+        page.goto(f"https://room.rakuten.co.jp/{username}/items", timeout=20000)
+        time.sleep(random.uniform(2.0, 3.5))                      # Codex#2: msでなくtime.sleep(秒)
+    except Exception as e:
+        log.log(f"[intent:{username}] navigate fail: {e}")
+        result["fail"] = 1
+        return result
+    if rate_detector.is_rate_limited(page):
+        log.log(f"[intent:{username}] RATE_LIMIT detected before click")
+        result["rate_limited"] = True
+        return result
+    try:
+        btns = page.query_selector_all("span.follow.icon-follow:not(.ng-hide)")
+    except Exception:
+        btns = []
+    if not btns:                                                  # 既フォロー/非公開/UI差異
+        log.log(f"[intent:{username}] no follow button -> skip")
+        result["skipped"] = True; result["skip"] = 1
+        return result
+    try:
+        btns[0].click(timeout=3000)
+        time.sleep(random.uniform(1.2, 2.5))                      # Codex#2
+        if rate_detector.is_rate_limited(page):
+            result["rate_limited"] = True
+            return result
+        # Codex#1 成功判定堅牢化: クリック後にfollow icon が消えた(=フォロー完了)ことを確認
+        try:
+            still = page.query_selector_all("span.follow.icon-follow:not(.ng-hide)")
+        except Exception:
+            still = btns                                          # 取得失敗時は変化検知失敗=fail扱い
+        if len(still) >= len(btns):                               # follow ボタンが減らない=失敗の可能性大
+            result["fail"] = 1
+            log.log(f"[intent:{username}] click no DOM change -> fail")
+            return result
+        result["success"] = 1
+        history.add(username)
+        try:
+            _append_follow_history(username, "intent_target", log=log)
+        except Exception as e:
+            log.log(f"[intent:{username}] history append exception: {e}")
+        log.log(f"[intent:{username}] follow OK (high-intent target)")
+    except Exception as e:
+        result["fail"] = 1
+        log.log(f"[intent:{username}] click fail: {e}")
+    return result
+
+
 def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                      history: set, hb: HeartbeatPusher, log: SessionLogger,
                      rate_detector: RateLimitDetector) -> dict:
@@ -392,6 +461,35 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
 
         log.log(f"loaded {len(seeds)} seeds")
         run_start = time.time()
+
+        # 2026-06-07 #1接続: 高意欲ターゲット優先消費。intent_targetsから "limit*0.5" 件まで先に直接フォロー
+        # ※残りは従来通り seed のフォロワーから補充 (量を絶対に枯らさない=GTM設計)
+        intent_targets = load_intent_targets()
+        if intent_targets:
+            # Codex#4: capは試行数(attempts)で厳守(成功数依存だと暴走)
+            cap_attempts = max(1, int(limit * 0.5))
+            attempts = 0; intent_success = 0
+            result.setdefault("skip", 0)              # Codex#5: 防御的初期化
+            log.log(f"[intent] {len(intent_targets)} targets, cap_attempts={cap_attempts}")
+            for un in intent_targets:
+                if attempts >= cap_attempts or intent_success >= cap_attempts:
+                    break
+                if result["success"] >= limit:
+                    break
+                if time.time() - run_start > MAX_RUNTIME_SEC:
+                    break
+                r = follow_user_direct(bm.page, un, history, log, rate_detector)
+                attempts += 1
+                result["success"] += r.get("success", 0)
+                intent_success += r.get("success", 0)
+                result["fail"] += r.get("fail", 0)
+                result["skip"] += r.get("skip", 0)
+                if r.get("rate_limited"):              # Codex#3: 全体停止に伝播
+                    log.log("[intent] rate limited -> abort run")
+                    result["stop_reason"] = "rate_limited"
+                    return result
+                time.sleep(random.uniform(2.5, 5.0))
+            log.log(f"[intent] phase done attempts={attempts} success={intent_success}")
 
         for seed in seeds:
             if result["success"] >= limit:
