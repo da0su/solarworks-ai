@@ -84,17 +84,27 @@ def main() -> int:
     skip_set = existing | already_followed
     logger.info(f"skip_set total: {len(skip_set)}")
 
-    # 走査する seed をランダム選択 (各カテゴリから均等)
-    walk_seeds: list[str] = []
+    # 2026-06-07 ママ・ターゲティング (CEo承認GTM): BFS走査元をkids(育児ママ核)偏重に。
+    # 旧版は各カテゴリ均等→mens_fashionも均等にwalkしallプールが非ママ汚染されていた。
+    # 新: kids 70% + ママ隣接 30%, mens_fashion/all 除外。allが必ずママ濃密化する。
+    MOM_PRIMARY = {"kids"}
+    MOM_EXCLUDE = {"mens_fashion", "all"}   # allは生成対象=自己ループ防止も兼ねる
+    primary, adjacent = [], []
     for cat, lst in seeds_data.items():
-        if not isinstance(lst, list) or not lst:
+        if not isinstance(lst, list) or not lst or cat in MOM_EXCLUDE:
             continue
-        per_cat = max(1, args.max_seeds // max(1, len(seeds_data)))
-        sample = random.sample(lst, min(per_cat, len(lst)))
-        walk_seeds.extend(sample)
+        (primary if cat in MOM_PRIMARY else adjacent).extend(lst)
+    primary = list(dict.fromkeys(primary))
+    adjacent = [u for u in dict.fromkeys(adjacent) if u not in set(primary)]
+    random.shuffle(primary); random.shuffle(adjacent)
+    n_primary = int(round(args.max_seeds * 0.7))
+    walk_seeds = primary[:n_primary] + adjacent[:args.max_seeds - n_primary]
+    if len(walk_seeds) < args.max_seeds:                        # 量フォールバック (枯渇防止)
+        walk_seeds += primary[n_primary:n_primary + (args.max_seeds - len(walk_seeds))]
+    walk_seeds = list(dict.fromkeys(walk_seeds))[:args.max_seeds]
     random.shuffle(walk_seeds)
-    walk_seeds = walk_seeds[:args.max_seeds]
-    logger.info(f"will walk {len(walk_seeds)} seeds across categories")
+    logger.info(f"will walk {len(walk_seeds)} mom-weighted seeds "
+                f"(kids_in_pool={len(primary)} adjacent_in_pool={len(adjacent)})")
 
     # browser 起動 (chrome_profile_follow を流用)
     bm = BrowserManager(action="follow")
