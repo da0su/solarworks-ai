@@ -127,6 +127,20 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
         except Exception:
             already_following = set()
 
+        # 2026-05-28 fix: FOLLOW executor は follow_log ではなく follow_history.json に書き込む。
+        # follow_log 681 件だけでは FOLLOW 済みユーザーを取り逃し false positive INSERT する。
+        try:
+            import json as _fb_json
+            _fh_path = HOST_BOT_DIR / "data" / "follow_history.json"
+            if _fh_path.exists():
+                with open(str(_fh_path), "r", encoding="utf-8") as _fhf:
+                    _fh_data = _fb_json.load(_fhf)
+                _fh_ids = {e.get("user_id") for e in _fh_data if e.get("user_id")}
+                log.log(f"[scan_followers] follow_history.json: {len(_fh_ids)} entries → merged into already_following")
+                already_following |= _fh_ids
+        except Exception as _fhe:
+            log.log(f"[scan_followers] follow_history.json load err: {_fhe}")
+
         skip_set = already_queued | already_following
         if my_user_id:
             skip_set.add(my_user_id)
@@ -377,8 +391,12 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
     import time as _fb_time
     from pathlib import Path as _fb_P
     _hb_share = _fb_P(r"\\vboxsvr\share")
+    # 2026-06-08 修正(CEoFB目標150化で発覚): 旧 AND 条件 + 10分待ち は FOLLOW がほぼ常時稼働の
+    # 環境で永遠に成立せず、待機だけで終了→FB成功0 の根本原因。
+    # 新: (1) like_age>120 が満たされれば進む(LIKEは間欠的なので主条件) (2) FOLLOWは長期稼働で
+    # heartbeat 鮮度だけでは判断不能なので必須条件から外す (3) 最大待機を 180s に短縮し残時間を投稿に使う。
     _wait_start = _fb_time.time()
-    while _fb_time.time() - _wait_start < 600:  # max 10 min
+    while _fb_time.time() - _wait_start < 180:  # max 3 min (旧 10 min → 短縮)
         _like_age = 9999.0
         _follow_age = 9999.0
         try:
@@ -393,11 +411,11 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                 _follow_age = _fb_time.time() - _ff.stat().st_mtime
         except Exception:
             pass
-        if _like_age > 120 and _follow_age > 120:
+        if _like_age > 120:  # LIKE が静かなら FOLLOW と同時起動の Chrome 競合は起きにくい
             log.log(f"[fb_wait] like_age={_like_age:.0f}s follow_age={_follow_age:.0f}s → proceed")
             break
-        log.log(f"[fb_wait] like_age={_like_age:.0f}s follow_age={_follow_age:.0f}s → wait 30s")
-        _fb_time.sleep(30)
+        log.log(f"[fb_wait] like_age={_like_age:.0f}s follow_age={_follow_age:.0f}s → wait 20s")
+        _fb_time.sleep(20)
 
     # 2026-05-24: VM-native FB executor (HOST followback_rpa を回避)
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
@@ -440,7 +458,7 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
         # ── pending candidates を取得 ──
         rows = con.execute(
             "SELECT id, follower_user_id, follower_username FROM followback_queue "
-            "WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
+            "WHERE status='pending' ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
         log.log(f"[trace] step12: pending_rows={len(rows)}")
 
@@ -458,7 +476,7 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
             if inserted > 0:
                 rows = con.execute(
                     "SELECT id, follower_user_id, follower_username FROM followback_queue "
-                    "WHERE status='pending' ORDER BY id LIMIT ?", (limit,)
+                    "WHERE status='pending' ORDER BY id DESC LIMIT ?", (limit,)
                 ).fetchall()
 
         if not rows:
@@ -489,13 +507,15 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                 page.goto(url, wait_until="domcontentloaded", timeout=20000)
                 page.wait_for_timeout(2500)
                 # 2026-05-26: 「フォロー中」を先に検出 → 既フォロー済なら completed (no-op)
-                # AngularJS 旧 ROOM では a[ng-if*="following"] / button 両方をカバー
-                following_already = (
-                    page.locator(
-                        'button[aria-label="フォロー中"], button:has-text("フォロー中"), '
-                        'a:has-text("フォロー中"), [class*="following"]'
-                    ).count() > 0
+                # 2026-05-28 拡張: profile ページは「フォローをやめる」等も表示する可能性あり
+                _ALREADY_SEL = (
+                    'button[aria-label="フォロー中"], button:has-text("フォロー中"), '
+                    'a:has-text("フォロー中"), [class*="following"], '
+                    'button:has-text("フォローをやめる"), a:has-text("フォローをやめる"), '
+                    'button:has-text("アンフォロー"), a:has-text("アンフォロー"), '
+                    '[aria-label="フォローをやめる"], [aria-label="アンフォロー"]'
                 )
+                following_already = page.locator(_ALREADY_SEL).count() > 0
                 if following_already:
                     already_following_ids.append(qid)
                     log.log(f"ALREADY [{len(already_following_ids)}] {user_id} (フォロー中)")
@@ -515,14 +535,28 @@ def run_followback(limit: int = 30, hb: HeartbeatPusher = None, log: SessionLogg
                     fail_ids[qid] = f"click_err:{type(e).__name__}"
                     log.log(f"FAIL {user_id}: click_err {type(e).__name__}")
                     continue
-                page.wait_for_timeout(2000)
-                # verify
-                followed = (
-                    page.locator(
-                        'button[aria-label="フォロー中"], button:has-text("フォロー中"), '
-                        'a:has-text("フォロー中"), [class*="following"]'
-                    ).count() > 0
-                )
+                # 2026-05-28: verify 方式を変更
+                # fixed 5s wait の代わりに「再ナビゲートして最新状態を確認」(サーバー確定状態)
+                # 2026-05-28 fix: 2000ms → 4000ms (Rakuten API の処理遅延対応)
+                # 2000ms では API 未コミット状態で re-nav し verify_failed になるケースあり
+                page.wait_for_timeout(4000)  # API 処理待ち (4s)
+                # 再ナビゲートで fresh page (AngularJS キャッシュを回避)
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    page.wait_for_timeout(2500)
+                except Exception:
+                    pass
+                # 再ナビゲート後: フォロー中 / フォローをやめる / アンフォロー / フォローするボタン消滅
+                followed = page.locator(_ALREADY_SEL).count() > 0
+                if not followed:
+                    still_on_room = "room.rakuten.co.jp" in page.url
+                    follow_btn_gone = page.locator(
+                        'button:has-text("フォローする"), a:has-text("フォローする"), '
+                        '[aria-label="フォローする"]'
+                    ).count() == 0
+                    if follow_btn_gone and still_on_room:
+                        followed = True
+                        log.log(f"[verify] フォローするボタン消滅 → 成功判定 {user_id}")
                 if followed:
                     success_ids.append(qid)
                     log.log(f"OK [{len(success_ids)}/{limit}] {user_id}")
