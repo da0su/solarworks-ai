@@ -37,11 +37,24 @@ BLACKLIST_MULTI_MONTH_CNT = 2     # 2ヶ月以上連続出現で sales=0 → 候
 def _load_csv(path: Path) -> tuple[str, list[tuple[str, int, int, int, int]]]:
     """1ヶ月分の CSV を読込。
 
+    エンコーディング: utf-8-sig 優先・失敗時 cp932 にフォールバック
+    (楽天アフィリエイト管理画面は utf-8-sig で出力するが、Excel 経由保存等で
+     cp932 になる可能性に対応)。
+
     Returns:
         (期間ラベル "YYYY.MM", [(shop_name, rewards, clicks, sales, amount), ...])
     """
-    with open(path, encoding="utf-8-sig") as f:
-        lines = f.readlines()
+    lines: list[str] | None = None
+    for enc in ("utf-8-sig", "cp932"):
+        try:
+            with open(path, encoding=enc) as f:
+                lines = f.readlines()
+            break
+        except UnicodeDecodeError:
+            continue
+    if lines is None:
+        print(f"  [skip] エンコーディング判別失敗: {path.name}", file=sys.stderr)
+        return "", []
     period = ""
     if lines:
         m = re.search(r"(\d{4}\.\d{2})", lines[0])
