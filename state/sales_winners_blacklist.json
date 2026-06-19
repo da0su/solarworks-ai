@@ -4,7 +4,7 @@
   "source": "楽天アフィリエイトレポート 2026.04 + 2026.05 + 2026.06 (6/19時点)",
   "ceo_instruction": "2026-06-19 21時 線分析 (5月ピーク→6月後退・CVR 5.05→4.85→3.97低下) に基づき、勝ち筋shop優先・死蔵shop除外で集客を売上に転換する戦略",
   "notes": {
-    "match_rule": "shop_name の substring 照合 (大文字小文字 + 全半角を簡易正規化)。誤マッチ防止のため4文字未満の token はマッチしない",
+    "match_rule": "shop_name の substring 照合 (大文字小文字 + 全半角を簡易正規化)。誤マッチ防止のため3文字未満の token はマッチしない",
     "winners_effect": "score +20 / priority=1 強制 / 集中投入",
     "blacklist_effect": "convert_to_source_item で None 返却 = pool 投入不可",
     "kill_switch": "env RAKUTEN_SHOP_FILTER_ENABLED=0 で全機能無効化 (緊急 fallback)"

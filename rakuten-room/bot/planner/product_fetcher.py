@@ -53,6 +53,11 @@ def _normalize_shop_token(s: str) -> str:
 def _load_shop_filter() -> dict:
     """sales_winners_blacklist.json を mtime キャッシュで読込.
 
+    Codex 6/19 review 反映:
+    - 読込失敗時: 直近ロード成功キャッシュがあれば継続使用 (fail-closed)。
+      初回ロード失敗のみフェイルオープン (disabled)。
+    - ロード失敗は error ログで明確化 (静音化しない)。
+
     Returns:
         dict: {
           "enabled": bool,
@@ -65,13 +70,26 @@ def _load_shop_filter() -> dict:
         return {"enabled": False, "winners": [], "blacklist": []}
     try:
         mtime = SHOP_FILTER_PATH.stat().st_mtime
-    except OSError:
+    except OSError as e:
+        if _shop_filter_cache is not None:
+            logger.error(
+                f"[shop_filter] stat failed ({e}) - retain previous cache "
+                f"(winners={len(_shop_filter_cache['winners'])} "
+                f"blacklist={len(_shop_filter_cache['blacklist'])})"
+            )
+            return _shop_filter_cache
+        logger.error(f"[shop_filter] stat failed ({e}) and no cache - disable (fail-open)")
         return {"enabled": False, "winners": [], "blacklist": []}
     if _shop_filter_cache is not None and mtime == _shop_filter_mtime:
         return _shop_filter_cache
     try:
         with open(SHOP_FILTER_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+        schema_version = data.get("schema_version", 0)
+        if schema_version != 1:
+            logger.warning(
+                f"[shop_filter] unknown schema_version={schema_version} (expected 1) - proceed"
+            )
         winners = []
         for w in data.get("winners", []):
             name = w.get("shop_name", "")
@@ -92,11 +110,16 @@ def _load_shop_filter() -> dict:
         _shop_filter_mtime = mtime
         logger.info(
             f"[shop_filter] loaded winners={len(winners)} blacklist={len(blacklist)} "
-            f"from {SHOP_FILTER_PATH.name}"
+            f"schema_v{schema_version} from {SHOP_FILTER_PATH.name}"
         )
         return _shop_filter_cache
     except Exception as e:
-        logger.warning(f"[shop_filter] load failed (fallback to disabled): {e}")
+        if _shop_filter_cache is not None:
+            logger.error(
+                f"[shop_filter] load failed ({e}) - retain previous cache"
+            )
+            return _shop_filter_cache
+        logger.error(f"[shop_filter] load failed ({e}) and no cache - disable (fail-open)")
         return {"enabled": False, "winners": [], "blacklist": []}
 
 
@@ -237,12 +260,14 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
 
     # 2026-06-19: 売上線分析(4-6月)に基づく shop blacklist フィルタ
     # 3ヶ月連続 click 死蔵 or 単月 click>=5 全滅 shop を pool 投入前に除外
+    # ログ過多防止 (Codex 6/19 review): env RAKUTEN_SHOP_FILTER_DEBUG=1 で個別ログ ON
     api_shop_name = item.get("shopName", "")
     shop_filter = _load_shop_filter()
     if shop_filter["enabled"]:
         hit = _shop_filter_match(api_shop_name, shop_filter["blacklist"])
         if hit:
-            logger.debug(f"[shop_filter] BLACKLIST skip: '{api_shop_name}' (match='{hit}')")
+            if os.environ.get("RAKUTEN_SHOP_FILTER_DEBUG") == "1":
+                logger.debug(f"[shop_filter] BLACKLIST skip: '{api_shop_name}' (match='{hit}')")
             return None
 
     # item_code: APIから直接取得（shopCode + itemCode）
@@ -282,12 +307,14 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
 
     # 2026-06-19: 売上線分析(4-6月)勝ち筋 shop boost
     # 4-6月で売上発生したshop = score +20 / priority=1 強制
+    # ログ過多防止 (Codex 6/19 review): env RAKUTEN_SHOP_FILTER_DEBUG=1 で個別ログ ON
     winner_hit = None
     if shop_filter["enabled"]:
         winner_hit = _shop_filter_match(api_shop_name, shop_filter["winners"])
         if winner_hit:
             score += 20
-            logger.debug(f"[shop_filter] WINNER boost: '{api_shop_name}' (match='{winner_hit}')")
+            if os.environ.get("RAKUTEN_SHOP_FILTER_DEBUG") == "1":
+                logger.debug(f"[shop_filter] WINNER boost: '{api_shop_name}' (match='{winner_hit}')")
 
     score = min(score, 100)
 
