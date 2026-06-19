@@ -38,7 +38,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 SHOP_FILTER_PATH = _REPO_ROOT / "state" / "sales_winners_blacklist.json"
 _shop_filter_cache: dict | None = None
 _shop_filter_mtime: float = 0.0
+_shop_filter_last_err_key: tuple | None = None  # (err_kind, mtime|None) で error ログ抑止
 _SHOP_FILTER_MIN_TOKEN_LEN = 3  # 短すぎる token は誤マッチ防止のためスキップ (3未満で除外)
+_SHOP_FILTER_DISABLED_RESULT = {"enabled": False, "winners": [], "blacklist": []}
 
 
 def _normalize_shop_token(s: str) -> str:
@@ -53,43 +55,59 @@ def _normalize_shop_token(s: str) -> str:
 def _load_shop_filter() -> dict:
     """sales_winners_blacklist.json を mtime キャッシュで読込.
 
-    Codex 6/19 review 反映:
-    - 読込失敗時: 直近ロード成功キャッシュがあれば継続使用 (fail-closed)。
-      初回ロード失敗のみフェイルオープン (disabled)。
-    - ロード失敗は error ログで明確化 (静音化しない)。
-
-    Returns:
-        dict: {
-          "enabled": bool,
-          "winners": [(orig_name, normalized_token), ...],
-          "blacklist": [(orig_name, normalized_token), ...]
-        }
+    Codex 6/19 review (REVIEW_NEEDED) 反映:
+    - 失敗の error ログは (err_kind, mtime) 単位で1回のみ (Slack 過送防止)
+    - 未知 schema_version は cache 継続 (fall back) + 初回のみ warning
+    - 失敗時: 直近キャッシュがあれば継続 (fail-closed)
+    - 初回ロード失敗のみフェイルオープン (disabled)
     """
-    global _shop_filter_cache, _shop_filter_mtime
-    if os.environ.get("RAKUTEN_SHOP_FILTER_ENABLED", "1") == "0":
-        return {"enabled": False, "winners": [], "blacklist": []}
+    global _shop_filter_cache, _shop_filter_mtime, _shop_filter_last_err_key
+
     try:
         mtime = SHOP_FILTER_PATH.stat().st_mtime
     except OSError as e:
+        err_key = ("stat", None)
         if _shop_filter_cache is not None:
-            logger.error(
-                f"[shop_filter] stat failed ({e}) - retain previous cache "
-                f"(winners={len(_shop_filter_cache['winners'])} "
-                f"blacklist={len(_shop_filter_cache['blacklist'])})"
-            )
+            if _shop_filter_last_err_key != err_key:
+                logger.error(
+                    f"[shop_filter] stat failed ({e}) - retain previous cache "
+                    f"(winners={len(_shop_filter_cache['winners'])} "
+                    f"blacklist={len(_shop_filter_cache['blacklist'])})"
+                )
+                _shop_filter_last_err_key = err_key
             return _shop_filter_cache
-        logger.error(f"[shop_filter] stat failed ({e}) and no cache - disable (fail-open)")
-        return {"enabled": False, "winners": [], "blacklist": []}
+        if _shop_filter_last_err_key != err_key:
+            logger.error(f"[shop_filter] stat failed ({e}) and no cache - disable (fail-open)")
+            _shop_filter_last_err_key = err_key
+        return _SHOP_FILTER_DISABLED_RESULT
+
     if _shop_filter_cache is not None and mtime == _shop_filter_mtime:
         return _shop_filter_cache
+
     try:
         with open(SHOP_FILTER_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         schema_version = data.get("schema_version", 0)
         if schema_version != 1:
-            logger.warning(
-                f"[shop_filter] unknown schema_version={schema_version} (expected 1) - proceed"
-            )
+            err_key = ("schema_unknown", schema_version)
+            if _shop_filter_cache is not None:
+                if _shop_filter_last_err_key != err_key:
+                    logger.warning(
+                        f"[shop_filter] unknown schema_version={schema_version} "
+                        f"(expected 1) - retain previous cache"
+                    )
+                    _shop_filter_last_err_key = err_key
+                _shop_filter_mtime = mtime  # 再 open ループ防止
+                return _shop_filter_cache
+            # 初回かつ未知 schema は fail-open
+            if _shop_filter_last_err_key != err_key:
+                logger.error(
+                    f"[shop_filter] unknown schema_version={schema_version} (expected 1) "
+                    f"and no cache - disable (fail-open)"
+                )
+                _shop_filter_last_err_key = err_key
+            _shop_filter_mtime = mtime
+            return _SHOP_FILTER_DISABLED_RESULT
         winners = []
         for w in data.get("winners", []):
             name = w.get("shop_name", "")
@@ -108,19 +126,25 @@ def _load_shop_filter() -> dict:
             "blacklist": blacklist,
         }
         _shop_filter_mtime = mtime
+        _shop_filter_last_err_key = None  # 成功で reset
         logger.info(
             f"[shop_filter] loaded winners={len(winners)} blacklist={len(blacklist)} "
             f"schema_v{schema_version} from {SHOP_FILTER_PATH.name}"
         )
         return _shop_filter_cache
     except Exception as e:
+        err_key = ("parse", mtime)
         if _shop_filter_cache is not None:
-            logger.error(
-                f"[shop_filter] load failed ({e}) - retain previous cache"
-            )
+            if _shop_filter_last_err_key != err_key:
+                logger.error(f"[shop_filter] load failed ({e}) - retain previous cache")
+                _shop_filter_last_err_key = err_key
+            _shop_filter_mtime = mtime  # 同 mtime 再パース防止
             return _shop_filter_cache
-        logger.error(f"[shop_filter] load failed ({e}) and no cache - disable (fail-open)")
-        return {"enabled": False, "winners": [], "blacklist": []}
+        if _shop_filter_last_err_key != err_key:
+            logger.error(f"[shop_filter] load failed ({e}) and no cache - disable (fail-open)")
+            _shop_filter_last_err_key = err_key
+        _shop_filter_mtime = mtime
+        return _SHOP_FILTER_DISABLED_RESULT
 
 
 def _shop_filter_match(api_shop_name: str, entries: list[tuple[str, str]]) -> str | None:
@@ -260,9 +284,12 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
 
     # 2026-06-19: 売上線分析(4-6月)に基づく shop blacklist フィルタ
     # 3ヶ月連続 click 死蔵 or 単月 click>=5 全滅 shop を pool 投入前に除外
-    # ログ過多防止 (Codex 6/19 review): env RAKUTEN_SHOP_FILTER_DEBUG=1 で個別ログ ON
+    # kill switch (Codex 6/19 review #5): env=0 なら _load_shop_filter を呼ばず即抜け
     api_shop_name = item.get("shopName", "")
-    shop_filter = _load_shop_filter()
+    if os.environ.get("RAKUTEN_SHOP_FILTER_ENABLED", "1") == "0":
+        shop_filter = _SHOP_FILTER_DISABLED_RESULT
+    else:
+        shop_filter = _load_shop_filter()
     if shop_filter["enabled"]:
         hit = _shop_filter_match(api_shop_name, shop_filter["blacklist"])
         if hit:
