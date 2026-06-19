@@ -360,10 +360,17 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
     score = 50
     score += min(int(review_count / 10), 20)   # レビュー数 max+20
     score += min(int(review_avg * 4), 20)       # レビュー平均 max+20
-    if 1000 <= price <= 10000:                  # 価格帯ボーナス
-        score += 10
+    # 価格帯ボーナス (2026-06-19 売上線分析で精緻化):
+    # 売上26件の単価分布: 中央値¥2,881 / 81% が ¥1,000-5,000 帯
+    # ¥1,000-5,000:  +15 (最頻帯・「即買い」価格)
+    # ¥5,000-10,000: +8  (popomi¥13,390/楽天トラベル¥29,667級は稀少)
+    # それ以外:       +3
+    if 1000 <= price <= 5000:
+        score += 15
+    elif 5000 < price <= 10000:
+        score += 8
     else:
-        score += 5
+        score += 3
 
     # 2026-06-19: 売上線分析(4-6月)勝ち筋 shop boost
     # 4-6月で売上発生したshop = score +20 / priority=1 強制
