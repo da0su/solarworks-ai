@@ -12,6 +12,7 @@ import random
 import re
 import sys
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -29,6 +30,87 @@ RAKUTEN_API_URL_LEGACY = "https://app.rakuten.co.jp/services/api/IchibaItem/Sear
 
 SOURCE_ITEMS_PATH = config.DATA_DIR / "source_items.json"
 POST_HISTORY_PATH = config.DATA_DIR / "post_history.json"
+
+# 2026-06-19: 売上線分析(4-6月)に基づく勝ち筋/死蔵shopフィルタ
+# SSOT: <repo_root>/state/sales_winners_blacklist.json
+# kill switch: env RAKUTEN_SHOP_FILTER_ENABLED=0 で無効化
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+SHOP_FILTER_PATH = _REPO_ROOT / "state" / "sales_winners_blacklist.json"
+_shop_filter_cache: dict | None = None
+_shop_filter_mtime: float = 0.0
+_SHOP_FILTER_MIN_TOKEN_LEN = 3  # 短すぎる token は誤マッチ防止のためスキップ (3未満で除外)
+
+
+def _normalize_shop_token(s: str) -> str:
+    """shop名 substring 照合用の簡易正規化 (NFKC + lower + 空白潰し)"""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKC", s).lower()
+    s = re.sub(r"\s+", "", s)
+    return s
+
+
+def _load_shop_filter() -> dict:
+    """sales_winners_blacklist.json を mtime キャッシュで読込.
+
+    Returns:
+        dict: {
+          "enabled": bool,
+          "winners": [(orig_name, normalized_token), ...],
+          "blacklist": [(orig_name, normalized_token), ...]
+        }
+    """
+    global _shop_filter_cache, _shop_filter_mtime
+    if os.environ.get("RAKUTEN_SHOP_FILTER_ENABLED", "1") == "0":
+        return {"enabled": False, "winners": [], "blacklist": []}
+    try:
+        mtime = SHOP_FILTER_PATH.stat().st_mtime
+    except OSError:
+        return {"enabled": False, "winners": [], "blacklist": []}
+    if _shop_filter_cache is not None and mtime == _shop_filter_mtime:
+        return _shop_filter_cache
+    try:
+        with open(SHOP_FILTER_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        winners = []
+        for w in data.get("winners", []):
+            name = w.get("shop_name", "")
+            tok = _normalize_shop_token(name)
+            if len(tok) >= _SHOP_FILTER_MIN_TOKEN_LEN:
+                winners.append((name, tok))
+        blacklist = []
+        for b in data.get("blacklist", []):
+            name = b.get("shop_name", "")
+            tok = _normalize_shop_token(name)
+            if len(tok) >= _SHOP_FILTER_MIN_TOKEN_LEN:
+                blacklist.append((name, tok))
+        _shop_filter_cache = {
+            "enabled": True,
+            "winners": winners,
+            "blacklist": blacklist,
+        }
+        _shop_filter_mtime = mtime
+        logger.info(
+            f"[shop_filter] loaded winners={len(winners)} blacklist={len(blacklist)} "
+            f"from {SHOP_FILTER_PATH.name}"
+        )
+        return _shop_filter_cache
+    except Exception as e:
+        logger.warning(f"[shop_filter] load failed (fallback to disabled): {e}")
+        return {"enabled": False, "winners": [], "blacklist": []}
+
+
+def _shop_filter_match(api_shop_name: str, entries: list[tuple[str, str]]) -> str | None:
+    """API取得 shopName が entries のいずれかに substring マッチすれば 元名を返す"""
+    if not api_shop_name or not entries:
+        return None
+    norm = _normalize_shop_token(api_shop_name)
+    if not norm:
+        return None
+    for orig, tok in entries:
+        if tok in norm:
+            return orig
+    return None
 
 
 def _extract_item_code(url: str) -> str:
@@ -148,6 +230,21 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
     if not url or not title:
         return None
 
+    # 2026-05-28: 販売開始前・在庫なし商品を除外 (CEO指示)
+    # availability: 1=在庫あり, 0=在庫なし/販売開始前
+    if item.get("availability", 1) == 0:
+        return None
+
+    # 2026-06-19: 売上線分析(4-6月)に基づく shop blacklist フィルタ
+    # 3ヶ月連続 click 死蔵 or 単月 click>=5 全滅 shop を pool 投入前に除外
+    api_shop_name = item.get("shopName", "")
+    shop_filter = _load_shop_filter()
+    if shop_filter["enabled"]:
+        hit = _shop_filter_match(api_shop_name, shop_filter["blacklist"])
+        if hit:
+            logger.debug(f"[shop_filter] BLACKLIST skip: '{api_shop_name}' (match='{hit}')")
+            return None
+
     # item_code: APIから直接取得（shopCode + itemCode）
     shop_code = item.get("shopCode", "")
     item_code_raw = item.get("itemCode", "")
@@ -182,10 +279,22 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
         score += 10
     else:
         score += 5
+
+    # 2026-06-19: 売上線分析(4-6月)勝ち筋 shop boost
+    # 4-6月で売上発生したshop = score +20 / priority=1 強制
+    winner_hit = None
+    if shop_filter["enabled"]:
+        winner_hit = _shop_filter_match(api_shop_name, shop_filter["winners"])
+        if winner_hit:
+            score += 20
+            logger.debug(f"[shop_filter] WINNER boost: '{api_shop_name}' (match='{winner_hit}')")
+
     score = min(score, 100)
 
-    # priority
-    if score >= 80:
+    # priority (winner は問答無用で 1)
+    if winner_hit:
+        priority = 1
+    elif score >= 80:
         priority = 1
     elif score >= 60:
         priority = 2
@@ -204,6 +313,8 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
         "price": price,
         "image_url": image_url,
         "shop_name": item.get("shopName", ""),
+        "availability": item.get("availability", 1),  # 2026-05-28: 保持して auditor でも検証
+        "sales_winner": winner_hit,  # 2026-06-19: 勝ち筋shopマッチ時のみ非None
         "fetched_at": datetime.now().isoformat(),
     }
 
