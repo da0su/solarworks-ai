@@ -39,8 +39,13 @@ SHOP_FILTER_PATH = _REPO_ROOT / "state" / "sales_winners_blacklist.json"
 _shop_filter_cache: dict | None = None
 _shop_filter_mtime: float = 0.0
 _shop_filter_last_err_key: tuple | None = None  # (err_kind, mtime|None) で error ログ抑止
+_shop_filter_last_fail_mtime: float | None = None  # parse 失敗 mtime のネガティブキャッシュ
 _SHOP_FILTER_MIN_TOKEN_LEN = 3  # 短すぎる token は誤マッチ防止のためスキップ (3未満で除外)
-_SHOP_FILTER_DISABLED_RESULT = {"enabled": False, "winners": [], "blacklist": []}
+
+
+def _disabled_filter_result() -> dict:
+    """無効化時の戻り値 (毎回新規 dict / 外部破壊耐性)"""
+    return {"enabled": False, "winners": [], "blacklist": []}
 
 
 def _normalize_shop_token(s: str) -> str:
@@ -55,13 +60,19 @@ def _normalize_shop_token(s: str) -> str:
 def _load_shop_filter() -> dict:
     """sales_winners_blacklist.json を mtime キャッシュで読込.
 
-    Codex 6/19 review (REVIEW_NEEDED) 反映:
-    - 失敗の error ログは (err_kind, mtime) 単位で1回のみ (Slack 過送防止)
-    - 未知 schema_version は cache 継続 (fall back) + 初回のみ warning
-    - 失敗時: 直近キャッシュがあれば継続 (fail-closed)
-    - 初回ロード失敗のみフェイルオープン (disabled)
+    Codex 6/19 review (3回目: REJECT) 反映:
+    - kill switch は _load_shop_filter 先頭で二重防御 (caller 拡張耐性)
+    - 戻り値は外部破壊耐性: cache hit は同一 dict, disabled は毎回新規 dict
+    - 初回パース失敗 mtime をネガティブキャッシュし同 mtime での再 I/O を防止
+    - error/warning ログは (err_kind, mtime|...) で rate-limit
+    - 未知 schema は cache 継続 fall back / 初回は fail-open
     """
-    global _shop_filter_cache, _shop_filter_mtime, _shop_filter_last_err_key
+    global _shop_filter_cache, _shop_filter_mtime
+    global _shop_filter_last_err_key, _shop_filter_last_fail_mtime
+
+    # 二重防御: kill switch (caller が直接呼んだ場合の最終ガード)
+    if os.environ.get("RAKUTEN_SHOP_FILTER_ENABLED", "1") == "0":
+        return _disabled_filter_result()
 
     try:
         mtime = SHOP_FILTER_PATH.stat().st_mtime
@@ -79,10 +90,13 @@ def _load_shop_filter() -> dict:
         if _shop_filter_last_err_key != err_key:
             logger.error(f"[shop_filter] stat failed ({e}) and no cache - disable (fail-open)")
             _shop_filter_last_err_key = err_key
-        return _SHOP_FILTER_DISABLED_RESULT
+        return _disabled_filter_result()
 
+    # 同一 mtime: 成功キャッシュ or ネガティブキャッシュで I/O skip
     if _shop_filter_cache is not None and mtime == _shop_filter_mtime:
         return _shop_filter_cache
+    if _shop_filter_cache is None and _shop_filter_last_fail_mtime == mtime:
+        return _disabled_filter_result()
 
     try:
         with open(SHOP_FILTER_PATH, "r", encoding="utf-8") as f:
@@ -99,15 +113,15 @@ def _load_shop_filter() -> dict:
                     _shop_filter_last_err_key = err_key
                 _shop_filter_mtime = mtime  # 再 open ループ防止
                 return _shop_filter_cache
-            # 初回かつ未知 schema は fail-open
+            # 初回かつ未知 schema は fail-open + ネガティブキャッシュ
             if _shop_filter_last_err_key != err_key:
                 logger.error(
                     f"[shop_filter] unknown schema_version={schema_version} (expected 1) "
                     f"and no cache - disable (fail-open)"
                 )
                 _shop_filter_last_err_key = err_key
-            _shop_filter_mtime = mtime
-            return _SHOP_FILTER_DISABLED_RESULT
+            _shop_filter_last_fail_mtime = mtime
+            return _disabled_filter_result()
         winners = []
         for w in data.get("winners", []):
             name = w.get("shop_name", "")
@@ -127,6 +141,7 @@ def _load_shop_filter() -> dict:
         }
         _shop_filter_mtime = mtime
         _shop_filter_last_err_key = None  # 成功で reset
+        _shop_filter_last_fail_mtime = None
         logger.info(
             f"[shop_filter] loaded winners={len(winners)} blacklist={len(blacklist)} "
             f"schema_v{schema_version} from {SHOP_FILTER_PATH.name}"
@@ -143,8 +158,8 @@ def _load_shop_filter() -> dict:
         if _shop_filter_last_err_key != err_key:
             logger.error(f"[shop_filter] load failed ({e}) and no cache - disable (fail-open)")
             _shop_filter_last_err_key = err_key
-        _shop_filter_mtime = mtime
-        return _SHOP_FILTER_DISABLED_RESULT
+        _shop_filter_last_fail_mtime = mtime  # ネガティブキャッシュ
+        return _disabled_filter_result()
 
 
 def _shop_filter_match(api_shop_name: str, entries: list[tuple[str, str]]) -> str | None:
@@ -285,9 +300,10 @@ def convert_to_source_item(raw_item: dict, genre: str) -> dict | None:
     # 2026-06-19: 売上線分析(4-6月)に基づく shop blacklist フィルタ
     # 3ヶ月連続 click 死蔵 or 単月 click>=5 全滅 shop を pool 投入前に除外
     # kill switch (Codex 6/19 review #5): env=0 なら _load_shop_filter を呼ばず即抜け
+    # _load_shop_filter 側にも二重防御あり (caller 拡張耐性)
     api_shop_name = item.get("shopName", "")
     if os.environ.get("RAKUTEN_SHOP_FILTER_ENABLED", "1") == "0":
-        shop_filter = _SHOP_FILTER_DISABLED_RESULT
+        shop_filter = _disabled_filter_result()
     else:
         shop_filter = _load_shop_filter()
     if shop_filter["enabled"]:
