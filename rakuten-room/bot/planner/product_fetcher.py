@@ -44,9 +44,14 @@ _shop_filter_last_fail_mtime_ns: int | None = None  # parse 失敗 mtime のネ�
 _SHOP_FILTER_MIN_TOKEN_LEN = 3  # 短すぎる token は誤マッチ防止のためスキップ (3未満で除外)
 
 
-def _disabled_filter_result() -> dict:
-    """無効化時の戻り値 (毎回新規 dict / 外部破壊耐性)"""
-    return {"enabled": False, "winners": [], "blacklist": []}
+def _disabled_filter_result() -> types.MappingProxyType:
+    """無効化時の戻り値 (毎回新規 MappingProxyType / API 一貫性のため enabled=True
+    と同じ不変ビュー型)"""
+    return types.MappingProxyType({
+        "enabled": False,
+        "winners": (),
+        "blacklist": (),
+    })
 
 
 def _wrap_immutable_filter(winners: list, blacklist: list) -> types.MappingProxyType:
