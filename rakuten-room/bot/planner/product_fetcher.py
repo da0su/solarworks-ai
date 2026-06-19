@@ -12,6 +12,7 @@ import random
 import re
 import sys
 import time
+import types
 import unicodedata
 import urllib.parse
 import urllib.request
@@ -36,16 +37,28 @@ POST_HISTORY_PATH = config.DATA_DIR / "post_history.json"
 # kill switch: env RAKUTEN_SHOP_FILTER_ENABLED=0 で無効化
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 SHOP_FILTER_PATH = _REPO_ROOT / "state" / "sales_winners_blacklist.json"
-_shop_filter_cache: dict | None = None
-_shop_filter_mtime: float = 0.0
+_shop_filter_cache_view: types.MappingProxyType | None = None  # 不変ビュー (cache hit 用)
+_shop_filter_mtime_ns: int = 0  # int 比較で float 丸め問題回避
 _shop_filter_last_err_key: tuple | None = None  # (err_kind, mtime|None) で error ログ抑止
-_shop_filter_last_fail_mtime: float | None = None  # parse 失敗 mtime のネガティブキャッシュ
+_shop_filter_last_fail_mtime_ns: int | None = None  # parse 失敗 mtime のネガティブキャッシュ
 _SHOP_FILTER_MIN_TOKEN_LEN = 3  # 短すぎる token は誤マッチ防止のためスキップ (3未満で除外)
 
 
 def _disabled_filter_result() -> dict:
     """無効化時の戻り値 (毎回新規 dict / 外部破壊耐性)"""
     return {"enabled": False, "winners": [], "blacklist": []}
+
+
+def _wrap_immutable_filter(winners: list, blacklist: list) -> types.MappingProxyType:
+    """成功ロード結果を不変ビュー化 (外部破壊耐性)
+
+    winners/blacklist は tuple of tuples に変換 (要素 mutation 不可)
+    """
+    return types.MappingProxyType({
+        "enabled": True,
+        "winners": tuple(winners),
+        "blacklist": tuple(blacklist),
+    })
 
 
 def _normalize_shop_token(s: str) -> str:
@@ -57,45 +70,48 @@ def _normalize_shop_token(s: str) -> str:
     return s
 
 
-def _load_shop_filter() -> dict:
+def _load_shop_filter():
     """sales_winners_blacklist.json を mtime キャッシュで読込.
 
-    Codex 6/19 review (3回目: REJECT) 反映:
-    - kill switch は _load_shop_filter 先頭で二重防御 (caller 拡張耐性)
-    - 戻り値は外部破壊耐性: cache hit は同一 dict, disabled は毎回新規 dict
-    - 初回パース失敗 mtime をネガティブキャッシュし同 mtime での再 I/O を防止
-    - error/warning ログは (err_kind, mtime|...) で rate-limit
-    - 未知 schema は cache 継続 fall back / 初回は fail-open
+    戻り値の契約 (Codex 6/19 review 4回目反映):
+    - **enabled=True (成功キャッシュ)**: types.MappingProxyType の不変ビュー。
+      winners/blacklist は tuple of tuples で要素 mutation 不可。
+    - **enabled=False (kill switch/失敗)**: 新規 dict を毎回返却 (互換用)。
+
+    Codex 6/19 review (4回目: REVIEW_NEEDED) 反映:
+    - cache hit 戻り値を MappingProxyType + tuple で完全不変化
+    - mtime 比較を st_mtime_ns 整数で実施 (float 丸め問題回避)
+    - parse 失敗 except 内も _shop_filter_mtime_ns を更新 (cache=None 含む)
     """
-    global _shop_filter_cache, _shop_filter_mtime
-    global _shop_filter_last_err_key, _shop_filter_last_fail_mtime
+    global _shop_filter_cache_view, _shop_filter_mtime_ns
+    global _shop_filter_last_err_key, _shop_filter_last_fail_mtime_ns
 
     # 二重防御: kill switch (caller が直接呼んだ場合の最終ガード)
     if os.environ.get("RAKUTEN_SHOP_FILTER_ENABLED", "1") == "0":
         return _disabled_filter_result()
 
     try:
-        mtime = SHOP_FILTER_PATH.stat().st_mtime
+        mtime_ns = SHOP_FILTER_PATH.stat().st_mtime_ns
     except OSError as e:
         err_key = ("stat", None)
-        if _shop_filter_cache is not None:
+        if _shop_filter_cache_view is not None:
             if _shop_filter_last_err_key != err_key:
                 logger.error(
                     f"[shop_filter] stat failed ({e}) - retain previous cache "
-                    f"(winners={len(_shop_filter_cache['winners'])} "
-                    f"blacklist={len(_shop_filter_cache['blacklist'])})"
+                    f"(winners={len(_shop_filter_cache_view['winners'])} "
+                    f"blacklist={len(_shop_filter_cache_view['blacklist'])})"
                 )
                 _shop_filter_last_err_key = err_key
-            return _shop_filter_cache
+            return _shop_filter_cache_view
         if _shop_filter_last_err_key != err_key:
             logger.error(f"[shop_filter] stat failed ({e}) and no cache - disable (fail-open)")
             _shop_filter_last_err_key = err_key
         return _disabled_filter_result()
 
-    # 同一 mtime: 成功キャッシュ or ネガティブキャッシュで I/O skip
-    if _shop_filter_cache is not None and mtime == _shop_filter_mtime:
-        return _shop_filter_cache
-    if _shop_filter_cache is None and _shop_filter_last_fail_mtime == mtime:
+    # 同一 mtime_ns: 成功キャッシュ or ネガティブキャッシュで I/O skip
+    if _shop_filter_cache_view is not None and mtime_ns == _shop_filter_mtime_ns:
+        return _shop_filter_cache_view
+    if _shop_filter_cache_view is None and _shop_filter_last_fail_mtime_ns == mtime_ns:
         return _disabled_filter_result()
 
     try:
@@ -104,15 +120,15 @@ def _load_shop_filter() -> dict:
         schema_version = data.get("schema_version", 0)
         if schema_version != 1:
             err_key = ("schema_unknown", schema_version)
-            if _shop_filter_cache is not None:
+            if _shop_filter_cache_view is not None:
                 if _shop_filter_last_err_key != err_key:
                     logger.warning(
                         f"[shop_filter] unknown schema_version={schema_version} "
                         f"(expected 1) - retain previous cache"
                     )
                     _shop_filter_last_err_key = err_key
-                _shop_filter_mtime = mtime  # 再 open ループ防止
-                return _shop_filter_cache
+                _shop_filter_mtime_ns = mtime_ns  # 再 open ループ防止
+                return _shop_filter_cache_view
             # 初回かつ未知 schema は fail-open + ネガティブキャッシュ
             if _shop_filter_last_err_key != err_key:
                 logger.error(
@@ -120,7 +136,7 @@ def _load_shop_filter() -> dict:
                     f"and no cache - disable (fail-open)"
                 )
                 _shop_filter_last_err_key = err_key
-            _shop_filter_last_fail_mtime = mtime
+            _shop_filter_last_fail_mtime_ns = mtime_ns
             return _disabled_filter_result()
         winners = []
         for w in data.get("winners", []):
@@ -134,31 +150,27 @@ def _load_shop_filter() -> dict:
             tok = _normalize_shop_token(name)
             if len(tok) >= _SHOP_FILTER_MIN_TOKEN_LEN:
                 blacklist.append((name, tok))
-        _shop_filter_cache = {
-            "enabled": True,
-            "winners": winners,
-            "blacklist": blacklist,
-        }
-        _shop_filter_mtime = mtime
+        _shop_filter_cache_view = _wrap_immutable_filter(winners, blacklist)
+        _shop_filter_mtime_ns = mtime_ns
         _shop_filter_last_err_key = None  # 成功で reset
-        _shop_filter_last_fail_mtime = None
+        _shop_filter_last_fail_mtime_ns = None
         logger.info(
             f"[shop_filter] loaded winners={len(winners)} blacklist={len(blacklist)} "
             f"schema_v{schema_version} from {SHOP_FILTER_PATH.name}"
         )
-        return _shop_filter_cache
+        return _shop_filter_cache_view
     except Exception as e:
-        err_key = ("parse", mtime)
-        if _shop_filter_cache is not None:
+        err_key = ("parse", mtime_ns)
+        if _shop_filter_cache_view is not None:
             if _shop_filter_last_err_key != err_key:
                 logger.error(f"[shop_filter] load failed ({e}) - retain previous cache")
                 _shop_filter_last_err_key = err_key
-            _shop_filter_mtime = mtime  # 同 mtime 再パース防止
-            return _shop_filter_cache
+            _shop_filter_mtime_ns = mtime_ns  # 同 mtime 再パース防止
+            return _shop_filter_cache_view
         if _shop_filter_last_err_key != err_key:
             logger.error(f"[shop_filter] load failed ({e}) and no cache - disable (fail-open)")
             _shop_filter_last_err_key = err_key
-        _shop_filter_last_fail_mtime = mtime  # ネガティブキャッシュ
+        _shop_filter_last_fail_mtime_ns = mtime_ns  # ネガティブキャッシュ
         return _disabled_filter_result()
 
 
