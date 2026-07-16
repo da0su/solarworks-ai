@@ -148,9 +148,18 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
                 "source": (f"fallback:last_known({fallback_from})" if fallback_from
                            else "gspread:楽天ROOM_デイリーログ"),
             }, ensure_ascii=False, indent=2)
-            tmp = SSOT_CACHE.with_suffix(SSOT_CACHE.suffix + ".tmp")
-            tmp.write_text(payload, encoding="utf-8")
-            os.replace(tmp, SSOT_CACHE)
+            # patrol / follow / like / fb が同時に呼ぶため tmp 名は pid で一意化する
+            # (固定名だと同時書き込みで cache 破損・置換失敗の恐れ)
+            tmp = SSOT_CACHE.with_suffix(SSOT_CACHE.suffix + f".{os.getpid()}.tmp")
+            try:
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, SSOT_CACHE)
+            finally:
+                if tmp.exists():
+                    tmp.unlink()
     except Exception as e:
         print(f"[ssot] gspread fetch failed: {e}", file=sys.stderr)
 
