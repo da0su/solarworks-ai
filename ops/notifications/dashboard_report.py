@@ -25,6 +25,8 @@ import json
 import os
 import sqlite3
 import sys
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +46,41 @@ SSOT_SPREADSHEET_ID = "1vTWzNZeesXkOFEyNTnufa5K_TZwnhgCh4V6ZtyuHXL0"
 SSOT_SHEET_GID = 1447646534
 SSOT_CACHE = REPO_ROOT / "state" / "daily_targets_ssot.json"
 GSPREAD_CREDS = REPO_ROOT / "credentials" / "sheets_service_account.json"
+
+
+def _write_cache_atomic(payload: str) -> bool:
+    """SSOT cache を原子的に書く. 失敗しても例外は投げない (best effort).
+
+    cache が書けなくても目標取得自体は成功しているので、業務は止めない。
+    tmp 名は pid + uuid で一意化 (patrol/follow/like/fb が同時に呼ぶため).
+    Windows では他プロセスが cache を開いていると os.replace が
+    PermissionError になり得るので数回リトライする。
+    """
+    tmp = SSOT_CACHE.with_suffix(SSOT_CACHE.suffix + f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        SSOT_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        for attempt in range(3):
+            try:
+                os.replace(tmp, SSOT_CACHE)
+                return True
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+        return False
+    except Exception as e:
+        print(f"[ssot] cache write failed (目標取得は成功・業務は継続): {e}", file=sys.stderr)
+        return False
+    finally:
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except Exception:
+            pass
 
 
 def _load_ssot_targets(force_refresh: bool = False) -> dict:
@@ -148,18 +185,9 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
                 "source": (f"fallback:last_known({fallback_from})" if fallback_from
                            else "gspread:楽天ROOM_デイリーログ"),
             }, ensure_ascii=False, indent=2)
-            # patrol / follow / like / fb が同時に呼ぶため tmp 名は pid で一意化する
-            # (固定名だと同時書き込みで cache 破損・置換失敗の恐れ)
-            tmp = SSOT_CACHE.with_suffix(SSOT_CACHE.suffix + f".{os.getpid()}.tmp")
-            try:
-                with open(tmp, "w", encoding="utf-8") as f:
-                    f.write(payload)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.replace(tmp, SSOT_CACHE)
-            finally:
-                if tmp.exists():
-                    tmp.unlink()
+            # cache 書き込み失敗は目標取得の失敗ではない。
+            # ここで例外を外に出すと gspread 障害と誤分類され、原因調査を誤らせる。
+            _write_cache_atomic(payload)
     except Exception as e:
         print(f"[ssot] gspread fetch failed: {e}", file=sys.stderr)
 
