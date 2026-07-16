@@ -58,40 +58,75 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
     today = datetime.now().strftime("%Y-%m-%d")
     today_slash = datetime.now().strftime("%Y/%m/%d")
 
-    # Cache check (6h以内なら再利用) - force_refresh なら skip
+    # Cache check - force_refresh なら skip
+    # fallback 由来の cache は TTL を短くし、CEO が当日行を追記したら即座に拾う。
     if not force_refresh and SSOT_CACHE.exists():
         try:
             cache = json.loads(SSOT_CACHE.read_text(encoding="utf-8"))
             if cache.get("date") == today:
                 cache_age = (datetime.now() - datetime.fromisoformat(cache["fetched_at"])).total_seconds()
-                if cache_age < 21600:  # 6h
+                ttl = 3600 if cache.get("fallback") else 21600
+                if cache_age < ttl:
                     return cache.get("targets", {})
         except Exception:
             pass
 
+    def _i(v):
+        try:
+            return int(str(v).replace(",", "").strip())
+        except Exception:
+            return 0
+
+    def _row_targets(row):
+        # B=投稿目標, E=フォロー目標, H=ライク目標, K=フォローバック目標
+        return {
+            "post":       _i(row[1]) if len(row) > 1 else 0,
+            "follow":     _i(row[4]) if len(row) > 4 else 0,
+            "like":       _i(row[7]) if len(row) > 7 else 0,
+            "followback": _i(row[10]) if len(row) > 10 else 0,
+        }
+
     # gspread 経由で取得
     targets = {}
+    fallback_from = None
     try:
         import gspread
         gc = gspread.service_account(filename=str(GSPREAD_CREDS))
         sh = gc.open_by_key(SSOT_SPREADSHEET_ID)
         ws = next(w for w in sh.worksheets() if w.id == SSOT_SHEET_GID)
         rows = ws.get_all_values()
+
+        last_known = None       # 当日行が無いとき用: 直近(過去)の目標行
+        last_known_date = None
         for row in rows:
             if not row or not row[0]:
                 continue
             if row[0] == today_slash or row[0] == today:
-                # B=投稿目標, E=フォロー目標, H=ライク目標, K=フォローバック目標
-                def _i(v):
-                    try: return int(str(v).replace(",", "").strip())
-                    except: return 0
-                targets = {
-                    "post":       _i(row[1]) if len(row) > 1 else 0,
-                    "follow":     _i(row[4]) if len(row) > 4 else 0,
-                    "like":       _i(row[7]) if len(row) > 7 else 0,
-                    "followback": _i(row[10]) if len(row) > 10 else 0,
-                }
+                targets = _row_targets(row)
                 break
+            # 過去行を候補として保持 (日付昇順前提だが順不同でも max で拾う)
+            try:
+                d = datetime.strptime(row[0].strip().replace("-", "/"), "%Y/%m/%d")
+            except Exception:
+                continue
+            if d.date() > datetime.now().date():
+                continue
+            cand = _row_targets(row)
+            if any(v > 0 for v in cand.values()):
+                if last_known_date is None or d > last_known_date:
+                    last_known, last_known_date = cand, d
+
+        # 当日行が無い場合、0 に落として全機能を停止させない (2026-07-16 障害の再発防止).
+        # 「目標未設定」は「目標ゼロ」ではない。直近の既知目標で走らせ、警告を出す。
+        if not targets and last_known:
+            targets = last_known
+            fallback_from = last_known_date.strftime("%Y/%m/%d")
+            print(
+                f"[ssot] WARNING: スプシに当日({today_slash})の行が無い。"
+                f"直近 {fallback_from} の目標にフォールバックして稼働継続: {targets}",
+                file=sys.stderr,
+            )
+
         # Cache write
         if targets:
             SSOT_CACHE.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +134,9 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
                 "date": today,
                 "fetched_at": datetime.now().isoformat(),
                 "targets": targets,
-                "source": "gspread:楽天ROOM_デイリーログ",
+                "fallback": bool(fallback_from),
+                "source": (f"fallback:last_known({fallback_from})" if fallback_from
+                           else "gspread:楽天ROOM_デイリーログ"),
             }, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         print(f"[ssot] gspread fetch failed: {e}", file=sys.stderr)
