@@ -184,6 +184,11 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                     if (RESERVED.has(seg.toLowerCase())) return;
                     if (seg === own_id) return;
                     if (/^\\d+$/.test(seg)) return;
+                    // 2026-07-16: room_ + 長い純数字 は内部数値IDでプロフィール URL として無効。
+                    // ROOM_ID_RE の [a-z0-9] が数字を通すため、ここで明示的に弾く。
+                    // 実在スラッグは room_ + 8-12 桁の hex (例 room_ceab03401f)。
+                    // 混入すると存在しないプロフィールを開き続け 100% verify_failed になる。
+                    if (/^room_\\d{13,}$/.test(seg)) return;
                     if (ROOM_ID_RE.test(seg)) {
                         if (!results.has(seg)) results.set(seg, (name || seg).substring(0, 60));
                         return;

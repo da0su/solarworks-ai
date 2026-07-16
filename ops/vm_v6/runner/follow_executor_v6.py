@@ -74,6 +74,46 @@ def _release_history_lock() -> None:
         pass
 
 
+# ============================================================
+# 2026-07-16: フォロー実数検証
+#   本 executor は「ボタンを押した = success」で history に記録していたため、
+#   上限/制限でフォローが一切成立しなくなっても success を書き続けていた
+#   (7/16 実測: 主張 162件 に対し API 実増加 95件、以降は 0件でも success 継続)。
+#   DOM の成功後状態に依存せず、公開 API の following_users 実数で裏を取る。
+# ============================================================
+#   注意: 公開 API の following_users は**数分の反映遅延**がある (7/16 実測:
+#   18:20 時点で 36,854 固定 → 18:35 に 36,954 へ +100 反映)。
+#   そのため「直後に増えていない = 失敗」と即断してはいけない。
+#   中断判定は「十分なクリック数」かつ「十分な経過時間」で 0 件のときのみ。
+OWN_USER_ID = "1000006606047125"   # 自アカウント数値ID (公開 API 用)
+VERIFY_EVERY = 25                  # N クリックごとに実数照合 (遅延を吸収するため粗め)
+MIN_ELAPSED_FOR_STOP = 180         # 中断判定に必要な最低経過秒 (API 反映待ち)
+MIN_CLICKS_FOR_STOP = 30           # 中断判定に必要な最低クリック数
+VERIFY_SETTLE_SEC = 90             # 実行終了後、API 反映を待つ秒数
+
+
+def _fetch_following_count(log=None):
+    """公開 API から following_users の実数を取得. 失敗時 None.
+
+    これが唯一の真値。history/DOM は信用しない。
+    """
+    import urllib.request
+    url = f"https://room.rakuten.co.jp/api/{OWN_USER_ID}?_t={int(time.time())}"
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0",
+                          "Accept": "application/json",
+                          "Cache-Control": "no-cache"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8", "replace")).get("data") or {}
+        v = data.get("following_users")
+        return int(v) if v is not None else None
+    except Exception as e:
+        if log:
+            log.log(f"[verify] following_users 取得失敗 (検証スキップ): {e}")
+        return None
+
+
 def _append_follow_history(user_id: str, seed_user: str = "",
                            log: "SessionLogger | None" = None) -> bool:
     """follow_history.json に entry append. 成功時 True. 失敗時 False (log 出力).
@@ -281,8 +321,15 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                      history: set, hb: HeartbeatPusher, log: SessionLogger,
                      rate_detector: RateLimitDetector) -> dict:
     """1 seed の followers ページからフォロー実行."""
-    result = {"success": 0, "fail": 0, "rate_limited": False}
+    result = {"success": 0, "fail": 0, "rate_limited": False,
+              "clicked": 0, "verified": None, "not_registering": False}
     url = f"https://room.rakuten.co.jp/{seed_user}/followers"
+
+    # 2026-07-16: クリック前の実数を控える (これと比較して本当に増えたかを見る)
+    base_following = _fetch_following_count(log)
+    base_ts = time.time()
+    if base_following is not None:
+        log.log(f"[verify] base following={base_following}")
 
     try:
         page.goto(url, timeout=20000)
@@ -385,6 +432,32 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                     result["rate_limited"] = True
                     return result
                 result["success"] += 1
+                result["clicked"] += 1
+
+                # ── 実数検証 (VERIFY_EVERY クリックごと) ──
+                # 「押した」ではなく「following が実際に増えた」かを API で確認する。
+                # API に数分の遅延があるため、0 件でも即断せず
+                # 「十分クリックした & 十分時間が経った」場合のみ中断する。
+                if base_following is not None and result["clicked"] % VERIFY_EVERY == 0:
+                    cur = _fetch_following_count(log)
+                    if cur is not None:
+                        verified = cur - base_following
+                        elapsed = time.time() - base_ts
+                        result["verified"] = verified
+                        log.log(f"[verify] clicked={result['clicked']} verified={verified} "
+                                f"(API following={cur}, elapsed={elapsed:.0f}s)")
+                        if (verified <= 0
+                                and result["clicked"] >= MIN_CLICKS_FOR_STOP
+                                and elapsed >= MIN_ELAPSED_FOR_STOP):
+                            log.log(f"[verify] STOP: clicked={result['clicked']} / "
+                                    f"{elapsed:.0f}s 経過しても実数increase={verified}. "
+                                    f"フォローが成立していない (上限/制限の疑い) "
+                                    f"→ 虚偽 success を防ぐため中断")
+                            result["not_registering"] = True
+                            result["rate_limited"] = True
+                            result["success"] = 0
+                            return result
+
                 if user_id:
                     history.add(user_id)
                 persist_ok = False
@@ -417,6 +490,8 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                 log.log(f"[seed:{seed_user}] no new (all_hist={consecutive_all_history}) {MAX_NO_NEW_SEC}s, next seed")
                 break
 
+    # seed 単位ではここで確定しない (API 遅延で過小評価になるため)。
+    # 実数の確定は run_follow の最後にまとめて行う。
     return result
 
 
@@ -431,8 +506,13 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
 
     bm = BrowserManagerV6(action="follow")
     rate_detector = RateLimitDetector()
-    result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown"}
+    result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown",
+              "clicked": 0, "verified": None}
     history: set = set()
+
+    # 2026-07-16: 実行開始時の following 実数 (最後にこれと比較して真の成立数を出す)
+    run_base_following = _fetch_following_count(log)
+    log.log(f"[verify] run base following={run_base_following}")
 
     # history.json から既フォロー user_id load
     if HISTORY_PATH.exists():
@@ -503,6 +583,10 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
                                    history, hb, log, rate_detector)
             result["success"] += sub["success"]
             result["fail"] += sub["fail"]
+            result["clicked"] += sub.get("clicked", sub["success"])
+            if sub.get("not_registering"):
+                result["stop_reason"] = "follow_not_registering"
+                break
             if sub["rate_limited"]:
                 result["stop_reason"] = "rate_limit_detected"
                 break
@@ -511,8 +595,25 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
             result["stop_reason"] = "all_seeds_done"
 
     finally:
-        hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         bm.stop()
+        # ── 実数確定 (2026-07-16) ──
+        # クリック数をそのまま success にすると、成立していないフォローが
+        # 実績・達成率・CEO 報告に載る (7/16: 主張345 vs 実増加195 = 43% 虚偽)。
+        # 公開 API は反映が遅れるので settle 待ちしてから照合する。
+        if run_base_following is not None and result["clicked"] > 0:
+            time.sleep(VERIFY_SETTLE_SEC)
+            final_following = _fetch_following_count(log)
+            if final_following is not None:
+                verified = max(0, final_following - run_base_following)
+                result["verified"] = verified
+                result["claimed"] = result["clicked"]
+                if verified != result["clicked"]:
+                    log.log(f"[verify] 実数確定: clicked={result['clicked']} → "
+                            f"実際に成立={verified} "
+                            f"(不成立 {result['clicked'] - verified} 件 / "
+                            f"API {run_base_following}→{final_following})")
+                result["success"] = verified
+        hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         log.log(f"=== FOLLOW executor v6 end: {result} ===")
 
     return result
