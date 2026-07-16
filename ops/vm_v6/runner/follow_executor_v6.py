@@ -92,26 +92,32 @@ MIN_CLICKS_FOR_STOP = 30           # 中断判定に必要な最低クリック�
 VERIFY_SETTLE_SEC = 90             # 実行終了後、API 反映を待つ秒数
 
 
-def _fetch_following_count(log=None):
+def _fetch_following_count(log=None, retries: int = 3):
     """公開 API から following_users の実数を取得. 失敗時 None.
 
     これが唯一の真値。history/DOM は信用しない。
+    ネットワーク揺らぎ 1 回で None を返すと「検証不能 → 虚偽 success 復活」に
+    繋がるため必ずリトライする。
     """
     import urllib.request
-    url = f"https://room.rakuten.co.jp/api/{OWN_USER_ID}?_t={int(time.time())}"
-    try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "Mozilla/5.0",
-                          "Accept": "application/json",
-                          "Cache-Control": "no-cache"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.loads(r.read().decode("utf-8", "replace")).get("data") or {}
-        v = data.get("following_users")
-        return int(v) if v is not None else None
-    except Exception as e:
-        if log:
-            log.log(f"[verify] following_users 取得失敗 (検証スキップ): {e}")
-        return None
+    for attempt in range(retries):
+        url = f"https://room.rakuten.co.jp/api/{OWN_USER_ID}?_t={int(time.time() * 1000)}"
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0",
+                              "Accept": "application/json",
+                              "Cache-Control": "no-cache"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read().decode("utf-8", "replace")).get("data") or {}
+            v = data.get("following_users")
+            if v is not None:
+                return int(v)
+        except Exception as e:
+            if log and attempt == retries - 1:
+                log.log(f"[verify] following_users 取得失敗 ({retries}回): {e}")
+        if attempt < retries - 1:
+            time.sleep(2 * (attempt + 1))
+    return None
 
 
 def _append_follow_history(user_id: str, seed_user: str = "",
@@ -322,7 +328,8 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                      rate_detector: RateLimitDetector) -> dict:
     """1 seed の followers ページからフォロー実行."""
     result = {"success": 0, "fail": 0, "rate_limited": False,
-              "clicked": 0, "verified": None, "not_registering": False}
+              "clicked": 0, "verified": None, "not_registering": False,
+              "clicked_ids": []}
     url = f"https://room.rakuten.co.jp/{seed_user}/followers"
 
     # 2026-07-16: クリック前の実数を控える (これと比較して本当に増えたかを見る)
@@ -459,14 +466,13 @@ def follow_from_seed(page, seed_user: str, target_count: int, current: int,
                             return result
 
                 if user_id:
+                    # in-memory は即追加 (この run 内で同じボタンを再クリックしないため)
                     history.add(user_id)
-                persist_ok = False
-                try:
-                    persist_ok = _append_follow_history(user_id, seed_user, log=log)
-                except Exception as _ae:
-                    log.log(f"[seed:{seed_user}] history append exception: {_ae}")
-                if not persist_ok:
-                    log.log(f"[seed:{seed_user}] WARN: follow OK but history NOT persisted user={user_id}")
+                    # ファイル永続化は「実際に成立した分だけ」run 末尾で行う。
+                    # クリック時に append すると、成立していないユーザーが
+                    # 恒久的に「フォロー済み」扱いになり二度と再試行されない
+                    # (7/16: 実成立195件に対し history 345件が書かれ履歴汚染)。
+                    result["clicked_ids"].append((user_id, seed_user))
                 last_new_at = time.time()
                 consecutive_all_history = 0
                 hb.write(phase="navigate", current_target=seed_user,
@@ -507,8 +513,9 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
     bm = BrowserManagerV6(action="follow")
     rate_detector = RateLimitDetector()
     result = {"success": 0, "fail": 0, "skip": 0, "stop_reason": "unknown",
-              "clicked": 0, "verified": None}
+              "clicked": 0, "verified": None, "claimed": 0, "unverified_clicks": 0}
     history: set = set()
+    clicked_ids: list = []   # 実成立分だけを history に永続化するためのバッファ
 
     # 2026-07-16: 実行開始時の following 実数 (最後にこれと比較して真の成立数を出す)
     run_base_following = _fetch_following_count(log)
@@ -584,6 +591,7 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
             result["success"] += sub["success"]
             result["fail"] += sub["fail"]
             result["clicked"] += sub.get("clicked", sub["success"])
+            clicked_ids.extend(sub.get("clicked_ids", []))
             if sub.get("not_registering"):
                 result["stop_reason"] = "follow_not_registering"
                 break
@@ -600,19 +608,42 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
         # クリック数をそのまま success にすると、成立していないフォローが
         # 実績・達成率・CEO 報告に載る (7/16: 主張345 vs 実増加195 = 43% 虚偽)。
         # 公開 API は反映が遅れるので settle 待ちしてから照合する。
-        if run_base_following is not None and result["clicked"] > 0:
-            time.sleep(VERIFY_SETTLE_SEC)
-            final_following = _fetch_following_count(log)
-            if final_following is not None:
+        result["claimed"] = result["clicked"]
+        if result["clicked"] > 0:
+            final_following = None
+            if run_base_following is not None:
+                time.sleep(VERIFY_SETTLE_SEC)
+                final_following = _fetch_following_count(log)
+
+            if run_base_following is None or final_following is None:
+                # 検証不能。ここで clicked を success として残すと虚偽が復活するので
+                # success には計上せず unverified として明示する (CEO 要件: 数値は本物のみ)。
+                result["success"] = 0
+                result["verified"] = None
+                result["unverified_clicks"] = result["clicked"]
+                result["stop_reason"] = "verify_unavailable"
+                log.log(f"[verify] WARN: API 検証不能。clicked={result['clicked']} を "
+                        f"success に計上せず unverified 扱い (虚偽 success 防止)。"
+                        f" history 永続化もスキップ")
+            else:
                 verified = max(0, final_following - run_base_following)
                 result["verified"] = verified
-                result["claimed"] = result["clicked"]
                 if verified != result["clicked"]:
                     log.log(f"[verify] 実数確定: clicked={result['clicked']} → "
                             f"実際に成立={verified} "
                             f"(不成立 {result['clicked'] - verified} 件 / "
                             f"API {run_base_following}→{final_following})")
                 result["success"] = verified
+                # 成立した分だけ history に永続化 (未成立を書くと恒久的にスキップされる)
+                persisted = 0
+                for uid, seed_u in clicked_ids[:verified]:
+                    try:
+                        if _append_follow_history(uid, seed_u, log=log):
+                            persisted += 1
+                    except Exception as _ae:
+                        log.log(f"[verify] history append exception {uid}: {_ae}")
+                log.log(f"[verify] history 永続化: {persisted}/{verified} 件 "
+                        f"(clicked {result['clicked']} 件中の成立分のみ)")
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         log.log(f"=== FOLLOW executor v6 end: {result} ===")
 
