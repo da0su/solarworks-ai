@@ -91,6 +91,14 @@ MIN_ELAPSED_FOR_STOP = 180         # 中断判定に必要な最低経過秒 (AP
 MIN_CLICKS_FOR_STOP = 30           # 中断判定に必要な最低クリック数
 VERIFY_SETTLE_SEC = 90             # 実行終了後、API 反映を待つ秒数
 
+# 2026-07-17 実測: フォローは「1時間あたり約100件」の rate limit。
+#   枠を使い切ると、その時間枠が明けるまで**何回クリックしても1件も成立しない**。
+#   成功実行は正確に60分間隔で並び、その間の30分後の実行は必ず 0 件だった:
+#     20:15→80 / 20:45→4 / 21:45→93 / 22:14→0 / 22:45→97 / 23:15→0 / 23:45→68
+#   タスクは30分間隔なので、枠を見ずに走ると半分は 100 回の無駄クリックになる。
+HOURLY_FOLLOW_LIMIT = 95           # 1時間枠あたりの上限 (実測 ~100 に安全マージン)
+HOURLY_WINDOW_MIN = 60             # 枠の長さ (分)
+
 
 def _fetch_following_count(log=None, retries: int = 3):
     """公開 API から following_users の実数を取得. 失敗時 None.
@@ -118,6 +126,32 @@ def _fetch_following_count(log=None, retries: int = 3):
         if attempt < retries - 1:
             time.sleep(2 * (attempt + 1))
     return None
+
+
+def _recent_verified_follows(minutes: int = 60) -> int:
+    """直近 N 分に**実際に成立した**フォロー数を history から数える.
+
+    history は検証済みの成立分しか持たない (2026-07-16 以降) ので枠の判定に使える。
+    """
+    from datetime import timedelta
+    if not HISTORY_PATH.exists():
+        return 0
+    try:
+        h = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(h, list):
+        return 0
+    cutoff = datetime.now() - timedelta(minutes=minutes)
+    n = 0
+    for e in h:
+        ts = e.get("followed_at") or ""
+        try:
+            if datetime.fromisoformat(ts) >= cutoff:
+                n += 1
+        except Exception:
+            continue
+    return n
 
 
 def _fetch_following_usernames(limit: int = 300, log=None):
@@ -559,6 +593,27 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
 
     log.log(f"=== FOLLOW executor v6 start: limit={limit} force={force} ===")
     hb.write(phase="startup", force=True)
+
+    # 2026-07-17: 1時間枠の残量を先に確認する。
+    # 枠を使い切った状態で走ると 100 回クリックして 1 件も成立しない
+    # (実測: 30分間隔タスクの半分が 0 件の無駄打ちになっていた)。
+    # Chrome を起動する前に判定して丸ごとスキップする。
+    if not force:
+        used = _recent_verified_follows(HOURLY_WINDOW_MIN)
+        if used >= HOURLY_FOLLOW_LIMIT:
+            log.log(f"=== FOLLOW skip: 直近{HOURLY_WINDOW_MIN}分で {used} 件成立済 "
+                    f"(上限 {HOURLY_FOLLOW_LIMIT}). 枠が明けるまで待機 → 無駄クリック回避 ===")
+            hb.write(phase="shutdown", success=0, fail=0, force=True)
+            return {"success": 0, "fail": 0, "skip": 0, "clicked": 0,
+                    "verified": 0, "claimed": 0, "unverified_clicks": 0,
+                    "stop_reason": "hourly_quota_reached", "recent_used": used}
+        remain_quota = HOURLY_FOLLOW_LIMIT - used
+        log.log(f"[quota] 直近{HOURLY_WINDOW_MIN}分の成立 ={used} / 上限 {HOURLY_FOLLOW_LIMIT} "
+                f"→ 残り {remain_quota} 件")
+        if remain_quota < limit:
+            # 枠を超えた分のクリックは必ず不成立になるので最初から狙わない
+            log.log(f"[quota] limit {limit} → {remain_quota} に縮小 (枠超過分は無駄クリック)")
+            limit = remain_quota
 
     bm = BrowserManagerV6(action="follow")
     rate_detector = RateLimitDetector()
