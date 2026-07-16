@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from datetime import datetime
@@ -58,16 +59,21 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
     today = datetime.now().strftime("%Y-%m-%d")
     today_slash = datetime.now().strftime("%Y/%m/%d")
 
-    # Cache check - force_refresh なら skip
-    # fallback 由来の cache は TTL を短くし、CEO が当日行を追記したら即座に拾う。
-    if not force_refresh and SSOT_CACHE.exists():
+    cache = None
+    if SSOT_CACHE.exists():
         try:
             cache = json.loads(SSOT_CACHE.read_text(encoding="utf-8"))
-            if cache.get("date") == today:
-                cache_age = (datetime.now() - datetime.fromisoformat(cache["fetched_at"])).total_seconds()
-                ttl = 3600 if cache.get("fallback") else 21600
-                if cache_age < ttl:
-                    return cache.get("targets", {})
+        except Exception:
+            cache = None
+
+    # Cache check - force_refresh なら skip
+    # fallback 由来の cache は TTL を短くし、CEO が当日行を追記したら即座に拾う。
+    if not force_refresh and cache and cache.get("date") == today:
+        try:
+            cache_age = (datetime.now() - datetime.fromisoformat(cache["fetched_at"])).total_seconds()
+            ttl = 3600 if cache.get("fallback") else 21600
+            if cache_age < ttl and cache.get("targets"):
+                return cache["targets"]
         except Exception:
             pass
 
@@ -101,12 +107,14 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
         for row in rows:
             if not row or not row[0]:
                 continue
-            if row[0] == today_slash or row[0] == today:
+            # 'YYYY/MM/DD' / 'YYYY-MM-DD' / 'YYYY/MM/DD HH:MM:SS' を許容
+            row_date = row[0].strip().split()[0].replace("-", "/")
+            if row_date == today_slash:
                 targets = _row_targets(row)
                 break
             # 過去行を候補として保持 (日付昇順前提だが順不同でも max で拾う)
             try:
-                d = datetime.strptime(row[0].strip().replace("-", "/"), "%Y/%m/%d")
+                d = datetime.strptime(row_date, "%Y/%m/%d")
             except Exception:
                 continue
             if d.date() > datetime.now().date():
@@ -121,25 +129,42 @@ def _load_ssot_targets(force_refresh: bool = False) -> dict:
         if not targets and last_known:
             targets = last_known
             fallback_from = last_known_date.strftime("%Y/%m/%d")
+            age_days = (datetime.now().date() - last_known_date.date()).days
             print(
                 f"[ssot] WARNING: スプシに当日({today_slash})の行が無い。"
-                f"直近 {fallback_from} の目標にフォールバックして稼働継続: {targets}",
+                f"直近 {fallback_from} ({age_days}日前) の目標にフォールバックして稼働継続: {targets}",
                 file=sys.stderr,
             )
 
-        # Cache write
+        # Cache write (atomic: .tmp → os.replace)
         if targets:
             SSOT_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            SSOT_CACHE.write_text(json.dumps({
+            payload = json.dumps({
                 "date": today,
                 "fetched_at": datetime.now().isoformat(),
                 "targets": targets,
                 "fallback": bool(fallback_from),
+                "fallback_from": fallback_from,
                 "source": (f"fallback:last_known({fallback_from})" if fallback_from
                            else "gspread:楽天ROOM_デイリーログ"),
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            }, ensure_ascii=False, indent=2)
+            tmp = SSOT_CACHE.with_suffix(SSOT_CACHE.suffix + ".tmp")
+            tmp.write_text(payload, encoding="utf-8")
+            os.replace(tmp, SSOT_CACHE)
     except Exception as e:
         print(f"[ssot] gspread fetch failed: {e}", file=sys.stderr)
+
+    # stale-while-revalidate: gspread 取得失敗 (503 等) でも 0 に落とさない。
+    # TTL 切れの古い cache でも「最後に判っている目標」で走らせる。
+    # ここを {} で返すと target=0 → 全機能 stop となり 2026-07-16 の障害が再発する。
+    if not targets and cache and cache.get("targets"):
+        print(
+            f"[ssot] WARNING: gspread 取得失敗。stale cache "
+            f"({cache.get('date')} / {cache.get('source')}) で稼働継続: {cache['targets']}",
+            file=sys.stderr,
+        )
+        return cache["targets"]
+
     return targets
 
 
