@@ -120,6 +120,56 @@ def _fetch_following_count(log=None, retries: int = 3):
     return None
 
 
+def _fetch_following_usernames(limit: int = 300, log=None):
+    """自分がフォロー中のユーザー username 集合を新しい順に取得. 失敗時 None.
+
+    件数差分だけでは「どのフォローが成立したか」を特定できず、
+    先頭N件を成立とみなす推測は history 汚染を再発させる (Codex REJECT 指摘)。
+    このAPIは username (= follow_history の user_id と同形式) を返すので、
+    ID 単位で成立/不成立を確定できる。
+    """
+    import urllib.request
+    PAGE = 100          # API 上限 (limit=200 は HTTP 400)
+    MAX_PAGES = 8       # 安全弁
+    names: set = set()
+    after_id = None
+    got_any = False
+
+    for _page in range(MAX_PAGES):
+        url = (f"https://room.rakuten.co.jp/api/{OWN_USER_ID}/following_users"
+               f"?limit={PAGE}&_t={int(time.time() * 1000)}")
+        if after_id:
+            url += f"&after_id={after_id}"
+        data = None
+        for attempt in range(3):
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0",
+                                  "Accept": "application/json",
+                                  "Cache-Control": "no-cache"})
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    data = json.loads(r.read().decode("utf-8", "replace")).get("data")
+                break
+            except Exception as e:
+                if log and attempt == 2:
+                    log.log(f"[verify] following_users 一覧 取得失敗 (3回): {e}")
+                if attempt < 2:
+                    time.sleep(2 * (attempt + 1))
+        if not isinstance(data, list) or not data:
+            break
+        got_any = True
+        for x in data:
+            if x.get("username"):
+                names.add(str(x["username"]))
+        if len(names) >= limit:
+            break
+        after_id = data[-1].get("id")
+        if not after_id:
+            break
+
+    return names if got_any else None
+
+
 def _append_follow_history(user_id: str, seed_user: str = "",
                            log: "SessionLogger | None" = None) -> bool:
     """follow_history.json に entry append. 成功時 True. 失敗時 False (log 出力).
@@ -610,40 +660,39 @@ def run_follow(limit: int = 200, hb: HeartbeatPusher = None, log: SessionLogger 
         # 公開 API は反映が遅れるので settle 待ちしてから照合する。
         result["claimed"] = result["clicked"]
         if result["clicked"] > 0:
-            final_following = None
-            if run_base_following is not None:
-                time.sleep(VERIFY_SETTLE_SEC)
-                final_following = _fetch_following_count(log)
+            time.sleep(VERIFY_SETTLE_SEC)
+            # ID 単位で成立を確定する (件数差分だと誰が成立したか特定できない)
+            following_set = _fetch_following_usernames(
+                limit=max(300, result["clicked"] * 2), log=log)
 
-            if run_base_following is None or final_following is None:
-                # 検証不能。ここで clicked を success として残すと虚偽が復活するので
-                # success には計上せず unverified として明示する (CEO 要件: 数値は本物のみ)。
+            if following_set is None:
+                # 検証不能。clicked を success に計上すると虚偽が復活するので計上しない。
                 result["success"] = 0
                 result["verified"] = None
                 result["unverified_clicks"] = result["clicked"]
-                result["stop_reason"] = "verify_unavailable"
                 log.log(f"[verify] WARN: API 検証不能。clicked={result['clicked']} を "
                         f"success に計上せず unverified 扱い (虚偽 success 防止)。"
-                        f" history 永続化もスキップ")
+                        f" history 永続化もスキップ (次回再試行される)")
             else:
-                verified = max(0, final_following - run_base_following)
-                result["verified"] = verified
-                if verified != result["clicked"]:
-                    log.log(f"[verify] 実数確定: clicked={result['clicked']} → "
-                            f"実際に成立={verified} "
-                            f"(不成立 {result['clicked'] - verified} 件 / "
-                            f"API {run_base_following}→{final_following})")
-                result["success"] = verified
-                # 成立した分だけ history に永続化 (未成立を書くと恒久的にスキップされる)
+                confirmed = [(uid, s) for uid, s in clicked_ids if uid and uid in following_set]
+                missed = [uid for uid, _ in clicked_ids if uid and uid not in following_set]
+                result["verified"] = len(confirmed)
+                result["success"] = len(confirmed)
+                if len(confirmed) != result["clicked"]:
+                    log.log(f"[verify] 実数確定(ID単位): clicked={result['clicked']} → "
+                            f"成立={len(confirmed)} / 不成立={len(missed)} "
+                            f"(例: {missed[:3]})")
+                # 成立が確認できたユーザーだけ history に永続化。
+                # 不成立を書くと恒久的に「フォロー済み」扱いになり再試行されない。
                 persisted = 0
-                for uid, seed_u in clicked_ids[:verified]:
+                for uid, seed_u in confirmed:
                     try:
                         if _append_follow_history(uid, seed_u, log=log):
                             persisted += 1
                     except Exception as _ae:
                         log.log(f"[verify] history append exception {uid}: {_ae}")
-                log.log(f"[verify] history 永続化: {persisted}/{verified} 件 "
-                        f"(clicked {result['clicked']} 件中の成立分のみ)")
+                log.log(f"[verify] history 永続化: {persisted}/{len(confirmed)} 件 "
+                        f"(成立が確認できた分のみ)")
         hb.write(phase="shutdown", success=result["success"], fail=result["fail"], force=True)
         log.log(f"=== FOLLOW executor v6 end: {result} ===")
 
