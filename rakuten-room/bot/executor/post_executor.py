@@ -58,12 +58,12 @@ class PostExecutor:
     # Playwright のデフォルトタイムアウトを明示設定し、どの操作 (goto/click/wait) も
     # 上限で TimeoutError を投げて次商品へ進めるようにする。
     DEFAULT_OP_TIMEOUT_MS = 30000       # 一般操作 (click/wait 等)
-    DEFAULT_NAV_TIMEOUT_MS = 45000      # ページ遷移 (goto)。streaming で domcontentloaded が
-                                        # 発火しない商品ページでも必ず打ち切る
+    DEFAULT_NAV_TIMEOUT_MS = 30000      # ページ遷移 (goto)。streaming で domcontentloaded が
+                                        # 発火しない商品ページでも必ず打ち切る。
+                                        # 単スレ HTTP サーバのブロック時間を抑えるため 30s に。
 
     def __init__(self, browser_manager: BrowserManager):
         self.bm = browser_manager
-        self._timeouts_applied = False
 
     @property
     def page(self) -> Page:
@@ -74,8 +74,9 @@ class PostExecutor:
                 p.set_default_timeout(self.DEFAULT_OP_TIMEOUT_MS)
                 p.set_default_navigation_timeout(self.DEFAULT_NAV_TIMEOUT_MS)
                 p._swks_timeout_set = True
-            except Exception:
-                pass
+            except Exception as e:
+                # 設定失敗は握りつぶさず記録する (無限ハング再発の兆候になる)
+                logger.warning(f"[timeout_setup] default timeout 設定失敗: {e}")
         return p
 
     def execute(self, product_url: str, review_text: str) -> dict:
