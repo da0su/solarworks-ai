@@ -451,15 +451,21 @@ def main():
             # サーバを15分止める事象への対策 (実測 7/22: 7件投稿後にハング)。
             # 別スレッドが進捗を監視し、無進捗が続いたら chrome を強制 kill して
             # ブロックを解き、バッチをクリーン終了させる (サーバも解放)。
-            _wd = {"last": time.time(), "stop": False, "killed": False}
-            WATCHDOG_STALL_SEC = 90
+            # 時刻は monotonic (NTP 補正で逆行しない)。stall は 120s
+            # (正常な投稿は ~15-30s。120s 無進捗は明確に異常)。
+            # 注: taskkill /im chrome.exe は VM 上の全 Chrome を落とすため、
+            # 同時刻に FOLLOW/LIKE が走っていれば巻き込む。ただし両者は
+            # API 実数検証済みで「kill されても誤成功しない」ため許容トレードオフ
+            # (詰まった POST の解除を優先)。
+            _wd = {"last": time.monotonic(), "stop": False, "killed": False}
+            WATCHDOG_STALL_SEC = 120
 
             def _watchdog():
                 while not _wd["stop"]:
                     time.sleep(5)
                     if _wd["stop"]:
                         break
-                    if time.time() - _wd["last"] > WATCHDOG_STALL_SEC:
+                    if time.monotonic() - _wd["last"] > WATCHDOG_STALL_SEC:
                         _wd["killed"] = True
                         log(f"[watchdog] {WATCHDOG_STALL_SEC}s 無進捗 → chrome 強制kill (ゾンビ解除)")
                         try:
@@ -488,7 +494,7 @@ def main():
                     posts.append({"genre": entry["genre"], "rank": entry["rank"],
                                   "name": entry["name"][:40], "skipped": "price_detected"})
                     continue
-                _wd["last"] = time.time()   # watchdog に進捗を通知
+                _wd["last"] = time.monotonic()   # watchdog に進捗を通知
                 try:
                     res = pe.execute(entry["product_url"], rt)
                 except Exception as e:
@@ -496,7 +502,7 @@ def main():
                                   "name": entry["name"][:40], "error": f"exc:{e}"[:80]})
                     continue
                 finally:
-                    _wd["last"] = time.time()
+                    _wd["last"] = time.monotonic()
                 ok = bool(res.get("success"))
                 if ok:
                     success += 1
