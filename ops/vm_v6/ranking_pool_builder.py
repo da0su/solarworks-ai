@@ -15,7 +15,7 @@ CEO 2026-05-30 指示:
 出力: \\vboxsvr\bot\data\ranking_pool.json (host repo bot/data)
 """
 from __future__ import annotations
-import sys, io, json, time, random, re, argparse
+import sys, io, json, time, random, re, argparse, threading, subprocess
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 sys.path.insert(0, r"\\vboxsvr\vm_v6")   # runner package
 sys.path.insert(0, r"\\vboxsvr\bot")     # executor / planner
@@ -444,8 +444,39 @@ def main():
             candidates = chosen + _refill
             attempts = 0
             MAX_ATTEMPTS = target * 3          # 無限試行の安全弁
+
+            # 2026-07-22: プロセスレベル watchdog。
+            # Playwright のタイムアウトでも捕捉できない Chrome ゾンビ化 (CDP 呼び出しが
+            # ソケットレベルで固まる) で pe.execute が無限ブロックし、VM 単スレッド HTTP
+            # サーバを15分止める事象への対策 (実測 7/22: 7件投稿後にハング)。
+            # 別スレッドが進捗を監視し、無進捗が続いたら chrome を強制 kill して
+            # ブロックを解き、バッチをクリーン終了させる (サーバも解放)。
+            _wd = {"last": time.time(), "stop": False, "killed": False}
+            WATCHDOG_STALL_SEC = 90
+
+            def _watchdog():
+                while not _wd["stop"]:
+                    time.sleep(5)
+                    if _wd["stop"]:
+                        break
+                    if time.time() - _wd["last"] > WATCHDOG_STALL_SEC:
+                        _wd["killed"] = True
+                        log(f"[watchdog] {WATCHDOG_STALL_SEC}s 無進捗 → chrome 強制kill (ゾンビ解除)")
+                        try:
+                            subprocess.run(["taskkill", "/f", "/im", "chrome.exe"],
+                                           capture_output=True, timeout=15)
+                        except Exception as _ke:
+                            log(f"[watchdog] taskkill 失敗: {_ke}")
+                        break
+
+            _wd_thread = threading.Thread(target=_watchdog, daemon=True)
+            _wd_thread.start()
+
             for entry in candidates:
                 if success >= target or attempts >= MAX_ATTEMPTS:
+                    break
+                if _wd["killed"]:
+                    log("[watchdog] kill 済のためバッチ終了 (残りは次バッチで継続)")
                     break
                 attempts += 1
                 key = entry["product_url"]
@@ -457,12 +488,15 @@ def main():
                     posts.append({"genre": entry["genre"], "rank": entry["rank"],
                                   "name": entry["name"][:40], "skipped": "price_detected"})
                     continue
+                _wd["last"] = time.time()   # watchdog に進捗を通知
                 try:
                     res = pe.execute(entry["product_url"], rt)
                 except Exception as e:
                     posts.append({"genre": entry["genre"], "rank": entry["rank"],
                                   "name": entry["name"][:40], "error": f"exc:{e}"[:80]})
                     continue
+                finally:
+                    _wd["last"] = time.time()
                 ok = bool(res.get("success"))
                 if ok:
                     success += 1
@@ -477,10 +511,12 @@ def main():
                 print(f"[post] {entry['genre']} {entry['rank']}位 -> {ok}", flush=True)
                 if success < target:
                     time.sleep(random.uniform(8, 15))
+            _wd["stop"] = True   # watchdog 停止
             out["post_target"] = target
             out["post_request"] = args.post
             out["post_success"] = success
             out["post_attempts"] = attempts
+            out["watchdog_killed"] = _wd["killed"]
             out["skipped_repost"] = skipped_repost
             out["skipped_presale"] = skipped_presale
             out["genre_distribution"] = genre_used
