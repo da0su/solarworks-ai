@@ -53,12 +53,30 @@ FORBIDDEN_PATH_KEYWORDS = ["/mix", "/collect", "/common/error", "/error"]
 class PostExecutor:
     """楽天ROOMへの投稿を実行するクラス"""
 
+    # 2026-07-22: 1商品でのハングが VM 単スレッド HTTP サーバを 15分ブロックし
+    # POST バッチが 7件で停止する事象への対策 (実測 7/21)。
+    # Playwright のデフォルトタイムアウトを明示設定し、どの操作 (goto/click/wait) も
+    # 上限で TimeoutError を投げて次商品へ進めるようにする。
+    DEFAULT_OP_TIMEOUT_MS = 30000       # 一般操作 (click/wait 等)
+    DEFAULT_NAV_TIMEOUT_MS = 45000      # ページ遷移 (goto)。streaming で domcontentloaded が
+                                        # 発火しない商品ページでも必ず打ち切る
+
     def __init__(self, browser_manager: BrowserManager):
         self.bm = browser_manager
+        self._timeouts_applied = False
 
     @property
     def page(self) -> Page:
-        return self.bm.page
+        p = self.bm.page
+        # page は都度生成され得るので、未適用なら毎回デフォルトを設定する
+        if p is not None and getattr(p, "_swks_timeout_set", False) is False:
+            try:
+                p.set_default_timeout(self.DEFAULT_OP_TIMEOUT_MS)
+                p.set_default_navigation_timeout(self.DEFAULT_NAV_TIMEOUT_MS)
+                p._swks_timeout_set = True
+            except Exception:
+                pass
+        return p
 
     def execute(self, product_url: str, review_text: str) -> dict:
         """1件の投稿を実行する
@@ -103,6 +121,17 @@ class PostExecutor:
 
             result["screenshots"].append(str(self.bm.take_screenshot("01_product_page")))
             logger.info(f"商品ページ表示OK: {page_title[:60]}")
+
+            # 2026-05-28: 販売開始前チェック (CEO指示: 販売前商品は投稿しない)
+            try:
+                page_text = self.page.inner_text("body") or ""
+                if "販売開始前" in page_text:
+                    result["error"] = "販売開始前の商品のため投稿スキップ"
+                    result["error_type"] = "pre_sale"
+                    logger.warning(f"[pre_sale_skip] {product_url[:60]}: 販売開始前を検出 → skip")
+                    return result
+            except Exception:
+                pass
 
             # Step 2: 「シェア」ボタンをクリック
             logger.info("「シェア」ボタンを探しています...")
@@ -202,6 +231,17 @@ class PostExecutor:
                 result["error"] = "ログインページにリダイレクトされました"
                 result["error_type"] = "login_redirect"
                 return result
+
+            # 2026-05-28: mix ページでも販売開始前チェック (商品カードのラベル確認)
+            try:
+                mix_text = self.page.inner_text("body") or ""
+                if "販売開始前" in mix_text:
+                    result["error"] = "販売開始前の商品のため投稿スキップ (mix page)"
+                    result["error_type"] = "pre_sale"
+                    logger.warning(f"[pre_sale_skip] mix page: 販売開始前を検出 → skip")
+                    return result
+            except Exception:
+                pass
 
             # Step 5: textarea[name="content"]にレビュー文を入力
             logger.info("テキストエリアを探しています...")
