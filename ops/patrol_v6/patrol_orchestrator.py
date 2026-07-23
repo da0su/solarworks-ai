@@ -294,10 +294,8 @@ def auto_recover(action: str, context: dict) -> dict:
                         return result
                 except Exception:
                     pass
-            try:
-                throttle_path.write_text(str(time.time()))
-            except Exception:
-                pass
+            # スロットル記録は「送信成功時のみ」(後述)。
+            # 送信前に書くと、Slack 一時障害で失敗しても3時間ブロックされ通知が飛ぶため。
             slack_sent = False
             attempts: list[dict] = []
             for attempt in range(3):
@@ -324,6 +322,12 @@ def auto_recover(action: str, context: dict) -> dict:
                 # backoff: 5 秒 → 30 秒 (合計 < 1 分)
                 if attempt < 2:
                     time.sleep(5 if attempt == 0 else 30)
+            # 送信成功時のみスロットル記録 (失敗は次サイクルで再試行させる)
+            if slack_sent:
+                try:
+                    throttle_path.write_text(str(time.time()))
+                except Exception:
+                    pass
             result["slack_sent"] = slack_sent
             result["attempts"] = attempts
             if not slack_sent:
