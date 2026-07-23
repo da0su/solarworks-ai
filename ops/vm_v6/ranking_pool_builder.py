@@ -443,6 +443,7 @@ def main():
             _refill = [e for e in postable if id(e) not in chosen_ids]
             candidates = chosen + _refill
             attempts = 0
+            browser_restarts = 0
             MAX_ATTEMPTS = target * 3          # 無限試行の安全弁
 
             # 2026-07-22: プロセスレベル watchdog。
@@ -503,6 +504,33 @@ def main():
                     continue
                 finally:
                     _wd["last"] = time.monotonic()
+
+                # 2026-07-23: ブラウザ死亡からの回復。
+                # 実測 (7/23): 1件投稿後に Chrome が落ち、残り全試行が
+                # "Target page, context or browser has been closed" で失敗
+                # → 39試行で成功1件。閉じたブラウザに投げ続けても無駄なので、
+                # 検知したら bm を作り直して同じ商品を1回だけ再試行する。
+                err_txt = str(res.get("error") or "")
+                if not res.get("success") and ("has been closed" in err_txt
+                                               or "Target page" in err_txt):
+                    log(f"[recover] ブラウザ死亡検知 → 再起動して再試行 ({browser_restarts+1}回目)")
+                    try:
+                        try:
+                            bm.stop()
+                        except Exception:
+                            pass
+                        bm = BrowserManagerV6(action="post")
+                        bm.start()
+                        pe = PostExecutor(CompatBM(bm))
+                        browser_restarts += 1
+                        _wd["last"] = time.monotonic()
+                        res = pe.execute(entry["product_url"], rt)
+                    except Exception as e2:
+                        log(f"[recover] 再起動失敗: {e2}")
+                        res = {"success": False, "error": f"recover_failed:{e2}"[:80]}
+                    finally:
+                        _wd["last"] = time.monotonic()
+
                 ok = bool(res.get("success"))
                 if ok:
                     success += 1
@@ -522,6 +550,7 @@ def main():
             out["post_request"] = args.post
             out["post_success"] = success
             out["post_attempts"] = attempts
+            out["browser_restarts"] = browser_restarts
             out["watchdog_killed"] = _wd["killed"]
             out["skipped_repost"] = skipped_repost
             out["skipped_presale"] = skipped_presale
