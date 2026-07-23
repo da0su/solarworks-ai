@@ -312,6 +312,8 @@ def main():
                 picked = (rec.get("pick") or {}).get("picked_n", 0)
                 if not args.dry and picked > 0 and rec["new_confirmed"] == 0:
                     rec["error"] = "save_not_reflected"  # 保存したのにAPI未反映
+            elif not args.dry and not rec.get("no_save"):
+                rec["error"] = rec.get("error") or "verify_unavailable"  # 検証不能=成功扱いしない
             out["results"].append(rec)
             print(f"  -> picked={rec.get('pick',{}).get('picked_n')} "
                   f"confirmed={rec.get('new_confirmed','-')}", flush=True)
@@ -325,8 +327,8 @@ def main():
 
     out["added_total"] = sum(r.get("new_confirmed") or 0 for r in out["results"])
     out["errors"] = [r.get("error") for r in out["results"] if r.get("error")]
-    zero_picks = [r for r in out["results"]
-                  if (r.get("pick") or {}).get("picked_n", 0) == 0 and not r.get("dry")]
+    zero_picks = [] if args.dry else [
+        r for r in out["results"] if (r.get("pick") or {}).get("picked_n", 0) == 0]
     if zero_picks:
         out["warn_zero_pick"] = len(zero_picks)  # ng-click/DOM 変化の兆候
     out["done"] = True
@@ -334,4 +336,15 @@ def main():
     print(f"DONE added={out['added_total']} errors={len(out['errors'])}", flush=True)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        try:
+            OUT_F.write_text(json.dumps(
+                {"ts": datetime.now().isoformat(), "fatal": f"{e}"[:200],
+                 "tb": traceback.format_exc()[-800:]}, ensure_ascii=False),
+                encoding="utf-8")
+        except Exception:
+            pass
+        raise
