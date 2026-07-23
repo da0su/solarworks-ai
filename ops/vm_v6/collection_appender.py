@@ -225,6 +225,13 @@ def main():
     if not posts:
         out["skip"] = "no recent posts"; save_out(); print("DONE no posts"); return
 
+    # 入力ファイル不在/破損は結果ファイルに残して終了 (サイレント失敗防止)
+    try:
+        _ = POOL_F.stat(); _ = ASSIGNMENTS_F.stat(); _ = STATE_V2_F.stat()
+    except Exception as e:
+        out["error"] = f"input_missing:{e}"[:120]; save_out()
+        print("ABORT", out["error"]); return
+
     # 2) img canonical key -> genre (high_rate_v2 の img で突合。
     #    source_id は無効値・URLスラッグと item.key は番号体系が別で突合不可のため画像で照合)
     pool = json.loads(POOL_F.read_text(encoding="utf-8"))
@@ -302,6 +309,9 @@ def main():
             if isinstance(rec.get("verified_sids"), list):
                 got = set(rec["verified_sids"])
                 rec["new_confirmed"] = sum(1 for s in v["sids"] if s in got)
+                picked = (rec.get("pick") or {}).get("picked_n", 0)
+                if not args.dry and picked > 0 and rec["new_confirmed"] == 0:
+                    rec["error"] = "save_not_reflected"  # 保存したのにAPI未反映
             out["results"].append(rec)
             print(f"  -> picked={rec.get('pick',{}).get('picked_n')} "
                   f"confirmed={rec.get('new_confirmed','-')}", flush=True)
@@ -313,9 +323,15 @@ def main():
             save_out()
             time.sleep(random.uniform(3, 6))
 
+    out["added_total"] = sum(r.get("new_confirmed") or 0 for r in out["results"])
+    out["errors"] = [r.get("error") for r in out["results"] if r.get("error")]
+    zero_picks = [r for r in out["results"]
+                  if (r.get("pick") or {}).get("picked_n", 0) == 0 and not r.get("dry")]
+    if zero_picks:
+        out["warn_zero_pick"] = len(zero_picks)  # ng-click/DOM 変化の兆候
     out["done"] = True
     save_out()
-    print("DONE", flush=True)
+    print(f"DONE added={out['added_total']} errors={len(out['errors'])}", flush=True)
 
 if __name__ == "__main__":
     main()
