@@ -279,12 +279,34 @@ def auto_recover(action: str, context: dict) -> dict:
             # 新: returncode 確認 + 3 回 retry + 全失敗時は escalate_failed.log に残す
             sl = REPO_ROOT / "ops" / "notifications" / "slack_reporter.py"
             msg = f"<!channel> 【patrol_v6 CRITICAL】 {context.get('summary', 'unknown')}"
+
+            # 2026-07-23: スロットル。patrol は15分毎なので、無throttle だと同じ障害を
+            # 15分毎に Slack へ投げてスパム化 → ミュートされ元の無音状態に戻る。
+            # 障害の種類 (summary の先頭語) 単位で 3時間に1回だけ通知する。
+            import hashlib as _hl
+            issue_key = _hl.md5(str(context.get("summary", ""))[:40].encode()).hexdigest()[:10]
+            throttle_path = REPO_ROOT / "state" / f"alert_throttle_{issue_key}.txt"
+            THROTTLE_SEC = 3 * 3600
+            if throttle_path.exists():
+                try:
+                    if time.time() - float(throttle_path.read_text().strip()) < THROTTLE_SEC:
+                        result["escalation"] = "throttled_3h"
+                        return result
+                except Exception:
+                    pass
+            try:
+                throttle_path.write_text(str(time.time()))
+            except Exception:
+                pass
             slack_sent = False
             attempts: list[dict] = []
             for attempt in range(3):
                 try:
                     r = subprocess.run(
-                        [sys.executable, str(sl), msg],
+                        # 2026-07-23: 機能全停止の CRITICAL は killswitch を貫通させる。
+                        # これが無かったため 7/1-7/16 の16日間、patrol は毎回検知しながら
+                        # 全アラートが SLACK_DISABLED に飲まれて無音だった。
+                        [sys.executable, str(sl), msg, "--critical"],
                         capture_output=True, timeout=30, creationflags=NO_WIN,
                     )
                     attempts.append({
