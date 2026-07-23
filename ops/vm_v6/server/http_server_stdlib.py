@@ -23,7 +23,7 @@ import subprocess
 import sys
 import threading
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 
 API_TOKEN = os.environ.get("BOT_API_TOKEN", "rakuten-room-v6-secret")
@@ -270,8 +270,15 @@ def main():
         server = None
         start_ts = time.time()
         try:
-            server = HTTPServer(("0.0.0.0", PORT), Handler)
-            print(f"[http_server_stdlib] listening on http://0.0.0.0:{PORT}", flush=True)
+            # 2026-07-23: ThreadingHTTPServer に変更。
+            # 旧 HTTPServer(単スレッド)は 1 リクエスト(投稿バッチ等)が長時間/ハングすると
+            # /healthz を含む全リクエストがブロックされ、patrol が「死亡」と誤認して
+            # VM 丸ごと再起動していた (実測: POST ハングで15分無応答)。
+            # スレッド化すると重いジョブが走っていても health/status/abort は即応答でき、
+            # patrol はピンポイントで当該ジョブだけ止められる。
+            server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+            server.daemon_threads = True   # プロセス終了時に居残りスレッドを残さない
+            print(f"[http_server_stdlib] listening on http://0.0.0.0:{PORT} (threaded)", flush=True)
             server.serve_forever()
             # 正常 shutdown 経路 (誰かが server.shutdown() を呼んだ) → リセット
             consecutive_fails = 0
