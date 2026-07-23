@@ -306,14 +306,18 @@ def main():
                 break
             rec = append_one(page, cid, v["name"], v["img_keys"], args.dry)
             rec["expected_new_sids"] = v["sids"]
-            if isinstance(rec.get("verified_sids"), list):
-                got = set(rec["verified_sids"])
+            picked = (rec.get("pick") or {}).get("picked_n", 0)
+            verified = rec.get("verified_sids")
+            saved = (not args.dry) and (not rec.get("no_save"))  # 本番で保存を実行した
+            if isinstance(verified, list):
+                got = set(verified)
                 rec["new_confirmed"] = sum(1 for s in v["sids"] if s in got)
-                picked = (rec.get("pick") or {}).get("picked_n", 0)
-                if not args.dry and picked > 0 and rec["new_confirmed"] == 0:
-                    rec["error"] = "save_not_reflected"  # 保存したのにAPI未反映
-            elif not args.dry and not rec.get("no_save"):
-                rec["error"] = rec.get("error") or "verify_unavailable"  # 検証不能=成功扱いしない
+                if saved and picked > 0 and rec["new_confirmed"] == 0:
+                    rec["error"] = "save_not_reflected"   # 保存したのにAPI未反映
+            elif saved:
+                # 保存を実行したのに verify API が list を返さなかった時だけエラー化。
+                # dry-run / 保存スキップ (no_save) はここに来ない。
+                rec["error"] = rec.get("error") or "verify_unavailable"
             out["results"].append(rec)
             print(f"  -> picked={rec.get('pick',{}).get('picked_n')} "
                   f"confirmed={rec.get('new_confirmed','-')}", flush=True)
