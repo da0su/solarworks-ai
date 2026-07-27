@@ -32,6 +32,10 @@ sys.path.insert(0, str(REPO_ROOT))
 
 NO_WIN = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
 
+# 2026-07-23 CEO 指示「スラックでの報告を全て終了させて。今後は、報告必要なし」
+# critical alert も含め Slack 送信を全停止。検知は state/critical_alerts.log に残す。
+SLACK_CRITICAL_ALERT_ENABLED = False
+
 
 # ============================================================
 # Layer 一覧
@@ -279,6 +283,23 @@ def auto_recover(action: str, context: dict) -> dict:
             # 新: returncode 確認 + 3 回 retry + 全失敗時は escalate_failed.log に残す
             sl = REPO_ROOT / "ops" / "notifications" / "slack_reporter.py"
             msg = f"<!channel> 【patrol_v6 CRITICAL】 {context.get('summary', 'unknown')}"
+
+            # 2026-07-23 CEO 指示「スラックでの報告を全て終了。今後は報告必要なし」
+            # → Slack 送信は行わず、検知はローカル log にのみ残す (対話で私が確認する)。
+            # 再開する場合は SLACK_CRITICAL_ALERT_ENABLED = True に戻す。
+            if not SLACK_CRITICAL_ALERT_ENABLED:
+                alert_log = REPO_ROOT / "state" / "critical_alerts.log"
+                alert_log.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    with alert_log.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps({
+                            "ts": datetime.now().isoformat(),
+                            "summary": context.get("summary", "unknown"),
+                        }, ensure_ascii=False) + "\n")
+                except Exception:
+                    pass
+                result["escalation"] = "local_log_only (slack disabled by CEO 2026-07-23)"
+                return result
 
             # 2026-07-23: スロットル。patrol は15分毎なので、無throttle だと同じ障害を
             # 15分毎に Slack へ投げてスパム化 → ミュートされ元の無音状態に戻る。

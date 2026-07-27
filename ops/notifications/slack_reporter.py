@@ -55,6 +55,34 @@ def _add_sender_prefix(text: str) -> str:
     return SENDER_PREFIX + text
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+FULL_STOP_FLAG = _REPO_ROOT / "state" / "SLACK_FULL_STOP"
+SUPPRESSED_LOG = _REPO_ROOT / "state" / "slack_suppressed.log"
+
+
+def _full_stop() -> bool:
+    """CEO 2026-07-23 指示による Slack 全報告停止 (critical も含む)。"""
+    try:
+        return FULL_STOP_FLAG.exists()
+    except Exception:
+        return False
+
+
+def _log_suppressed(text: str, channel: str, critical: bool) -> None:
+    """送らなかった内容を残す。障害を消すのではなく、届け先を対話に変える。"""
+    try:
+        SUPPRESSED_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with SUPPRESSED_LOG.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "ts": datetime.now().isoformat(),
+                "critical": critical,
+                "channel": channel,
+                "text": str(text)[:500],
+            }, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def post_message(text: str, channel: str = DEFAULT_CHANNEL, critical: bool = False) -> bool:
     """Slackにメッセージを送信
 
@@ -70,6 +98,15 @@ def post_message(text: str, channel: str = DEFAULT_CHANNEL, critical: bool = Fal
     except Exception:
         import os as _os
         slack_disabled = lambda: _os.path.exists(r"C:\Users\infoa\Documents\solarworks-ai\state\SLACK_DISABLED")
+    # CEO 2026-07-23「こちらのスラックでの報告を全て終了させて。今後は、報告必要なし」
+    # critical bypass も含め全送信を停止する (7/23 の patrol CRITICAL 連投が発端)。
+    # 検知内容は state/slack_suppressed.log に残し、対話セッションで私が確認する。
+    # 再開する場合は state/SLACK_FULL_STOP を削除する。
+    if _full_stop():
+        _log_suppressed(text, channel, critical)
+        print("Slack: FULL STOP (CEO 2026-07-23 全報告終了)", file=sys.stderr)
+        return False
+
     if slack_disabled() and not critical:
         print("Slack: SKIPPED (CEO 2026-06-04 全停止)", file=sys.stderr)
         return False

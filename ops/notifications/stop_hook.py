@@ -53,6 +53,14 @@ def _update_last_run():
 
 
 def _post_slack(text: str, token: str) -> bool:
+    # CEO 2026-06-04 全Slack停止: state/SLACK_DISABLED がある間は送信しない
+    import os as _os
+    # CEO 2026-07-23 Slack 全報告終了 (critical 含め例外なし)
+    if _os.path.exists(r"C:\Users\infoa\Documents\solarworks-ai\state\SLACK_FULL_STOP"):
+        return False
+    if _os.path.exists(r"C:\Users\infoa\Documents\solarworks-ai\state\SLACK_DISABLED") \
+            or _os.environ.get("SLACK_DISABLED") not in (None, "", "0", "false", "False"):
+        return False
     payload = json.dumps({"channel": DEFAULT_CHANNEL, "text": text}).encode("utf-8")
     req = urllib.request.Request(
         "https://slack.com/api/chat.postMessage",

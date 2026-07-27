@@ -53,6 +53,14 @@ def get_log_age_min() -> float:
 
 
 def slack_alarm(msg: str):
+    # CEO 2026-06-04 全Slack停止: state/SLACK_DISABLED がある間は送信しない
+    import os as _os
+    # CEO 2026-07-23 Slack 全報告終了 (critical 含め例外なし)
+    if _os.path.exists(r"C:\Users\infoa\Documents\solarworks-ai\state\SLACK_FULL_STOP"):
+        return
+    if _os.path.exists(r"C:\Users\infoa\Documents\solarworks-ai\state\SLACK_DISABLED") \
+            or _os.environ.get("SLACK_DISABLED") not in (None, "", "0", "false", "False"):
+        return
     token = ""
     for path_s in [".env", "ops/notifications/.env", "rakuten-room/bot/.env"]:
         p = ROOT / path_s
