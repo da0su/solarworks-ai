@@ -72,7 +72,24 @@ python ops/codex_review.py --usage
 - 5/12 commit 8f34a76: URL check 撤去 → 450件 false success → 5日間虚偽報告
 - 5/16 commit 3c0e3d6: wait_for_function pathname 誤判定 (待機ゼロで通過)
 
-## 作業完了フロー（必須・毎回実行）
+## 🔕 Slack 報告は全停止 (2026-07-23 CEO 指示・最優先)
+
+> 「こちらのスラックでの報告を全て終了させて。今後は、報告必要なし。」
+
+**Slack 送信は critical alert も含めて全て停止**。`state/SLACK_FULL_STOP` が
+その状態を表す。以下の「作業完了フロー」の slack_reporter 実行は**行わない**
+(実行しても送信されず抑止ログに記録されるだけ)。**報告先はこの対話。**
+
+障害検知は止まっていない。届け先が変わっただけなので、**セッション開始時と
+状況報告時に必ず確認して対話で報告する**:
+```bash
+tail -20 state/critical_alerts.log     # patrol_v6 CRITICAL 検知
+tail -20 state/slack_suppressed.log    # 送信されなかった報告
+```
+
+---
+
+## 作業完了フロー（※Slack 送信部分は上記により停止中）
 
 **重要タスクに着手するとき（最初に実行）:**
 ```bash
