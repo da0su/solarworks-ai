@@ -101,10 +101,15 @@ def get_actuals() -> dict:
     # 停止判定を避ける)、両方 0 相当なら判定不能に倒す。
     if vm_follow is not None and host_follow is not None:
         actuals["follow"] = vm_follow + host_follow
-    elif (vm_follow or 0) + (host_follow or 0) > 0:
-        actuals["follow"] = (vm_follow or 0) + (host_follow or 0)   # 部分観測の下限値
     else:
-        actuals["follow"] = None   # 片側欠損かつ実績0 = 停止と断定できない
+        # 片側欠損 = 合計が確定しない。下限値を actual にすると達成率が過小評価され
+        # 「稼働しているのに未達 CRITICAL」を生むため、判定不能 (None) に倒す。
+        # ただし読めた側に実績があるなら「停止ではない」ことは確かなので、
+        # partial として記録し、後段で停止扱いしないための根拠にする。
+        actuals["follow"] = None
+        partial = (vm_follow or 0) + (host_follow or 0)
+        if partial > 0:
+            errors["follow_partial"] = f"片側のみ観測 (下限 {partial}件・稼働は確認)"
 
     # FB: room_bot_v5.db
     try:
@@ -122,6 +127,8 @@ def get_actuals() -> dict:
 
 # 判定不能が何サイクル続いたら CRITICAL に昇格させるか (patrol は15分毎 = 1時間)
 UNKNOWN_STREAK_CRITICAL = 4
+# CRITICAL 昇格後の再通知間隔 (サイクル数)。毎回 CRITICAL を出すとスパム化する。
+UNKNOWN_CRITICAL_REPEAT = 4
 _STREAK_F = REPO_ROOT / "state" / "patrol_unknown_streak.json"
 
 
@@ -132,25 +139,39 @@ def _load_streaks() -> dict:
         return {}
 
 
-def _save_streaks(d: dict) -> None:
+# 永続化に失敗しても昇格を不発にしないためのプロセス内フォールバック。
+# ファイルが書けない環境 (権限/ディスク) では patrol プロセスが常駐前提なので
+# メモリ側のカウンタで昇格判定を継続する。
+_STREAK_MEM: dict = {}
+
+
+def _save_streaks(d: dict) -> bool:
+    """保存できたら True。失敗しても例外は投げない (呼び出し側で握る)。"""
     try:
         _STREAK_F.parent.mkdir(parents=True, exist_ok=True)
         tmp = _STREAK_F.with_suffix(".tmp")
         tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
         tmp.replace(_STREAK_F)   # atomic write
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _bump_unknown_streak(mode: str) -> int:
     d = _load_streaks()
-    n = int(d.get(mode, 0)) + 1
+    # 永続値とメモリ値の大きい方を採用 (書き込み失敗でリセットされるのを防ぐ)
+    n = max(int(d.get(mode, 0)), int(_STREAK_MEM.get(mode, 0))) + 1
     d[mode] = n
-    _save_streaks(d)
+    _STREAK_MEM[mode] = n
+    if not _save_streaks(d):
+        # 永続化できないこと自体を可視化する (黙殺すると昇格不発に気付けない)
+        _STREAK_MEM.setdefault("_persist_failed", 0)
+        _STREAK_MEM["_persist_failed"] += 1
     return n
 
 
 def _clear_unknown_streak(mode: str) -> None:
+    _STREAK_MEM.pop(mode, None)
     d = _load_streaks()
     if d.pop(mode, None) is not None:
         _save_streaks(d)
@@ -186,7 +207,12 @@ def check() -> dict:
             # CRITICAL に昇格させる。「見えない」を放置すると 7/16 の16日間
             # サイレント停止と同じことが起きる (ssot_target_missing_outage)。
             streak = _bump_unknown_streak(mode)
-            level = "CRITICAL" if streak >= UNKNOWN_STREAK_CRITICAL else "WARN"
+            if streak < UNKNOWN_STREAK_CRITICAL:
+                level = "WARN"
+            elif (streak - UNKNOWN_STREAK_CRITICAL) % UNKNOWN_CRITICAL_REPEAT == 0:
+                level = "CRITICAL"   # 昇格時と、その後は 1時間毎にだけ再通知
+            else:
+                level = "WARN"       # 間の周期は WARN に落としてノイズを抑える
             alerts.append({
                 "level": level,
                 "message": (f"{mode} 実績ソース到達不能 (判定不能"
