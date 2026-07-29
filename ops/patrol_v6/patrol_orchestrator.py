@@ -447,12 +447,20 @@ def main():
         # あってもサイレント化しない (指摘2・3)。
         if crit:
             state_log = REPO_ROOT / "state" / "critical_state.log"
+            # ローテーションは best-effort。失敗しても append は必ず試みる
+            # (ローテ失敗で記録ごと落ちると「状態は必ず見える」保証が壊れる)。
+            # Windows では他プロセスが開いていると replace が PermissionError に
+            # なりうるため、失敗は握って次サイクルに委ねる。
             try:
                 state_log.parent.mkdir(parents=True, exist_ok=True)
-                # ローテーション: 2MB 超で .1 に退避 (patrol は15分毎・無期限 append
-                # だとディスクを圧迫する)。世代は1つで十分 (直近の状態が読めればよい)。
+                # 2MB 超で .1 に退避 (patrol は15分毎・無期限 append だと肥大する)
                 if state_log.exists() and state_log.stat().st_size > 2 * 1024 * 1024:
                     state_log.replace(state_log.with_suffix(".log.1"))
+            except Exception as e:
+                print(f"  [WARN] critical_state.log ローテ失敗 (追記は継続): "
+                      f"{type(e).__name__}: {e}", flush=True)
+            try:
+                state_log.parent.mkdir(parents=True, exist_ok=True)
                 with state_log.open("a", encoding="utf-8") as f:
                     f.write(json.dumps({
                         "ts": datetime.now().isoformat(),
