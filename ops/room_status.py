@@ -93,6 +93,10 @@ OWN_USER_ID = "1000006606047125"
 POST_STALL_HOURS = 30
 
 
+def _fetch_post_truth() -> dict | None:   # 後方互換エイリアス (旧名参照を壊さない)
+    return fetch_post_truth()
+
+
 def fetch_post_truth() -> dict | None:
     """POST の真値を公開 ROOM API から取得 (凍結 post_history.json を見ない).
     2026-07-29: patrol_v6 business.py からも参照するため public 名に変更

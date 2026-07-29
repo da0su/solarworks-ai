@@ -95,8 +95,16 @@ def get_actuals() -> dict:
                           and x.get("source") != "skip_discover")
     except Exception as e:
         errors["follow_host"] = f"{type(e).__name__}: {e}"[:120]
-    if vm_follow is not None or host_follow is not None:
-        actuals["follow"] = (vm_follow or 0) + (host_follow or 0)
+    # 両方読めた時のみ合算値を信用する。片方だけだと「読めた側が 0 件」のときに
+    # 合計 0 → 偽 CRITICAL になりうる (FOLLOW は VM/HOST 双方で実行されるため)。
+    # 片方失敗時は、読めた側に実績があれば下限値として採用し (稼働は確実なので
+    # 停止判定を避ける)、両方 0 相当なら判定不能に倒す。
+    if vm_follow is not None and host_follow is not None:
+        actuals["follow"] = vm_follow + host_follow
+    elif (vm_follow or 0) + (host_follow or 0) > 0:
+        actuals["follow"] = (vm_follow or 0) + (host_follow or 0)   # 部分観測の下限値
+    else:
+        actuals["follow"] = None   # 片側欠損かつ実績0 = 停止と断定できない
 
     # FB: room_bot_v5.db
     try:
@@ -110,6 +118,42 @@ def get_actuals() -> dict:
     if errors:
         actuals["_errors"] = errors   # 復旧判断用に原因を残す (check 側は無視)
     return actuals
+
+
+# 判定不能が何サイクル続いたら CRITICAL に昇格させるか (patrol は15分毎 = 1時間)
+UNKNOWN_STREAK_CRITICAL = 4
+_STREAK_F = REPO_ROOT / "state" / "patrol_unknown_streak.json"
+
+
+def _load_streaks() -> dict:
+    try:
+        return json.loads(_STREAK_F.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_streaks(d: dict) -> None:
+    try:
+        _STREAK_F.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STREAK_F.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(_STREAK_F)   # atomic write
+    except Exception:
+        pass
+
+
+def _bump_unknown_streak(mode: str) -> int:
+    d = _load_streaks()
+    n = int(d.get(mode, 0)) + 1
+    d[mode] = n
+    _save_streaks(d)
+    return n
+
+
+def _clear_unknown_streak(mode: str) -> None:
+    d = _load_streaks()
+    if d.pop(mode, None) is not None:
+        _save_streaks(d)
 
 
 # 各機能ごとの「達成すべき時刻 cutoff」
@@ -138,12 +182,20 @@ def check() -> dict:
         if actual is None:
             why = (actuals.get("_errors") or {})
             detail = why.get(mode) or why.get(f"{mode}_vm") or why.get(f"{mode}_host") or "unreachable"
+            # 判定不能が続く = 観測ブラインド。単発は WARN だが、継続したら
+            # CRITICAL に昇格させる。「見えない」を放置すると 7/16 の16日間
+            # サイレント停止と同じことが起きる (ssot_target_missing_outage)。
+            streak = _bump_unknown_streak(mode)
+            level = "CRITICAL" if streak >= UNKNOWN_STREAK_CRITICAL else "WARN"
             alerts.append({
-                "level": "WARN",
-                "message": f"{mode} 実績ソース到達不能 (判定不能・要確認): {detail}",
-                "context": {"mode": mode, "actual": None, "target": target},
+                "level": level,
+                "message": (f"{mode} 実績ソース到達不能 (判定不能"
+                            f"{f'・{streak}回連続' if streak > 1 else ''}): {detail}"),
+                "context": {"mode": mode, "actual": None, "target": target,
+                            "unknown_streak": streak},
             })
             continue
+        _clear_unknown_streak(mode)
         achievement = actual / target if target else 0
         cutoff = TIME_CUTOFFS.get(mode, 0)
 
