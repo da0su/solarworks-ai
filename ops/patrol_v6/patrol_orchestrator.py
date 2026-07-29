@@ -446,9 +446,13 @@ def main():
         # 「通知は抑止するが状態は見える」を保証し、notify 非対応の下流経路が
         # あってもサイレント化しない (指摘2・3)。
         if crit:
+            state_log = REPO_ROOT / "state" / "critical_state.log"
             try:
-                state_log = REPO_ROOT / "state" / "critical_state.log"
                 state_log.parent.mkdir(parents=True, exist_ok=True)
+                # ローテーション: 2MB 超で .1 に退避 (patrol は15分毎・無期限 append
+                # だとディスクを圧迫する)。世代は1つで十分 (直近の状態が読めればよい)。
+                if state_log.exists() and state_log.stat().st_size > 2 * 1024 * 1024:
+                    state_log.replace(state_log.with_suffix(".log.1"))
                 with state_log.open("a", encoding="utf-8") as f:
                     f.write(json.dumps({
                         "ts": datetime.now().isoformat(),
@@ -456,8 +460,11 @@ def main():
                         "notified": len(crit_to_notify),
                         "messages": [a.get("message", "?") for a in crit[:5]],
                     }, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
+            except Exception as e:
+                # 状態可視化が目的なので、失敗を黙殺すると意図と矛盾する。
+                # 標準出力には必ず残す (patrol のログに現れる)。
+                print(f"  [WARN] critical_state.log 書き込み失敗: "
+                      f"{type(e).__name__}: {e}", flush=True)
 
         if crit and not any(a.get("auto_recover") for a in all_alerts):
             if not crit_to_notify:

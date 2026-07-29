@@ -107,6 +107,10 @@ def get_actuals() -> dict:
         # ただし読めた側に実績があるなら「停止ではない」ことは確かなので、
         # partial として記録し、後段で停止扱いしないための根拠にする。
         actuals["follow"] = None
+        # _partial は「複数ソースの合算で片方だけ読めた」状態を表す。
+        # FOLLOW のみ VM+HOST の2ソース構成のため該当し、POST/LIKE/FB は
+        # 単一ソース (API / like_history / v5.db) なので構造的に部分観測は起きない
+        # (読めるか読めないかの二値)。よって他モードにガードは不要。
         # 両方 None = 部分観測ですらない (完全に観測不能)。_partial に入れない。
         if vm_follow is not None or host_follow is not None:
             partial = (vm_follow or 0) + (host_follow or 0)
