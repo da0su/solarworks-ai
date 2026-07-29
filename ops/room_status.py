@@ -93,8 +93,10 @@ OWN_USER_ID = "1000006606047125"
 POST_STALL_HOURS = 30
 
 
-def _fetch_post_truth() -> dict | None:
+def fetch_post_truth() -> dict | None:
     """POST の真値を公開 ROOM API から取得 (凍結 post_history.json を見ない).
+    2026-07-29: patrol_v6 business.py からも参照するため public 名に変更
+    (旧 _fetch_post_truth)。POST 実績の真値取得はここに一本化する。
     2026-06-04 CEO 指示: room_status.py が post_history.json (5/30 凍結) を参照して
     毎回 POST を誤って「停止」判定する誤報を解消する。真値は自アカウントの実投稿フィード。
     戻り {today_posted, last_posted_at, last_posted_age_hours, source} / 失敗時 None。"""
@@ -216,7 +218,7 @@ def build_status() -> dict:
         elif fn == "post":
             # 2026-06-04 修正: patrol が凍結 post_history.json (5/30 停止) を見て
             # 毎回 POST を「停止」と誤判定する誤報を解消. 真値=公開 API の実投稿フィード。
-            post_truth = _fetch_post_truth()
+            post_truth = fetch_post_truth()
             if post_truth:
                 f_summary["today_posted"] = post_truth["today_posted"]
                 f_summary["last_posted_at"] = post_truth["last_posted_at"]
