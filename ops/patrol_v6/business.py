@@ -38,14 +38,18 @@ def get_actuals() -> dict:
     actuals = {"post": 0, "like": 0, "follow": 0, "followback": 0}
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # POST: room_bot.db
+    # POST: 公開 ROOM API が真値 (room_status.py と同一ソース)。
+    # 2026-07-29 真因修正: 旧実装は room_bot.db の post_queue を数えていたが、
+    # Plan v6 の ranking_post (VM) は post_queue を経由しないため常に 0 になり、
+    # 実際には投稿できている日でも「post 達成率 0%」CRITICAL を15分毎に出し続けた。
+    # 凍結された旧データソースで状況判断しない (禁忌ファイル ルール)。
+    # API 到達不能時は None のままにして「0件」と誤断定しない。
     try:
-        c = sqlite3.connect(f"file:{REPO_ROOT / 'rakuten-room' / 'bot' / 'data' / 'room_bot.db'}?mode=ro", uri=True, timeout=2)
-        r = c.execute("SELECT COUNT(*) FROM post_queue WHERE status='posted' AND DATE(posted_at)=DATE('now','localtime')").fetchone()
-        actuals["post"] = int(r[0]) if r else 0
-        c.close()
+        from ops.room_status import _fetch_post_truth
+        truth = _fetch_post_truth()
+        actuals["post"] = truth.get("today_posted") if truth else None
     except Exception:
-        pass
+        actuals["post"] = None
 
     # LIKE: like_history.json
     try:
@@ -105,6 +109,15 @@ def check() -> dict:
         target = targets.get(mode, 0)
         actual = actuals.get(mode, 0)
         if not target:
+            continue
+        # actual is None = 実績ソースに到達できず判定不能。
+        # 「取得できない」を「0件」と読み替えると偽 CRITICAL になるので警告に留める。
+        if actual is None:
+            alerts.append({
+                "level": "WARN",
+                "message": f"{mode} 実績ソース到達不能 (判定不能・要確認)",
+                "context": {"mode": mode, "actual": None, "target": target},
+            })
             continue
         achievement = actual / target if target else 0
         cutoff = TIME_CUTOFFS.get(mode, 0)
