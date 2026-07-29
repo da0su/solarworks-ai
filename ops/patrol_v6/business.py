@@ -108,8 +108,11 @@ def get_actuals() -> dict:
         # partial として記録し、後段で停止扱いしないための根拠にする。
         actuals["follow"] = None
         partial = (vm_follow or 0) + (host_follow or 0)
-        if partial > 0:
-            errors["follow_partial"] = f"片側のみ観測 (下限 {partial}件・稼働は確認)"
+        side = "VM" if vm_follow is not None else "HOST"
+        actuals["_partial"] = {"follow": {"lower_bound": partial, "observed_side": side}}
+        errors["follow_partial"] = (
+            f"{side} 側のみ観測 (下限 {partial}件"
+            + ("・稼働は確認" if partial > 0 else "・実績未確認") + ")")
 
     # FB: room_bot_v5.db
     try:
@@ -159,8 +162,12 @@ def _save_streaks(d: dict) -> bool:
 
 def _bump_unknown_streak(mode: str) -> int:
     d = _load_streaks()
-    # 永続値とメモリ値の大きい方を採用 (書き込み失敗でリセットされるのを防ぐ)
-    n = max(int(d.get(mode, 0)), int(_STREAK_MEM.get(mode, 0))) + 1
+    # メモリ側があればそれが最新 (このプロセスが観測した実際の連続回数)。
+    # max() で併用すると、クリア時に永続化が失敗した場合にディスクの旧値が
+    # 復活して虚偽の即時 CRITICAL になるため、メモリを優先する。
+    # ディスク値はプロセス再起動後の引き継ぎにのみ使う。
+    prev = _STREAK_MEM[mode] if mode in _STREAK_MEM else int(d.get(mode, 0))
+    n = int(prev) + 1
     d[mode] = n
     _STREAK_MEM[mode] = n
     if not _save_streaks(d):
@@ -171,10 +178,22 @@ def _bump_unknown_streak(mode: str) -> int:
 
 
 def _clear_unknown_streak(mode: str) -> None:
-    _STREAK_MEM.pop(mode, None)
+    """実績が取れた = 観測が回復。連続カウントを消す。
+
+    永続化に失敗した場合はディスク側に古い値が残るため、メモリ側を先に消すと
+    次回 max(disk, mem) で旧カウンタが復活し虚偽の即時 CRITICAL を招く。
+    そこでディスクを消せた時だけメモリも消し、失敗時は 0 を明示的に保持して
+    max() が旧値を拾わないようにする。
+    """
     d = _load_streaks()
-    if d.pop(mode, None) is not None:
-        _save_streaks(d)
+    had = d.pop(mode, None) is not None
+    if not had:
+        _STREAK_MEM.pop(mode, None)
+        return
+    if _save_streaks(d):
+        _STREAK_MEM.pop(mode, None)
+    else:
+        _STREAK_MEM[mode] = 0   # ディスクの残存値を打ち消す
 
 
 # 各機能ごとの「達成すべき時刻 cutoff」
@@ -206,15 +225,34 @@ def check() -> dict:
             # 判定不能が続く = 観測ブラインド。単発は WARN だが、継続したら
             # CRITICAL に昇格させる。「見えない」を放置すると 7/16 の16日間
             # サイレント停止と同じことが起きる (ssot_target_missing_outage)。
+            # 部分観測: 下限値でも目標に届かないなら「未達」は確定できる。
+            # 判定不能に倒したまま黙ると、稼働はしているが目標割れという
+            # 本物の未達を見逃す (偽陰性)。cutoff 後のみ評価する。
+            pinfo = (actuals.get("_partial") or {}).get(mode)
+            if pinfo and now_h >= TIME_CUTOFFS.get(mode, 0):
+                lb = pinfo["lower_bound"]
+                if lb < target * 0.5:
+                    alerts.append({
+                        "level": "WARN",
+                        "notify": True,
+                        "message": (f"{mode} 未達の疑い (下限 {lb}/{target}"
+                                    f"・{pinfo['observed_side']} 側のみ観測): {detail}"),
+                        "context": {"mode": mode, "actual": None, "target": target,
+                                    "lower_bound": lb, "partial": True},
+                    })
+                    continue
+
             streak = _bump_unknown_streak(mode)
-            if streak < UNKNOWN_STREAK_CRITICAL:
-                level = "WARN"
-            elif (streak - UNKNOWN_STREAK_CRITICAL) % UNKNOWN_CRITICAL_REPEAT == 0:
-                level = "CRITICAL"   # 昇格時と、その後は 1時間毎にだけ再通知
-            else:
-                level = "WARN"       # 間の周期は WARN に落としてノイズを抑える
+            escalated = streak >= UNKNOWN_STREAK_CRITICAL
+            # 状態(level)は落とさない。CRITICAL のまま維持しないと、間引きの周期で
+            # 「回復した」と誤読され自動クローズ→再オープンのチラつきを招く。
+            # 通知量は notify フラグで制御し、判定と配信を分離する。
+            level = "CRITICAL" if escalated else "WARN"
+            notify = (not escalated) or \
+                     ((streak - UNKNOWN_STREAK_CRITICAL) % UNKNOWN_CRITICAL_REPEAT == 0)
             alerts.append({
                 "level": level,
+                "notify": notify,   # False = 状態継続中につき再通知しない
                 "message": (f"{mode} 実績ソース到達不能 (判定不能"
                             f"{f'・{streak}回連続' if streak > 1 else ''}): {detail}"),
                 "context": {"mode": mode, "actual": None, "target": target,

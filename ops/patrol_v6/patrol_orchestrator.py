@@ -439,11 +439,17 @@ def main():
                 print(f"     result: {rec_result}")
         # CRITICAL がありどの alert にも auto_recover が紐付いていない場合は
         # escalate_ceo を保険として 1 回だけ走らせる (silent stuck の再発防止)
+        # notify=False は「状態は CRITICAL のままだが既報につき再通知不要」。
+        # 状態(level)を落とすと回復と誤読されるため、配信側で間引く。
+        crit_to_notify = [a for a in crit if a.get("notify", True)]
         if crit and not any(a.get("auto_recover") for a in all_alerts):
-            print("  [auto_recover] CRITICAL あり / auto_recover 未指定 → escalate_ceo fallback")
-            summary = "; ".join(a.get("message", "?") for a in crit[:3])
-            rec = auto_recover("escalate_ceo", {"summary": summary})
-            recovery_actions_taken.append(rec)
+            if not crit_to_notify:
+                print("  [auto_recover] CRITICAL 継続中 (既報・再通知抑止)")
+            else:
+                print("  [auto_recover] CRITICAL あり / auto_recover 未指定 → escalate_ceo fallback")
+                summary = "; ".join(a.get("message", "?") for a in crit_to_notify[:3])
+                rec = auto_recover("escalate_ceo", {"summary": summary})
+                recovery_actions_taken.append(rec)
     elif (crit or warn):
         print(f"  [auto_recover] skip (auto_recover={args.auto_recover}, "
               f"check_only={args.check_only})")
