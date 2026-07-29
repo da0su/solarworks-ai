@@ -442,6 +442,23 @@ def main():
         # notify=False は「状態は CRITICAL のままだが既報につき再通知不要」。
         # 状態(level)を落とすと回復と誤読されるため、配信側で間引く。
         crit_to_notify = [a for a in crit if a.get("notify", True)]
+        # notify に関係なく CRITICAL 状態は毎サイクル必ずログに残す。
+        # 「通知は抑止するが状態は見える」を保証し、notify 非対応の下流経路が
+        # あってもサイレント化しない (指摘2・3)。
+        if crit:
+            try:
+                state_log = REPO_ROOT / "state" / "critical_state.log"
+                state_log.parent.mkdir(parents=True, exist_ok=True)
+                with state_log.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps({
+                        "ts": datetime.now().isoformat(),
+                        "critical_count": len(crit),
+                        "notified": len(crit_to_notify),
+                        "messages": [a.get("message", "?") for a in crit[:5]],
+                    }, ensure_ascii=False) + "\n")
+            except Exception:
+                pass
+
         if crit and not any(a.get("auto_recover") for a in all_alerts):
             if not crit_to_notify:
                 print("  [auto_recover] CRITICAL 継続中 (既報・再通知抑止)")

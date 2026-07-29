@@ -107,12 +107,15 @@ def get_actuals() -> dict:
         # ただし読めた側に実績があるなら「停止ではない」ことは確かなので、
         # partial として記録し、後段で停止扱いしないための根拠にする。
         actuals["follow"] = None
-        partial = (vm_follow or 0) + (host_follow or 0)
-        side = "VM" if vm_follow is not None else "HOST"
-        actuals["_partial"] = {"follow": {"lower_bound": partial, "observed_side": side}}
-        errors["follow_partial"] = (
-            f"{side} 側のみ観測 (下限 {partial}件"
-            + ("・稼働は確認" if partial > 0 else "・実績未確認") + ")")
+        # 両方 None = 部分観測ですらない (完全に観測不能)。_partial に入れない。
+        if vm_follow is not None or host_follow is not None:
+            partial = (vm_follow or 0) + (host_follow or 0)
+            side = "VM" if vm_follow is not None else "HOST"
+            actuals["_partial"] = {"follow": {"lower_bound": partial,
+                                              "observed_side": side}}
+            errors["follow_partial"] = (
+                f"{side} 側のみ観測 (下限 {partial}件"
+                + ("・稼働は確認" if partial > 0 else "・実績未確認") + ")")
 
     # FB: room_bot_v5.db
     try:
@@ -228,22 +231,29 @@ def check() -> dict:
             # 部分観測: 下限値でも目標に届かないなら「未達」は確定できる。
             # 判定不能に倒したまま黙ると、稼働はしているが目標割れという
             # 本物の未達を見逃す (偽陰性)。cutoff 後のみ評価する。
-            pinfo = (actuals.get("_partial") or {}).get(mode)
-            if pinfo and now_h >= TIME_CUTOFFS.get(mode, 0):
-                lb = pinfo["lower_bound"]
-                if lb < target * 0.5:
-                    alerts.append({
-                        "level": "WARN",
-                        "notify": True,
-                        "message": (f"{mode} 未達の疑い (下限 {lb}/{target}"
-                                    f"・{pinfo['observed_side']} 側のみ観測): {detail}"),
-                        "context": {"mode": mode, "actual": None, "target": target,
-                                    "lower_bound": lb, "partial": True},
-                    })
-                    continue
-
+            # 観測ブラインドの継続は、部分観測かどうかに関係なく必ず数える。
+            # (旧実装は部分観測時に continue して streak を更新せず、片側断が
+            #  長期化しても CRITICAL に昇格しない抜けがあった)
             streak = _bump_unknown_streak(mode)
             escalated = streak >= UNKNOWN_STREAK_CRITICAL
+
+            pinfo = (actuals.get("_partial") or {}).get(mode)
+            if pinfo and now_h >= TIME_CUTOFFS.get(mode, 0) \
+                    and pinfo["lower_bound"] < target * 0.5 and not escalated:
+                # 昇格前は「未達の疑い」を優先して出す (下限値でも目標割れが確定)。
+                # 昇格後は下の観測ブラインド CRITICAL の方が重いのでそちらに任せる。
+                lb = pinfo["lower_bound"]
+                alerts.append({
+                    "level": "WARN",
+                    "notify": True,
+                    "message": (f"{mode} 未達の疑い (下限 {lb}/{target}"
+                                f"・{pinfo['observed_side']} 側のみ観測"
+                                f"・判定不能{streak}回連続): {detail}"),
+                    "context": {"mode": mode, "actual": None, "target": target,
+                                "lower_bound": lb, "partial": True,
+                                "unknown_streak": streak},
+                })
+                continue
             # 状態(level)は落とさない。CRITICAL のまま維持しないと、間引きの周期で
             # 「回復した」と誤読され自動クローズ→再オープンのチラつきを招く。
             # 通知量は notify フラグで制御し、判定と配信を分離する。
