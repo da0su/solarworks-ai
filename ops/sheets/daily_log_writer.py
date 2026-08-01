@@ -189,7 +189,14 @@ def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> i
         print("  [WARN] 日付行が無く目標を引き継げません。目標列は空で追加します")
 
     def _carry(idx: int) -> str:
-        """直近行の目標値を引き継ぐ (取れなければ空)。"""
+        """直近行の目標値を引き継ぐ (取れなければ空)。
+
+        last_row_vals は冒頭で None に初期化済みで、下の `if last_row_vals and`
+        でガードしているため未定義参照は起こらない (2026-08-01 実測確認)。
+        引き継ぎ元ゼロのシートを模擬しても NameError は発生せず、
+        後段の再探索ガードが None を返して write_to_sheet が False になる
+        = 虚偽成功にはならない。
+        """
         try:
             return last_row_vals[idx] if last_row_vals and len(last_row_vals) > idx else ""
         except Exception:
