@@ -81,3 +81,50 @@ ops/notifications/voicevox/
 # 5ファイルすべてGitで追跡する
 # --------------------------------------------------------------
 # !gpt_mousiokuri/  ← 除外ルールなし = 全ファイルがGit管理対象
+
+# ==============================================================
+# 2026-08-01 追加: 実行時データを除外し、git status を「意味のある変更」だけにする
+# 方針: 生成物・状態ファイル・デバッグ用の画像は除外。ソース(.py/.md)は必ず追跡する。
+# ==============================================================
+
+# --- 秘匿 (実値を含む/含みうるもの) ---
+# 注: ディレクトリ自体を無視すると配下の否定(!)が効かないため、
+#     中身を無視して .gitkeep だけ明示的に残す書き方にする。
+.credentials_note.txt
+ops/credentials/*
+!ops/credentials/.gitkeep
+
+# --- 実行時マーカー・状態 ---
+state/*.done
+state/*.lock
+state/alert_throttle_*.txt
+state/patrol_unknown_streak.json
+state/critical_state.log*
+state/slack_suppressed.log
+state/critical_alerts.log
+
+# --- Codex レビュー結果 (個票は生成物。使用量ログのみ残す) ---
+# 既に追跡済みの3件は履歴として残すため個別に除外対象から外す。
+state/codex_reviews/*.json
+!state/codex_reviews/_usage_log.jsonl
+!state/codex_reviews/_summary.json
+!state/codex_reviews/20260516_165025_review.json
+!state/codex_reviews/20260516_165234_review.json
+!state/codex_reviews/20260516_165404_review.json
+
+# --- デバッグ用スクリーンショット (ソースではない) ---
+# 意図して追跡している素材 (コイン事業の検証用画像等) は除外しない。
+*.png
+*.jpg
+!web-media/**/assets/**
+!**/docs/**/*.png
+!coin_business/data/material_test_30/**
+!coin_business/data/test/**
+
+# --- Chrome プロファイル (肥大・機密) ---
+**/chrome_profile*/
+
+# --- Claude Code のローカル作業領域 ---
+.claude/projects/
+.claude/worktrees/
+.claude/*.lock
