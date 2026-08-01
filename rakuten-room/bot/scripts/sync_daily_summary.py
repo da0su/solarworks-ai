@@ -29,6 +29,33 @@ def main():
     skipped = c.execute("SELECT COUNT(*) FROM post_queue WHERE status='skipped' AND queue_date=?", (today,)).fetchone()[0]
     planned = c.execute("SELECT COUNT(*) FROM post_queue WHERE queue_date=?", (today,)).fetchone()[0]
 
+    # 2026-08-01 真因修正: Plan v6 の ranking_post (VM) は post_queue を経由しないため、
+    # 上の posted は常に 0 になり、CEO のスプシに「投稿0件」を毎日書き込んでいた
+    # (実際は投稿できている)。公開 ROOM API の真値を優先する。
+    # 同じ誤りを patrol_v6 business.py でも修正済 (2026-07-29)。
+    try:
+        sys.path.insert(0, str(REPO_ROOT))
+        from ops.room_status import fetch_post_truth
+        truth = fetch_post_truth()
+        if truth and isinstance(truth.get("today_posted"), int):
+            api_posted = truth["today_posted"]
+            if api_posted != posted:
+                print(f"[fix] posted {posted} (post_queue) -> {api_posted} (public API truth)")
+            posted = api_posted
+            planned = max(planned, posted)   # 実績が計画を超える場合の整合
+        else:
+            print("[WARN] 公開API 到達不能。post_queue の値のまま書き込みはしない")
+            posted = None   # 取得不能を 0 と書かない (偽の 0 を残さない)
+    except Exception as e:
+        print(f"[WARN] post 真値取得に失敗: {type(e).__name__}: {e}")
+        posted = None
+
+    if posted is None:
+        # 真値が取れない時は DB もシートも更新しない (誤った 0 で上書きしない)
+        c.close()
+        print("[SKIP] post 実績が確定できないため同期を中止")
+        return
+
     c.execute("""
         INSERT INTO daily_summary (summary_date, planned, posted, failed, skipped, updated_at)
         VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
