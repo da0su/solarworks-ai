@@ -25,7 +25,7 @@ import re
 import sqlite3
 import sys
 from collections import Counter
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from pathlib import Path
 
 if hasattr(sys.stdout, "buffer"):
@@ -160,7 +160,9 @@ def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> i
       - 実績列は空のままにして、通常の write_to_sheet に書かせる。
     """
     d = datetime.strptime(target_date, "%Y-%m-%d").date()
-    today = datetime.now().date()
+    # 【安全弁1a】JST を明示 (Codex 指摘2)。ローカル TZ に依存すると、
+    # 実行環境の TZ が JST でない場合に「当日なのに SKIP」= 未記録の誤失敗になる。
+    today = datetime.now(timezone(timedelta(hours=9))).date()
 
     # 【安全弁1】自動追加は「今日」だけに限定する (Codex 指摘1)。
     # タイムゾーンずれ・引数ミス・バグで未来日や過去日の行を勝手に生やすと
@@ -181,8 +183,10 @@ def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> i
     if last_row_idx:
         last_row_vals = worksheet.row_values(last_row_idx)
     else:
-        print("  [ERROR] 日付行が1つも見つからず、引き継ぎ元を特定できません")
-        return None
+        # 引き継ぎ元が無くても行の追加自体は止めない (Codex 指摘3)。
+        # シート初期化直後などに「永久に記録できない」状態を作らない。
+        # 目標列は空になるので、CEO が入れるまで達成率は判定されないだけ。
+        print("  [WARN] 日付行が無く目標を引き継げません。目標列は空で追加します")
 
     def _carry(idx: int) -> str:
         """直近行の目標値を引き継ぐ (取れなければ空)。"""
@@ -203,26 +207,14 @@ def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> i
         print(f"  [DRY-RUN] would append row for {date_slash}: {new_row[:11]}")
         return None
 
-    # 【安全弁2】直近行を複製してから上書きする (Codex 指摘4)。
-    # append_row で素の値だけ入れると、行に仕込まれた数式・書式・データ検証が
-    # 落ちてダッシュボードの計算列が壊れる。行コピーなら書式ごと引き継げる。
-    try:
-        worksheet.insert_row([], index=last_row_idx + 1, inherit_from_before=True)
-        row = last_row_idx + 1
-        # 日付と目標のみ書き、実績列 (C/F/I/L) は空のままにする
-        worksheet.update(
-            [[new_row[0]]], f"A{row}", value_input_option="USER_ENTERED")
-        for col, val in (("B", new_row[1]), ("E", new_row[4]),
-                         ("H", new_row[7]), ("K", new_row[10])):
-            if str(val).strip():
-                worksheet.update([[val]], f"{col}{row}",
-                                 value_input_option="USER_ENTERED")
-        for col in ("C", "F", "I", "L"):
-            worksheet.update([[""]], f"{col}{row}",
-                             value_input_option="USER_ENTERED")
-    except Exception as e:
-        print(f"  [WARN] 行コピーに失敗 ({type(e).__name__}: {e}) → append_row にフォールバック")
-        worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+    # 【安全弁2】append_row 1回で書き切る (Codex 指摘1・4・5)。
+    # 当初 insert_row(inherit_from_before=True) で数式を引き継ぐ実装にしたが、
+    # このオプションが継承するのは書式・データ検証のみで数式はコピーされない。
+    # 実際にシートを FORMULA レンダリングで確認したところ、D/G/J の達成率数式は
+    # 111行中1行 (7/29) にしかなく、大半の行は空。つまり引き継ぐべき数式は無い。
+    # → 支配的な行の形 (数式なし) をそのまま踏襲する。
+    # 1リクエストで完結するので、途中失敗で日付だけの不完全行が残ることもない。
+    worksheet.append_row(new_row, value_input_option="USER_ENTERED")
 
     # 【安全弁3】行番号は len() で推測せず必ず再探索する (Codex 指摘5)。
     row = find_row_for_date(worksheet, target_date)
