@@ -159,16 +159,30 @@ def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> i
         CEO が上書きしたらそれが正。こちらから再書き込みはしない。
       - 実績列は空のままにして、通常の write_to_sheet に書かせる。
     """
-    col_a = worksheet.col_values(1)
-    date_slash = datetime.strptime(target_date, "%Y-%m-%d").strftime("%Y/%m/%d")
+    d = datetime.strptime(target_date, "%Y-%m-%d").date()
+    today = datetime.now().date()
 
-    # 直近の日付行 (= 目標値の引き継ぎ元) を探す
+    # 【安全弁1】自動追加は「今日」だけに限定する (Codex 指摘1)。
+    # タイムゾーンずれ・引数ミス・バグで未来日や過去日の行を勝手に生やすと
+    # 誤集計の温床になる。今日以外は追加せず、従来どおり失敗として返す。
+    if d != today:
+        print(f"  [SKIP] {target_date} は当日ではないため自動追加しません "
+              f"(自動追加は当日のみ / 必要なら手動で行を追加)")
+        return None
+
+    col_a = worksheet.col_values(1)
+    date_slash = d.strftime("%Y/%m/%d")
+
+    # 直近の日付行 (= 目標値と書式の引き継ぎ元) を探す
     last_row_idx, last_row_vals = None, None
     for i, val in enumerate(col_a):
-        if re.match(r"^\d{4}[/-]\d{2}[/-]\d{2}", str(val).strip()):
+        if re.match(r"^\d{4}[/-]\d{1,2}[/-]\d{1,2}", str(val).strip()):
             last_row_idx = i + 1
     if last_row_idx:
         last_row_vals = worksheet.row_values(last_row_idx)
+    else:
+        print("  [ERROR] 日付行が1つも見つからず、引き継ぎ元を特定できません")
+        return None
 
     def _carry(idx: int) -> str:
         """直近行の目標値を引き継ぐ (取れなければ空)。"""
@@ -189,9 +203,34 @@ def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> i
         print(f"  [DRY-RUN] would append row for {date_slash}: {new_row[:11]}")
         return None
 
-    worksheet.append_row(new_row, value_input_option="USER_ENTERED")
-    row = len(worksheet.col_values(1))
-    print(f"  [OK] {date_slash} の行を追加 (row={row}, 目標は直近行から引き継ぎ)")
+    # 【安全弁2】直近行を複製してから上書きする (Codex 指摘4)。
+    # append_row で素の値だけ入れると、行に仕込まれた数式・書式・データ検証が
+    # 落ちてダッシュボードの計算列が壊れる。行コピーなら書式ごと引き継げる。
+    try:
+        worksheet.insert_row([], index=last_row_idx + 1, inherit_from_before=True)
+        row = last_row_idx + 1
+        # 日付と目標のみ書き、実績列 (C/F/I/L) は空のままにする
+        worksheet.update(
+            [[new_row[0]]], f"A{row}", value_input_option="USER_ENTERED")
+        for col, val in (("B", new_row[1]), ("E", new_row[4]),
+                         ("H", new_row[7]), ("K", new_row[10])):
+            if str(val).strip():
+                worksheet.update([[val]], f"{col}{row}",
+                                 value_input_option="USER_ENTERED")
+        for col in ("C", "F", "I", "L"):
+            worksheet.update([[""]], f"{col}{row}",
+                             value_input_option="USER_ENTERED")
+    except Exception as e:
+        print(f"  [WARN] 行コピーに失敗 ({type(e).__name__}: {e}) → append_row にフォールバック")
+        worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+
+    # 【安全弁3】行番号は len() で推測せず必ず再探索する (Codex 指摘5)。
+    row = find_row_for_date(worksheet, target_date)
+    if row is None:
+        print(f"  [ERROR] 行を追加したが {target_date} を再検出できません "
+              f"(日付フォーマット不一致の可能性)")
+        return None
+    print(f"  [OK] {date_slash} の行を追加 (row={row}, 目標と書式は直近行から引き継ぎ)")
     return row
 
 
@@ -214,9 +253,10 @@ def write_to_sheet(target_date: str, posted: int, follow: int, like: int, fb: in
         print(f"  [INFO] date {target_date} の行が無いため追加します")
         row = ensure_row_for_date(ws, target_date, dry_run=dry_run)
         if row is None:
-            if dry_run:
-                return True
-            print(f"[ERROR] date {target_date} の行を追加できませんでした")
+            # dry_run でも「書き込めていない」事実は変わらないので False を返す。
+            # ここで True を返すと未記録なのに成功扱いになる (Codex 指摘2)。
+            print(f"[ERROR] date {target_date} の行が無く、書き込めませんでした"
+                  + (" (dry-run)" if dry_run else ""))
             return False
 
     print(f"  target row: {row} (date={target_date})")
