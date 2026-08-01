@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
 import sqlite3
 import sys
 from collections import Counter
@@ -145,6 +146,55 @@ def find_row_for_date(worksheet, target_date: str) -> int | None:
     return None
 
 
+def ensure_row_for_date(worksheet, target_date: str, dry_run: bool = False) -> int | None:
+    """target_date の行が無ければ末尾に追加して行番号を返す (冪等)。
+
+    2026-08-01 CEO 指示で追加。当日行が無いと実績が一切記録できず、
+    「投稿はしているのに記録が残らない」状態になっていた
+    (7/26-7/31 の投稿列が全て 0 だった問題と併せて発覚)。
+
+    設計上の約束:
+      - 既に行があれば**何もしない**。CEO が手動で行を追加した場合と共存する。
+      - 目標列 (B/E/H/K) は直近営業行の値を引き継ぐだけの暫定値。
+        CEO が上書きしたらそれが正。こちらから再書き込みはしない。
+      - 実績列は空のままにして、通常の write_to_sheet に書かせる。
+    """
+    col_a = worksheet.col_values(1)
+    date_slash = datetime.strptime(target_date, "%Y-%m-%d").strftime("%Y/%m/%d")
+
+    # 直近の日付行 (= 目標値の引き継ぎ元) を探す
+    last_row_idx, last_row_vals = None, None
+    for i, val in enumerate(col_a):
+        if re.match(r"^\d{4}[/-]\d{2}[/-]\d{2}", str(val).strip()):
+            last_row_idx = i + 1
+    if last_row_idx:
+        last_row_vals = worksheet.row_values(last_row_idx)
+
+    def _carry(idx: int) -> str:
+        """直近行の目標値を引き継ぐ (取れなければ空)。"""
+        try:
+            return last_row_vals[idx] if last_row_vals and len(last_row_vals) > idx else ""
+        except Exception:
+            return ""
+
+    # A=日付, B=目標投稿, E=目標フォロー, H=目標ライク, K=目標FB (実績列は空)
+    new_row = [""] * 12
+    new_row[0] = date_slash
+    new_row[1] = _carry(1)    # B 目標投稿
+    new_row[4] = _carry(4)    # E 目標フォロー
+    new_row[7] = _carry(7)    # H 目標ライク
+    new_row[10] = _carry(10)  # K 目標FB
+
+    if dry_run:
+        print(f"  [DRY-RUN] would append row for {date_slash}: {new_row[:11]}")
+        return None
+
+    worksheet.append_row(new_row, value_input_option="USER_ENTERED")
+    row = len(worksheet.col_values(1))
+    print(f"  [OK] {date_slash} の行を追加 (row={row}, 目標は直近行から引き継ぎ)")
+    return row
+
+
 def write_to_sheet(target_date: str, posted: int, follow: int, like: int, fb: int | None = None, dry_run: bool = False):
     """Google Sheets に実績を書き込む"""
     import gspread
@@ -160,8 +210,14 @@ def write_to_sheet(target_date: str, posted: int, follow: int, like: int, fb: in
 
     row = find_row_for_date(ws, target_date)
     if row is None:
-        print(f"[ERROR] date {target_date} not found in sheet")
-        return False
+        # 行が無ければ自動追加してから書き込む (記録漏れを作らない)
+        print(f"  [INFO] date {target_date} の行が無いため追加します")
+        row = ensure_row_for_date(ws, target_date, dry_run=dry_run)
+        if row is None:
+            if dry_run:
+                return True
+            print(f"[ERROR] date {target_date} の行を追加できませんでした")
+            return False
 
     print(f"  target row: {row} (date={target_date})")
     print(f"  values: posted={posted}, follow={follow}, like={like}")
