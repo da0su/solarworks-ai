@@ -328,18 +328,56 @@ def _scan_my_followers(page, con, log: SessionLogger, scan_limit: int = 400) -> 
                         page.wait_for_selector('a[href$="/items"], a[href^="/room_"]', timeout=8000)
                     except Exception:
                         pass
-                    fb_js_users = page.evaluate(_JS_SCAN, _OWN_ID)
                     fb_hrefs = page.evaluate(_JS_NON_SELF_HREFS, _OWN_ID)
-                    log.log(f"[scan_followers] fallback: js_users={len(fb_js_users)} hrefs_count={len(fb_hrefs)} sample={fb_hrefs[:5]}")
-                    for item in fb_js_users:
-                        seg = (item.get("uid") or "").strip()
-                        uname = (item.get("name") or seg)[:60]
-                        if not seg or seg in seen:
-                            continue
-                        seen.add(seg)
-                        if seg not in skip_set:
-                            collected.append({"user_id": seg, "username": uname})
-                    log.log(f"[scan_followers] fallback collected={len(collected)}")
+                    # 2026-08-01 真因修正: fallback は1回スキャンするだけで
+                    # スクロールしていなかった。実測 (_probe_followers_scroll.py) では
+                    #   /my/followers        → 7件で固定・スクロールしても増えない (壊れている)
+                    #   /{own_id}/followers  → 19→36→52→69→86→104 と正常に増える
+                    # つまり「増える方」を1回しか読まないため先頭20件しか見えず、
+                    # skip_set(36,562) に全部入っていて collected=0 になっていた。
+                    # → 本体と同じスクロールループを回す。
+                    fb_seen_before = len(seen)
+                    fb_stuck = 0
+                    for fb_i in range(30):
+                        fb_js_users = page.evaluate(_JS_SCAN, _OWN_ID)
+                        if fb_i == 0:
+                            log.log(f"[scan_followers] fallback: js_users={len(fb_js_users)} "
+                                    f"hrefs_count={len(fb_hrefs)} sample={fb_hrefs[:5]}")
+                        before_n = len(seen)
+                        for item in fb_js_users:
+                            seg = (item.get("uid") or "").strip()
+                            uname = (item.get("name") or seg)[:60]
+                            if not seg or seg in seen:
+                                continue
+                            seen.add(seg)
+                            if seg not in skip_set:
+                                collected.append({"user_id": seg, "username": uname})
+                        if len(collected) >= scan_limit:
+                            log.log(f"[scan_followers] fallback: scan_limit到達 (scroll={fb_i})")
+                            break
+                        # 新規 uid が増えなくなったら打ち切り (無駄なスクロールを避ける)
+                        if len(seen) == before_n and fb_i >= 3:
+                            fb_stuck += 1
+                            if fb_stuck >= 5:
+                                log.log(f"[scan_followers] fallback: 新規なしが続くため終了 (scroll={fb_i})")
+                                break
+                        else:
+                            fb_stuck = 0
+                        page.evaluate("""
+                            () => {
+                                window.scrollBy(0, 3000);
+                                document.querySelectorAll('*').forEach(c => {
+                                    const s = getComputedStyle(c);
+                                    if (/(auto|scroll)/.test(s.overflowY)
+                                        && c.scrollHeight > c.clientHeight + 50) {
+                                        c.scrollTop = c.scrollHeight;
+                                    }
+                                });
+                            }
+                        """)
+                        page.wait_for_timeout(2000)
+                    log.log(f"[scan_followers] fallback collected={len(collected)} "
+                            f"(uid走査 {len(seen) - fb_seen_before} 件増)")
             except Exception as _fe:
                 log.log(f"[scan_followers] fallback error: {_fe}")
 
