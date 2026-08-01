@@ -28,7 +28,16 @@ UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 # 今週の日次目標 (direction_plan.md §3 と一致させる)
 DAILY_TARGET = {"post": 40, "follow": 300, "like": 150, "followback": 50, "clicks": 10}
-MONTH_REWARD_TARGET = 3000   # 7月 (残8日の土台月)
+# 月次ランプ (direction_plan.md §1 と一致させる)。ハードコードの「7月」表示で
+# 月が変わっても古い月を出し続けていたため、当月キーで引く方式にした。
+MONTH_RAMP = {
+    "2026-07": 3000,    # 土台
+    "2026-08": 5000,    # 8/01 実測で引き直し (旧12000は願望値。7月実績¥1,882×2.7)
+    "2026-09": 30000,
+    "2026-10": 60000,
+    "2026-11": 100000,
+}
+MONTH_REWARD_TARGET = MONTH_RAMP.get(date.today().strftime("%Y-%m"), 100000)
 
 
 def _api(path: str):
@@ -66,18 +75,42 @@ def _today_likes() -> int:
         return -1
 
 
-def _month_reward() -> tuple[int, int, int]:
-    """アフィリ CSV から当月 報酬/クリック/売上 を返す (取込済スナップショット)."""
-    import csv
+STALE_DAYS = 3   # アフィリ CSV がこれ以上古ければ「現在値」として扱わない
+
+
+def _month_reward() -> tuple[int, int, int, dict]:
+    """アフィリ CSV から当月 報酬/クリック/売上 を返す (取込済スナップショット).
+
+    2026-08-01 修正: CSV は CEO の手動DL依存で、7/21 以降 11日間更新されていない
+    のに ¥1,357 を「今月の実績」として毎日報告し続けていた。
+    古い数字を現在値として出すのは虚偽報告と同じなので、鮮度と対象月を必ず添える。
+    戻り値の4つ目 meta に age_days / period / stale / mismatch を入れる。
+    """
+    import csv, os
     p = REPO / "rakuten-room" / "bot" / "data" / "affiliate_shop_latest.csv"
+    meta = {"path": str(p), "exists": p.exists(), "stale": True,
+            "age_days": None, "period": None, "period_mismatch": None}
     try:
+        age = (datetime.now() - datetime.fromtimestamp(os.path.getmtime(p))).days
+        meta["age_days"] = age
+        meta["stale"] = age >= STALE_DAYS
+
         rows = list(csv.reader(open(p, encoding="utf-8-sig")))
+        # 先頭行に "期間別成果: 2026.07" のような対象期間が入っている
+        for r in rows[:3]:
+            if r and "期間" in r[0]:
+                meta["period"] = r[0].split(":")[-1].strip()
+                break
+        if meta["period"]:
+            meta["period_mismatch"] = meta["period"].replace(".", "-") != date.today().strftime("%Y-%m")
+
         data = [r for r in rows if len(r) >= 5 and r[1].strip().isdigit()]
         return (sum(int(r[1]) for r in data),
                 sum(int(r[2]) for r in data),
-                sum(int(r[3]) for r in data))
-    except Exception:
-        return (-1, -1, -1)
+                sum(int(r[3]) for r in data), meta)
+    except Exception as e:
+        meta["error"] = f"{type(e).__name__}: {e}"[:120]
+        return (-1, -1, -1, meta)
 
 
 def _bar(actual: int, target: int) -> str:
@@ -92,7 +125,7 @@ def build() -> dict:
     post = _today_posts()
     follow = _today_follows()
     like = _today_likes()
-    reward, clicks, sales = _month_reward()
+    reward, clicks, sales, rmeta = _month_reward()
     return {
         "date": str(date.today()),
         "ts": datetime.now().isoformat(timespec="seconds"),
@@ -102,7 +135,7 @@ def build() -> dict:
             "like": {"actual": like, "target": DAILY_TARGET["like"]},
         },
         "month": {"reward": reward, "clicks": clicks, "sales": sales,
-                  "reward_target": MONTH_REWARD_TARGET},
+                  "reward_target": MONTH_REWARD_TARGET, "source": rmeta},
     }
 
 
@@ -117,13 +150,21 @@ def main():
     print("  FOLLOW :", _bar(d["daily"]["follow"]["actual"], DAILY_TARGET["follow"]))
     print("  LIKE   :", _bar(d["daily"]["like"]["actual"], DAILY_TARGET["like"]))
     m = d["month"]
-    print(f"--- 今月 (7月 土台目標 ¥{MONTH_REWARD_TARGET:,}) ---")
+    print(f"--- 今月 ({date.today().strftime('%Y-%m')} 目標 ¥{MONTH_REWARD_TARGET:,}) ---")
     if m["reward"] >= 0:
         pct = int(m["reward"] / MONTH_REWARD_TARGET * 100)
         cpc = f"¥{m['reward']/m['clicks']:.0f}" if m["clicks"] else "-"
         print(f"  報酬   : ¥{m['reward']:,}/{MONTH_REWARD_TARGET:,} ({pct}%) "
               f"/ クリック {m['clicks']} / 売上 {m['sales']} / 単価 {cpc}")
         print(f"  10万円まで: {100000/max(m['reward'],1):.0f}x")
+        # 鮮度を必ず添える。古い数字を現在値として黙って出さない。
+        src = m.get("source") or {}
+        if src.get("stale"):
+            print(f"  ⚠ このデータは {src.get('age_days')}日前の取込 "
+                  f"(期間={src.get('period')})。最新CSVの取込が必要 (CEO手動DL)")
+        if src.get("period_mismatch"):
+            print(f"  ⚠ CSVの対象期間 {src.get('period')} が当月と不一致。"
+                  f"当月の実績は未取得")
     else:
         print("  報酬   : CSV 取得不可 (要取込)")
     print("\n計画: 09_INTELLIGENCE/room_growth/direction_plan.md")
