@@ -337,6 +337,24 @@ def check_post() -> dict:
             pass
         c.close()
 
+    # 2026-08-02 真因修正 (3例目): Plan v6 の ranking_post (VM) は post_queue を
+    # 経由しないため上の legacy DB は常に 0 / 最終投稿は 2026-05-30 のまま。
+    # 実際には投稿できているのに「63日停止」と誤報していた。
+    # 公開 ROOM API を真値とする (patrol_v6/business.py・sync_daily_summary と同じ修正)。
+    # 到達不能時のみ legacy 値へフォールバックし、その旨を記録する。
+    info["post_source"] = "legacy_post_queue"
+    try:
+        from ops.room_status import fetch_post_truth
+        truth = fetch_post_truth()
+        if truth and isinstance(truth.get("today_posted"), int):
+            today_posted = truth["today_posted"]
+            last_posted = truth.get("last_posted_at") or last_posted
+            info["post_source"] = "public_api (truth)"
+        else:
+            info["post_source"] = "legacy_fallback (api_unreachable)"
+    except Exception as e:
+        info["post_source"] = f"legacy_fallback ({type(e).__name__})"
+
     info["today_posted"] = today_posted
     info["last_posted_at"] = last_posted
 
@@ -400,14 +418,27 @@ def check_post() -> dict:
         except Exception:
             pass
         c.close()
-    # 判定: 07:00 以降 〜 09:00 (Batch1 前) で queued=0 → CRITICAL
-    if info["queued_count"] == 0 and 7 <= now.hour < 9:
-        info["problem"] = True
-        info["reasons"].append("post_queue_empty_before_batch1")
-        info["auto_recover"] = "regen_post_plan"
-    elif info["queued_count"] is not None and info["queued_count"] < 5 and now.hour >= 7:
-        info["problem"] = True
-        info["reasons"].append(f"post_queue_low({info['queued_count']}<5)")
+    # 2026-08-02: post_queue 判定は Plan v6 では無意味なので停止。
+    # v6 の ranking_post (VM) は post_queue を通さず ranking_pool から直接投稿するため、
+    # queued は常に 0 で「post_queue_low」「post_queue_empty_before_batch1」が
+    # 恒久的に立ち続け、無意味な regen_post_plan まで走っていた。
+    # 代わりに**実際の供給源**である ranking_pool の残量を見る。
+    # (queued_count は参考値として残すが判定には使わない)
+    POOL_MIN = 50   # 1日上限50件。これを割ったら当日分を賄えない
+    try:
+        pool_p = ROOT / "rakuten-room" / "bot" / "data" / "ranking_pool.json"
+        pool_raw = json.loads(pool_p.read_text(encoding="utf-8"))
+        pool_items = pool_raw if isinstance(pool_raw, list) else pool_raw.get("items", [])
+        info["pool_available"] = len(pool_items)
+        if len(pool_items) < POOL_MIN and now.hour >= 7:
+            info["problem"] = True
+            info["reasons"].append(f"ranking_pool_low({len(pool_items)}<{POOL_MIN})")
+    except Exception as e:
+        info["pool_available"] = None
+        info["pool_read_error"] = f"{type(e).__name__}: {e}"[:100]
+        if now.hour >= 7:
+            info["problem"] = True
+            info["reasons"].append("ranking_pool_unreadable")
 
     return info
 
