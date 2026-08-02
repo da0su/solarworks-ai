@@ -331,6 +331,30 @@ def main():
             if not pool:
                 out["error"] = "no_hirate_pool"
                 print(json.dumps(out, ensure_ascii=False)); return
+        # --- コンセプト適合フィルタ (2026-08-01 CEO「まずはコンセプト」) ---
+        # 正典: 09_INTELLIGENCE/room_growth/concept_and_longterm_plan.md
+        # 「空くんと新米ママ」= 0-6歳を育てるママ向け。子どもの口に入る/肌に触れるもの。
+        # 実測: プールの52%がレディースファッション/ダイエット健康で、これらは
+        # 7月にクリックされても成約ゼロだった。供給の半分が「売れないもの」だった。
+        # 料率20%の条件は維持したまま、さらにコンセプトで絞る。
+        try:
+            sys.path.insert(0, r"\\vboxsvr\bot")   # host repo root (ops/ が見える)
+            from ops.concept_filter import filter_items
+            keep, drop = filter_items(pool)
+            out["concept_filter"] = {
+                "before": len(pool), "on_concept": len(keep), "dropped": len(drop),
+            }
+            if keep:
+                pool = keep
+                print(f"[concept] コンセプト適合 {len(keep)}件 / 除外 {len(drop)}件", flush=True)
+            else:
+                # 全滅する設定ミスで投稿を止めないための安全弁
+                print(f"[concept] 適合0件のためフィルタを見送り (要確認)", flush=True)
+                out["concept_filter"]["skipped"] = "on_concept=0"
+        except Exception as e:
+            out["concept_filter"] = {"error": f"{type(e).__name__}: {e}"[:120]}
+            print(f"[concept] フィルタ読込失敗のため未適用: {e}", flush=True)
+
         out["total"] = len(pool)
 
         # --- Phase 2: ランダム N件投稿 (テスト) ---
