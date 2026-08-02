@@ -33,11 +33,20 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
 from runner.browser_manager_v6 import BrowserManagerV6
+# concept_filter は同ディレクトリ (VM では W:\ 直下) にある。
+# ImportError だけを拾って再試行する。他の例外 (SyntaxError 等) は握りつぶさず
+# そのまま落とす — 実装バグを「環境不整合」に見せかけないため (Codex 指摘2)。
 try:
-    from concept_filter import is_on_concept
-except Exception:      # スケジューラ実行で W:\ が sys.path に無い場合の保険
+    from concept_filter import is_on_concept as _is_on_concept
+    import concept_filter as _cf
+except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from concept_filter import is_on_concept
+    from concept_filter import is_on_concept as _is_on_concept
+    import concept_filter as _cf
+is_on_concept = _is_on_concept
+# どのファイルを読んだかを記録する。同名モジュールを掴んでも気付けるようにする
+# (Codex 指摘3: シャドーイングで判定基準がブレる余地を潰す)
+CONCEPT_FILTER_PATH = getattr(_cf, "__file__", None)
 
 OUT = Path(r"X:\high_rate_v2.json")
 BACKUP = Path(r"X:\high_rate_v3_prev.json")
@@ -108,7 +117,9 @@ EXTRACT_JS = r"""() => {
 
 def main():
     out = {"ts": datetime.now().isoformat(), "items": [], "errors": [],
-           "source": "v3_keyword_search", "by_keyword": {}}
+           "source": "v3_keyword_search", "by_keyword": {},
+           "concept_filter_module": CONCEPT_FILTER_PATH}
+    print(f"[concept] filter={CONCEPT_FILTER_PATH}", flush=True)
     seen = set()
     bm = BrowserManagerV6(action="post")
     try:
@@ -156,8 +167,10 @@ def main():
                     print(f"  {kw} p{pg}: +{added} (累計{len(out['items'])})", flush=True)
                     # Codex 指摘3: 料率ゲート撤廃後は価格/除外語で 0件のページが
                     # 途中に混ざりうる。1ページ0件で打ち切らず、連続2回で次へ。
+                    # 先頭ページがたまたま0件でも中盤にヒットがありうるので、
+                    # 最低3ページは必ず見る (Codex 指摘4)。
                     empty_streak = empty_streak + 1 if added == 0 else 0
-                    if empty_streak >= 2:
+                    if empty_streak >= 2 and pg >= 3:
                         break
                 except Exception as e:
                     msg = str(e)
