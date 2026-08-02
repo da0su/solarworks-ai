@@ -33,7 +33,11 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote
 from runner.browser_manager_v6 import BrowserManagerV6
-from concept_filter import is_on_concept
+try:
+    from concept_filter import is_on_concept
+except Exception:      # スケジューラ実行で W:\ が sys.path に無い場合の保険
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from concept_filter import is_on_concept
 
 OUT = Path(r"X:\high_rate_v2.json")
 BACKUP = Path(r"X:\high_rate_v3_prev.json")
@@ -80,8 +84,9 @@ EXTRACT_JS = r"""() => {
     const items = [];
     document.querySelectorAll('.raf-product__item').forEach(card => {
         const txt = card.innerText || '';
+        // 料率はゲートではないので、非表示の商品も落とさず rate=0 として通す
+        // (Codex 指摘5: !rm で return すると母集団が不要に縮む)
         const rm = txt.match(/料率\s*([0-9.]+)\s*[%％]/);
-        if (!rm) return;
         const pm = txt.match(/([0-9,]+)\s*円/);
         // レビュー件数 (「口コミ5900件」「レビュー1,234件」等) を信頼シグナルとして拾う
         const rv = txt.match(/(?:口コミ|レビュー|review)[^0-9]{0,4}([0-9,]+)\s*件/i);
@@ -89,7 +94,7 @@ EXTRACT_JS = r"""() => {
         const linkEl = card.querySelector('a[href*="item.rakuten.co.jp"]');
         const img = card.querySelector('img');
         items.push({
-            rate: parseFloat(rm[1]),
+            rate: rm ? parseFloat(rm[1]) : 0,
             price: pm ? parseInt(pm[1].replace(/,/g, '')) : null,
             reviews: rv ? parseInt(rv[1].replace(/,/g,'')) : 0,
             name: nameEl ? (nameEl.innerText||'').trim().slice(0,100) : '',
@@ -115,6 +120,7 @@ def main():
 
         for kw, genre in KEYWORDS:
             got = 0
+            empty_streak = 0
             for pg in range(1, MAX_PAGES + 1):
                 url = f"https://affiliate.rakuten.co.jp/search?sitem={quote(kw)}&p={pg}"
                 try:
@@ -148,8 +154,11 @@ def main():
                         out["items"].append(it)
                         added += 1; got += 1
                     print(f"  {kw} p{pg}: +{added} (累計{len(out['items'])})", flush=True)
-                    if added == 0 and pg >= 3:
-                        break   # 料率条件で拾えないページが続いたら次のキーワードへ
+                    # Codex 指摘3: 料率ゲート撤廃後は価格/除外語で 0件のページが
+                    # 途中に混ざりうる。1ページ0件で打ち切らず、連続2回で次へ。
+                    empty_streak = empty_streak + 1 if added == 0 else 0
+                    if empty_streak >= 2:
+                        break
                 except Exception as e:
                     msg = str(e)
                     out["errors"].append({"kw": kw, "p": pg, "err": msg[:120]})
