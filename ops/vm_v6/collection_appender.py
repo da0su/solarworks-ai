@@ -42,6 +42,24 @@ SHOT_DIR      = Path(r"X:\screenshots") / datetime.now().strftime("%Y-%m-%d")
 OWN_ROOM      = "room_e05d4d1c1e"
 USER_ID       = "1000006606047125"
 MAX_ITEMS     = 30    # コレクション上限 (これ以上は追加しない)
+
+# 2026-08-02: コンセプト (0-6歳ママ / 子どもの口に入る・肌に触れる / ママをラクに)
+# から外れたコレクション。**削除はしない**が新規投入を止め、中核が相対的に濃くなる
+# ようにする。分類の根拠は 09_INTELLIGENCE/room_growth/collection_concept_map.md
+OFF_CONCEPT_COLLECTIONS = {
+    "1800012378408357",  # 安く見えない高見えコーデ (大人向けアパレル)
+    "1800012378576399",  # 夏のおでかけが快適になる日傘・小物 (大人向け小物)
+    "1800012378565396",  # 在宅も家事も捗るデスク周り (仕事文脈)
+    "1800012378517323",  # 気軽に試せる優秀プチプラ雑貨 (価格軸のみ・軸なし)
+    "1800012378482405",  # 殿堂入り｜リピが止まらない神品 (軸なし)
+    "1800012378585882",  # みんなが選ぶランキング鉄板 (他人軸・「この人が選ぶ」と逆行)
+    "1800012378470367",  # 家で楽しむお取り寄せグルメ (大人向けグルメ寄り)
+    "1800012378418239",  # 暮らしが整う部屋づくり (インテリア一般)
+    # state_v2 に残る旧マッピング。現存コレクション一覧に無く (削除済み)、
+    # さらに名前が価格を断定していて collection_no_price_assertion_rule 違反。
+    # 投入先として復活させない。
+    "1800012378696313",  # 3000円以下なのに高見えする服 (削除済み・価格断定)
+}
 UA            = "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36"
 
 try:
@@ -236,6 +254,26 @@ def main():
     #    source_id は無効値・URLスラッグと item.key は番号体系が別で突合不可のため画像で照合)
     pool = json.loads(POOL_F.read_text(encoding="utf-8"))
     pool_items = pool if isinstance(pool, list) else pool.get("items", [])
+    # 2026-08-02: high_rate_v2 は 8/02 06:00 のクロール失敗で空になることがある
+    # (アフィリ検索の結果描画方式が変わった疑い)。空だと全件 unmapped になり
+    # コレクション追加が完全に止まるため、直近の正常スナップショットへ退避する。
+    # これは**ジャンル対応表**としてのみ使う。投稿の供給源には影響しない。
+    if not pool_items:
+        for fb in (POOL_F.parent / "high_rate_v2.before_presale.141225.json",):
+            try:
+                fb_raw = json.loads(fb.read_text(encoding="utf-8"))
+                fb_items = fb_raw.get("items", [])
+                if fb_items:
+                    pool_items = fb_items
+                    out["pool_fallback"] = {"file": fb.name, "items": len(fb_items)}
+                    print(f"[pool] {POOL_F.name} が空 → {fb.name} ({len(fb_items)}件) で代替",
+                          flush=True)
+                    break
+            except Exception:
+                pass
+        if not pool_items:
+            out["error"] = "genre_map_unavailable (pool empty and no fallback)"
+            save_out(); print("ABORT", out["error"]); return
     key2genre = {}
     for x in pool_items:
         k = norm_key(x.get("img", "") or "")
@@ -252,8 +290,11 @@ def main():
         cur = st_v2.get(a["plan_id"]) or {}
         if not cur.get("id"):
             continue
+        if str(cur["id"]) in OFF_CONCEPT_COLLECTIONS:
+            continue   # 軸から外れたコレクションには新規投入しない
         genre2coll.setdefault(a["genre"], {"coll_id": cur["id"],
                                            "name": cur.get("name", a["name"])})
+    out["target_collections"] = {g: v["name"] for g, v in genre2coll.items()}
 
     # 4) ジャンル毎に新規追加分を決定
     plan = {}   # coll_id -> {"name","genre","img_keys":[],"sids":[]}
