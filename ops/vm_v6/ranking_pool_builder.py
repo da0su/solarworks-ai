@@ -337,11 +337,16 @@ def main():
         # 実測: プールの52%がレディースファッション/ダイエット健康で、これらは
         # 7月にクリックされても成約ゼロだった。供給の半分が「売れないもの」だった。
         # 料率20%の条件は維持したまま、さらにコンセプトで絞る。
+        # concept_filter は同じ ops/vm_v6/ にある = VM からは W:\ 直下に見える。
+        # (リポジトリ直下の ops/ は VM に共有されていないため ops.* は import 不可)
         try:
-            sys.path.insert(0, r"\\vboxsvr\bot")   # host repo root (ops/ が見える)
-            from ops.concept_filter import filter_items
+            from concept_filter import filter_items
             keep, drop = filter_items(pool)
+            # スキーマ汚染を防ぐ: filter_items が付ける _concept_reason は
+            # 診断用なので pool には残さない (下流が厳密スキーマを期待するため)
+            keep = [{k: v for k, v in it.items() if k != "_concept_reason"} for it in keep]
             out["concept_filter"] = {
+                "applied": True,
                 "before": len(pool), "on_concept": len(keep), "dropped": len(drop),
             }
             if keep:
@@ -349,11 +354,15 @@ def main():
                 print(f"[concept] コンセプト適合 {len(keep)}件 / 除外 {len(drop)}件", flush=True)
             else:
                 # 全滅する設定ミスで投稿を止めないための安全弁
-                print(f"[concept] 適合0件のためフィルタを見送り (要確認)", flush=True)
+                out["concept_filter"]["applied"] = False
                 out["concept_filter"]["skipped"] = "on_concept=0"
+                print("[concept] 適合0件のためフィルタを見送り (要確認)", flush=True)
         except Exception as e:
-            out["concept_filter"] = {"error": f"{type(e).__name__}: {e}"[:120]}
-            print(f"[concept] フィルタ読込失敗のため未適用: {e}", flush=True)
+            # 未適用は「コンセプト外を投稿してしまう」状態。成功と誤認させない。
+            out["concept_filter"] = {"applied": False,
+                                     "error": f"{type(e).__name__}: {e}"[:120]}
+            out["warnings"] = out.get("warnings", []) + ["concept_filter_not_applied"]
+            print(f"[concept] ★未適用★ フィルタ読込失敗: {e}", flush=True)
 
         out["total"] = len(pool)
 

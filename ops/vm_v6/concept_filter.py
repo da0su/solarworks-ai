@@ -122,8 +122,15 @@ def summarize(path: Path) -> dict:
 
 
 if __name__ == "__main__":
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else \
-        REPO / "rakuten-room" / "bot" / "data" / "ranking_pool.json"
+    if len(sys.argv) > 1:
+        target = Path(sys.argv[1])
+    elif REPO is not None:                       # HOST から実行
+        target = REPO / "rakuten-room" / "bot" / "data" / "ranking_pool.json"
+    else:                                        # VM から実行 (W:\ 直下・REPO 解決不可)
+        target = Path(r"X:\ranking_pool.json")
+    if not target.exists():
+        print(f"[ERROR] プールが見つかりません: {target}")
+        raise SystemExit(1)
     r = summarize(target)
     print(f"=== コンセプト適合率: {r['path']} ===")
     print(f"  総数 {r['total']} / 適合 {r['on_concept']} ({r['rate']}%) / 除外 {r['off_concept']}")
