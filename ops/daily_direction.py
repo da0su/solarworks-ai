@@ -113,6 +113,50 @@ def _month_reward() -> tuple[int, int, int, dict]:
         return (-1, -1, -1, meta)
 
 
+def _concept_metrics() -> dict:
+    """コンセプト遵守の計測 (CEO 2026-08-01「実行が計画どおりか確認する」)。
+
+    量(投稿数)ではなく質を見る。正典:
+    09_INTELLIGENCE/room_growth/concept_and_longterm_plan.md §5
+      - 当日投稿のうちコンセプト内の比率
+      - クリック / フォロワー (濃さ)
+    """
+    m = {"posted_today": None, "on_concept": None, "on_concept_rate": None,
+         "followers": None, "click_per_follower": None}
+    # 1) 当日投稿がコンセプト内か (公開APIの真値 × concept_filter)
+    try:
+        sys.path.insert(0, str(REPO / "ops" / "vm_v6"))
+        from concept_filter import is_on_concept
+        d = _api("/collects?limit=50").get("data", [])
+        today = str(date.today())
+        todays = [p for p in d if str(p.get("created_at", ""))[:10] == today]
+        m["posted_today"] = len(todays)
+        if todays:
+            ok = 0
+            for p in todays:
+                item = {"genre": "", "name": str(p.get("name") or "")}
+                if is_on_concept(item)[0]:
+                    ok += 1
+            m["on_concept"] = ok
+            m["on_concept_rate"] = round(ok / len(todays) * 100, 1)
+    except Exception as e:
+        m["error"] = f"{type(e).__name__}: {e}"[:100]
+
+    # 2) 濃さ = クリック / フォロワー
+    try:
+        u = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"https://room.rakuten.co.jp/api/{OWN_USER_ID}", headers=UA),
+            timeout=15).read().decode("utf-8", "replace"))
+        ud = u.get("data", u)
+        m["followers"] = ud.get("followers")
+        m["following"] = ud.get("following_users")
+        if m["followers"]:
+            m["follow_ratio"] = round((m["following"] or 0) / m["followers"], 2)
+    except Exception:
+        pass
+    return m
+
+
 def _bar(actual: int, target: int) -> str:
     if actual < 0:
         return "取得不可"
@@ -126,6 +170,9 @@ def build() -> dict:
     follow = _today_follows()
     like = _today_likes()
     reward, clicks, sales, rmeta = _month_reward()
+    concept = _concept_metrics()
+    if concept.get("followers") and clicks and clicks > 0:
+        concept["click_per_follower"] = round(clicks / concept["followers"] * 100, 2)
     return {
         "date": str(date.today()),
         "ts": datetime.now().isoformat(timespec="seconds"),
@@ -136,6 +183,7 @@ def build() -> dict:
         },
         "month": {"reward": reward, "clicks": clicks, "sales": sales,
                   "reward_target": MONTH_REWARD_TARGET, "source": rmeta},
+        "concept": concept,
     }
 
 
@@ -167,7 +215,26 @@ def main():
                   f"当月の実績は未取得")
     else:
         print("  報酬   : CSV 取得不可 (要取込)")
-    print("\n計画: 09_INTELLIGENCE/room_growth/direction_plan.md")
+
+    # --- コンセプト遵守 (量ではなく質を見る) ---
+    c = d.get("concept") or {}
+    print("--- コンセプト遵守 (計画どおり実行できているか) ---")
+    if c.get("posted_today") is not None:
+        r = c.get("on_concept_rate")
+        mark = "✅" if (r or 0) >= 90 else ("🟡" if (r or 0) >= 70 else "🔴")
+        print(f"  投稿の軸一致: {mark} {c.get('on_concept')}/{c.get('posted_today')} ({r}%)")
+    if c.get("followers"):
+        cpf = c.get("click_per_follower")
+        print(f"  濃さ(クリック/フォロワー): {cpf}%  (フォロワー {c['followers']:,})")
+        fr = c.get("follow_ratio")
+        if fr is not None:
+            fmark = "✅" if fr <= 0.7 else ("🟡" if fr <= 1.2 else "🔴")
+            print(f"  フォロー比: {fmark} {fr} (目標 0.5前後 / 1.0超は相互狙いに見える)")
+    if c.get("error"):
+        print(f"  ⚠ 計測エラー: {c['error']}")
+
+    print("\nコンセプト: 09_INTELLIGENCE/room_growth/concept_and_longterm_plan.md")
+    print("計画: 09_INTELLIGENCE/room_growth/direction_plan.md")
 
 
 if __name__ == "__main__":
