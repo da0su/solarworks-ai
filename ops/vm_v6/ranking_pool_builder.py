@@ -340,13 +340,17 @@ def main():
         # concept_filter は同じ ops/vm_v6/ にある = VM からは W:\ 直下に見える。
         # (リポジトリ直下の ops/ は VM に共有されていないため ops.* は import 不可)
         try:
-            from concept_filter import filter_items
+            import concept_filter as _cf
+            # 指摘3: 同名の別モジュールを掴んでも applied:true になり偽陽性化するため、
+            # どのファイルを読んだかを結果に残して監査できるようにする。
+            _cf_path = getattr(_cf, "__file__", None)
+            filter_items = _cf.filter_items
             keep, drop = filter_items(pool)
             # スキーマ汚染を防ぐ: filter_items が付ける _concept_reason は
             # 診断用なので pool には残さない (下流が厳密スキーマを期待するため)
             keep = [{k: v for k, v in it.items() if k != "_concept_reason"} for it in keep]
             out["concept_filter"] = {
-                "applied": True,
+                "applied": True, "module": _cf_path,
                 "before": len(pool), "on_concept": len(keep), "dropped": len(drop),
             }
             if keep:
@@ -354,9 +358,11 @@ def main():
                 print(f"[concept] コンセプト適合 {len(keep)}件 / 除外 {len(drop)}件", flush=True)
             else:
                 # 全滅する設定ミスで投稿を止めないための安全弁
+                # 指摘4: 見送りも「コンセプト外を投稿する」状態なので warnings に出す
                 out["concept_filter"]["applied"] = False
                 out["concept_filter"]["skipped"] = "on_concept=0"
-                print("[concept] 適合0件のためフィルタを見送り (要確認)", flush=True)
+                out["warnings"] = out.get("warnings", []) + ["concept_filter_skipped_zero"]
+                print("[concept] ★見送り★ 適合0件 (要確認・コンセプト外が投稿される)", flush=True)
         except Exception as e:
             # 未適用は「コンセプト外を投稿してしまう」状態。成功と誤認させない。
             out["concept_filter"] = {"applied": False,
